@@ -147,3 +147,14 @@ export async function refeicoesDesde(jids, diaInicial) {
 export async function refeicoesDoDia(dia) {
   return colecao('refeicoes').find({ dia }).toArray();
 }
+
+// ---------- Configuração do bot (nome escolhido pelo grupo, apresentações feitas) ----------
+
+export async function lerConfig() {
+  return (await colecao('config').findOne({ _id: 'bot' })) || { _id: 'bot' };
+}
+
+export async function salvarConfig(patch) {
+  await colecao('config').updateOne({ _id: 'bot' }, { $set: { ...patch, atualizadoEm: new Date() } }, { upsert: true });
+  return lerConfig();
+}

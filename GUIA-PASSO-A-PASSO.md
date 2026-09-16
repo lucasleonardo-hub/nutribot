@@ -104,7 +104,7 @@ No Render: serviço `nutribot` → **Environment** → copie o valor de `ADMIN_T
 ### 4.3 Escanear o QR Code (com o celular do eSIM!)
 1. Abra `https://nutribot-5gwk.onrender.com/qr`
 2. No celular do BOT: WhatsApp → **⋮** → **Aparelhos conectados** → **Conectar um aparelho** → escaneie
-3. Coloque o número do bot no grupo com as 2 pessoas.
+3. Coloque o número do bot no grupo com as 2 pessoas. Ela se apresenta sozinha, pergunta como querem chamá-la e pede o cadastro de cada um.
 4. Mande `!id` no grupo. O bot responde o ID do grupo. Copie e cole em `ALLOWED_GROUP_ID` no Render (**Environment** → salvar). O Render reinicia sozinho e a sessão continua salva no Mongo (não precisa escanear de novo).
 
 ### 4.4 Ficar 100% online (anti-sleep em 2 camadas)
@@ -140,6 +140,7 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 | Comando   | O que faz                                   |
 |-----------|---------------------------------------------|
 | `!id`     | Mostra o ID do grupo (pro `ALLOWED_GROUP_ID`)|
+| `!nome X` | Rebatiza a Nutri (ela pergunta o nome ao entrar no grupo) |
 | `!perfil` | Mostra seu cadastro e as gírias aprendidas   |
 | `!persona`| Mostra a memória de personalidade da Nutri (apelidos, piadas internas, padrões) |
 | `!dossie` | Mostra o que há na sua pasta do Drive (o que ela conseguiu ler) e as notas dela sobre você |

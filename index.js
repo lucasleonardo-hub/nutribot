@@ -32,6 +32,8 @@ import {
   registrarRefeicao,
   refeicoesDesde,
   refeicoesDoDia,
+  lerConfig,
+  salvarConfig,
 } from './mongo.js';
 import { iniciarDrive, salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdInteracao, mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
@@ -159,6 +161,7 @@ async function enriquecerPerfis(perfis, dia) {
 let memoria = { dia: agora().dia, grupo: GRUPO_PERMITIDO || null, mensagens: [], cobrancas: {} };
 let fechandoDia = false;
 let persona = ''; // memória de personalidade da Nutri (evolui a cada fechamento de dia)
+let config = { apresentadoEm: {} }; // { nomeBot, apresentadoEm: { [jidGrupo]: ISO }, aguardandoNomeDesde }
 
 async function lembrar(entrada) {
   memoria.mensagens.push(entrada);
@@ -351,6 +354,16 @@ async function conectarWhatsApp() {
     }
   });
 
+  // Entrou num grupo? Se apresenta.
+  sock.ev.on('group-participants.update', ({ id, participants, action }) => {
+    if (action !== 'add') return;
+    const meus = [sock.user?.id, sock.user?.lid].filter(Boolean).map((j) => jidNormalizedUser(j));
+    const euEntrei = (participants || []).some((p) => meus.includes(jidNormalizedUser(typeof p === 'string' ? p : p?.id || '')));
+    if (!euEntrei) return;
+    if (GRUPO_PERMITIDO && id !== GRUPO_PERMITIDO) return;
+    fila = fila.then(() => apresentar(id, 'adicionada ao grupo')).catch((e) => console.error('[apresentacao]', e.message));
+  });
+
   sock.ev.on('messages.upsert', ({ messages, type }) => {
     for (const msg of messages) {
       console.log(`[msg] tipo=${type} chat=${msg.key.remoteJid} fromMe=${msg.key.fromMe} conteudo=${getContentType(msg.message) || 'vazio'}`);
@@ -366,6 +379,33 @@ async function conectarWhatsApp() {
 let fila = Promise.resolve();
 function enfileirar(msg) {
   fila = fila.then(() => processar(msg)).catch((e) => console.error('[bot] erro ao processar:', e));
+}
+
+// ============================================================
+// Apresentação e nome
+// ============================================================
+async function apresentar(jidGrupo, motivo) {
+  if (config.apresentadoEm?.[jidGrupo]) return;
+  const meta = await sock.groupMetadata(jidGrupo).catch(() => null);
+  console.log(`[apresentacao] ${motivo} em "${meta?.subject || jidGrupo}"`);
+  config = await salvarConfig({ [`apresentadoEm.${jidGrupo.replace(/\./g, '_')}`]: new Date().toISOString(), aguardandoNomeDesde: config.nomeBot ? null : new Date().toISOString() });
+  config.apresentadoEm ||= {};
+  config.apresentadoEm[jidGrupo] = true;
+  if (!memoria.grupo) memoria.grupo = jidGrupo;
+  const texto = await ia.apresentacao({ grupoNome: meta?.subject, membros: meta?.participants?.length, persona });
+  await enviar(jidGrupo, texto);
+  await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto, tipo: 'bot' });
+}
+
+const jaApresentada = (jidGrupo) => Boolean(config.apresentadoEm?.[jidGrupo] || config.apresentadoEm?.[jidGrupo.replace(/\./g, '_')]);
+
+async function batizar(nome, quem, jidGrupo, msg) {
+  config = await salvarConfig({ nomeBot: nome, aguardandoNomeDesde: null });
+  ia.definirNomeBot(nome);
+  console.log(`[apresentacao] batizada de "${nome}" por ${quem}`);
+  const reacao = await ia.reagirAoNome({ nome, quem, persona });
+  await enviar(jidGrupo, reacao, msg);
+  await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: reacao, tipo: 'bot' });
 }
 
 // ============================================================
@@ -406,10 +446,31 @@ async function processar(msg) {
   const nomeContato = msg.pushName || jids[0].split('@')[0];
   const { dia, hora, horaArquivo } = agora();
 
+  // Primeira vez que ela vê esse grupo (ex.: entrou enquanto o bot estava offline): se apresenta antes de tudo
+  if (!jaApresentada(jidGrupo)) await apresentar(jidGrupo, 'primeira mensagem vista no grupo').catch((e) => console.error('[apresentacao]', e.message));
+
+  // Escolha do nome dela (nas 48h após a apresentação, mensagens curtas)
+  if (!config.nomeBot && config.aguardandoNomeDesde && texto && !texto.startsWith('!') && texto.length <= 80) {
+    const horas = (Date.now() - new Date(config.aguardandoNomeDesde).getTime()) / 36e5;
+    if (horas <= 48) {
+      const nome = await ia.extrairNomeBot(texto).catch(() => null);
+      if (nome) {
+        await batizar(nome, nomeContato, jidGrupo, msg);
+        return;
+      }
+    }
+  }
+
   // ---------- Comandos utilitários ----------
   if (texto.startsWith('!')) {
     const cmd = texto.toLowerCase().split(/\s+/)[0];
     if (cmd === '!id') return enviar(jidGrupo, `ID deste grupo: ${jidGrupo}\nSeu ID: ${jids.join(' / ')}`, msg);
+    if (cmd === '!nome') {
+      const novo = texto.slice(5).trim().replace(/^["']|["']$/g, '');
+      if (!novo) return enviar(jidGrupo, `Meu nome é *${ia.nomeDaBot()}*. Quer trocar? Manda "!nome NovoNome", criatura.`, msg);
+      if (novo.length > 40) return enviar(jidGrupo, 'Nome com mais de 40 letras? Tá me batizando ou escrevendo TCC? Encurta isso.', msg);
+      return batizar(novo, nomeContato, jidGrupo, msg);
+    }
     if (cmd === '!resumo') return fecharDia({ forcado: true });
     if (cmd === '!reset') {
       await apagarPerfil(jids);
@@ -443,7 +504,7 @@ async function processar(msg) {
     if (cmd === '!persona') {
       return enviar(jidGrupo, persona ? `🧠 *Minha memória de personalidade:*\n\n${persona}` : 'Ainda tô te conhecendo, criatura. Volta depois do primeiro resumo do dia. 🙄', msg);
     }
-    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !reset, !resumo (fecha o dia agora), !ajuda', msg);
+    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !reset, !resumo (fecha o dia agora), !ajuda', msg);
   }
 
   // ---------- Onboarding ----------
@@ -477,7 +538,7 @@ async function processar(msg) {
     const dossieNovo = await dossieDe(perfil).catch((e) => (console.error('[pessoas]', e.message), ''));
     const bemVindo = await ia.boasVindas(perfil, persona, dossieNovo);
     await enviar(jidGrupo, bemVindo);
-    await lembrar({ hora, jid: jids[0], nome: 'Nutri', texto: bemVindo, tipo: 'bot' });
+    await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: bemVindo, tipo: 'bot' });
     salvarFicha(perfil, mdPerfil(perfil)).catch((e) => console.error('[drive]', e.message));
     return;
   }
@@ -560,7 +621,7 @@ async function processar(msg) {
 
   if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
-    await lembrar({ hora, jid: jids[0], nome: 'Nutri', texto: resposta, tipo: 'bot' });
+    await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
   }
 
   // Foi refeição? (foto, ou a Nutri analisou comida) -> registra pra aprender a rotina e não cobrar depois
@@ -668,7 +729,7 @@ async function verificarCobrancas() {
       });
       if (msg && !/^silencio\W*$/i.test(msg)) {
         await enviar(memoria.grupo, msg);
-        await lembrar({ hora, jid: null, nome: 'Nutri', texto: msg, tipo: 'bot' });
+        await lembrar({ hora, jid: null, nome: ia.nomeDaBot(), texto: msg, tipo: 'bot' });
         console.log(`[cobranca] ${p.nome} sem ${slot.nome} (habitual ${hhmmDe(p._hab[slot.id].minutos)})`);
       }
     } catch (e) {
@@ -809,6 +870,10 @@ async function fecharSemana({ dia, perfis, grupo }) {
 
     persona = await carregarPersona().catch(() => '');
     if (persona) console.log(`[persona] carregada (${persona.length} chars)`);
+    config = await lerConfig().catch(() => ({ apresentadoEm: {} }));
+    config.apresentadoEm ||= {};
+    if (config.nomeBot) ia.definirNomeBot(config.nomeBot);
+    console.log(`[config] nome: ${ia.nomeDaBot()}; grupos apresentados: ${Object.keys(config.apresentadoEm).length}`);
 
     const salva = await carregarMemoria();
     if (salva?.mensagens) {

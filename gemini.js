@@ -72,10 +72,19 @@ FORMATO (WhatsApp):
 
 Seu objetivo final: estimar macros e calorias, dar o veredito e manter essas duas criaturas na linha rumo ao objetivo delas, sendo cada dia mais VOCÊ.`;
 
-/** System prompt + memória de personalidade acumulada (evolui a cada fechamento de dia). */
+// Nome que o grupo escolheu pra ela (definido na apresentação ou com !nome). Vazio = "Nutri".
+let nomeBot = '';
+export function definirNomeBot(nome) {
+  nomeBot = (nome || '').trim();
+}
+export const nomeDaBot = () => nomeBot || 'Nutri';
+
+/** System prompt + nome escolhido + memória de personalidade acumulada (evolui a cada fechamento de dia). */
 export function montarSystem(persona) {
-  if (!persona?.trim()) return SYSTEM_PROMPT;
-  return `${SYSTEM_PROMPT}\n\nSUA MEMÓRIA DE PERSONALIDADE (você construiu isso ao longo dos dias; use pra ser consistente, puxar piadas internas, apelidos e cobrar padrões):\n${persona.trim()}`;
+  let sys = SYSTEM_PROMPT;
+  if (nomeBot) sys += `\n\nSEU NOME: o grupo te batizou de "${nomeBot}". Você responde por esse nome, se refere a si mesma assim e assina piadas com ele quando cabe. "Nutri" é só a sua profissão.`;
+  if (persona?.trim()) sys += `\n\nSUA MEMÓRIA DE PERSONALIDADE (você construiu isso ao longo dos dias; use pra ser consistente, puxar piadas internas, apelidos e cobrar padrões):\n${persona.trim()}`;
+  return sys;
 }
 
 // ============================================================
@@ -122,11 +131,24 @@ const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.5-flash
   .map((m) => m.trim())
   .filter((m) => m && m !== MODELO);
 
+// Modelo que acabou de falhar fica "de castigo" por um tempo, pra não gastar tentativas (e segundos) nele a cada mensagem.
+// 429 de cota diária: 15 min. 503 "alta demanda": 90 s.
+const castigoAte = new Map();
+const emCastigo = (model) => (castigoAte.get(model) || 0) > Date.now();
+function castigar(model, e) {
+  const msg = String(e?.message || '');
+  const status = e?.status || e?.code;
+  const ms = status === 429 || /quota|RESOURCE_EXHAUSTED/i.test(msg) ? 15 * 60_000 : 90_000;
+  castigoAte.set(model, Date.now() + ms);
+  console.warn(`[gemini] ${model} fora por ${Math.round(ms / 1000)}s`);
+}
+
 async function gerar({ contents, config = {}, tentativas = 2 }) {
   let erro;
   const modelos = [MODELO, ...MODELOS_RESERVA];
   for (let mi = 0; mi < modelos.length; mi++) {
     const model = modelos[mi];
+    if (emCastigo(model)) continue;
     const rodadas = mi === 0 ? tentativas : 2; // "alta demanda" costuma durar minutos: cai rápido pro reserva
     for (let i = 0; i < rodadas; i++) {
       try {
@@ -146,11 +168,13 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
           status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
         console.warn(`[gemini] ${model} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
         if (!transitorio) throw e; // erro de prompt/configuração: não adianta insistir
-        await new Promise((r) => setTimeout(r, 1200 * (i + 1)));
+        if (i === rodadas - 1) castigar(model, e);
+        else await new Promise((r) => setTimeout(r, 1200 * (i + 1)));
       }
     }
   }
 
+  if (!erro) erro = new Error('todos os modelos Gemini estão temporariamente indisponíveis');
   // Todos os Gemini falharam. Reservas (Groq / Hugging Face / Cohere): texto e foto sim; áudio e PDF não.
   const partes = partesDe(contents);
   const imagens = partes.filter((p) => p?.inlineData?.mimeType?.startsWith('image/')).map((p) => p.inlineData);
@@ -454,5 +478,50 @@ export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historic
       `TRANSCRIÇÃO DE HOJE (falas dela e suas):\n${blocoHistorico(falas, 150)}\n\n` +
       `Escreva as notas atualizadas em até 300 palavras, em tópicos curtos (linhas começando com "- "), terceira pessoa, só FATOS que a pessoa disse ou que você observou, com data quando for medida/meta (ex: "- 2026-09-16: pesou 73,2 kg"). Cubra o que importa pro seu trabalho: idade, trabalho/estudo e horários, treinos/esportes e dias, preferências e aversões alimentares, alergias/restrições, sono, álcool, metas numéricas, respostas a perguntas que você fez, e detalhes pessoais que ajudam a zoar com carinho. Mantenha o que continua válido, corrija o que mudou, corte o irrelevante. Se não houver nada novo, devolva as notas atuais. Sem markdown de cabeçalho (#), sem emojis.`,
     config: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 900 },
+  });
+}
+
+// ============================================================
+// 12) Apresentação ao entrar no grupo e escolha do nome
+// ============================================================
+export async function apresentacao({ grupoNome, membros, persona }) {
+  return gerar({
+    contents:
+      `Você acabou de ser adicionada ao grupo de WhatsApp "${grupoNome || 'sem nome'}"${membros ? ` (${membros} pessoas)` : ''}. Ninguém te conhece ainda.\n` +
+      `Escreva sua mensagem de apresentação, no seu personagem, em até 170 palavras, com emojis:\n` +
+      `1. Quem você é (nutricionista de bolso ácida que vai vigiar TUDO que eles comerem) e o que você faz: analisa foto ou descrição de refeição com kcal e macros, dá veredito e dica, cobra quem some no horário da refeição, manda resumo diário às 23:59 e semanal no domingo, e aprende com cada um.\n` +
+      `2. Diga que ainda não tem nome e PERGUNTE como querem te chamar (dê 2 ou 3 sugestões debochadas). Avise que dá pra mudar depois com !nome.\n` +
+      `3. Peça que cada um se cadastre mandando em UMA mensagem: nome, peso, altura e objetivo. Sem cadastro você não analisa nada.\n` +
+      `4. Feche com uma provocação curta. Formato WhatsApp (*negrito* com um asterisco), sem cabeçalho #.`,
+    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 600 },
+  });
+}
+
+/** A mensagem escolhe um nome pra bot? Devolve { nome: string|null }. */
+export async function extrairNomeBot(texto) {
+  const json = await gerar({
+    contents:
+      `A bot nutricionista do grupo acabou de perguntar "como querem me chamar?". Chegou esta mensagem de um membro:\n<<<${texto}>>>\n` +
+      `Ela está escolhendo/propondo um NOME pra bot? Se sim, devolva o nome exatamente como a pessoa quer (capitalizado, sem aspas, máx. 3 palavras). Se a mensagem é outra coisa (pergunta, comida, cadastro, papo), devolva null. Em dúvida, null.`,
+    config: {
+      temperature: 0,
+      thinkingConfig: { thinkingBudget: 0 },
+      responseMimeType: 'application/json',
+      responseSchema: { type: 'object', properties: { nome: { type: 'string', nullable: true } }, required: ['nome'] },
+      maxOutputTokens: 60,
+    },
+  });
+  try {
+    const { nome } = JSON.parse(json);
+    return nome && /^[\p{L}\p{N} .'-]{2,40}$/u.test(nome) ? nome.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function reagirAoNome({ nome, quem, persona }) {
+  return gerar({
+    contents: `${quem} acabou de te batizar de "${nome}". Reaja no seu personagem em até 50 palavras: aceite (ou finja reclamar e aceite), já assine com o nome novo, e lembre quem ainda não se cadastrou de mandar nome, peso, altura e objetivo. Emojis.`,
+    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 200 },
   });
 }
