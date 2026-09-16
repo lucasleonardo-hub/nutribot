@@ -50,16 +50,23 @@ DICAS ÁCIDAS (obrigatório em toda análise de refeição):
 - Sugere proativamente: marmita, pré/pós-treino, meta de [[Proteína]] (~1,6 a 2,2 g/kg), água, sono. Sempre calibrado ao peso e objetivo.
 - Percebe padrões no histórico do dia e na memória de personalidade e cobra com mais raiva quando o erro repete.
 
-FORMATO (WhatsApp, então CURTO):
-- Máximo ~120 palavras. Sem cabeçalho markdown (#), sem tabelas, sem listas com "-".
+VOCÊ É GENTE DO GRUPO (não um serviço):
+- Você participa como uma amiga que por acaso é nutricionista. Reage ao que acontece, puxa assunto, lembra do que a pessoa disse ontem, zoa quando dá, apoia quando precisa (com acidez, mas apoia).
+- Tamanho livre: uma linha se for tirada rápida, um textão se a pessoa precisar de uma bronca ou de uma explicação de verdade. Escreva como gente escreve no zap, não como relatório.
+- Papo aleatório: se tiver uma tirada engraçada ou um jeito de puxar pra comida/treino/sono/rotina, entra na conversa. Se realmente não tiver nada a acrescentar, responda EXATAMENTE a palavra SILENCIO (sem mais nada).
+- Você tem NOÇÃO DE HORÁRIO e de ROTINA: o contexto traz a hora atual, a refeição esperada nesse horário e os horários/hábitos que você já aprendeu de cada pessoa. Use isso: café às 11h é "acordou agora, princesa?", jantar às 23h é "isso é jantar ou ceia de velório?", e quem manda foto no horário certo ganha ponto.
+- Na dúvida entre ser rígida e ser humana, seja humana. Mas nunca perca a acidez.
+- QUANDO NÃO SABE: se a pergunta exige um dado específico que não está na sua base de conhecimento nem você tem certeza (suplemento específico, estudo recente, doença, interação, alimento incomum), responda EXATAMENTE no formato "PESQUISAR: <termos de busca em inglês, científicos>" e NADA mais. Você recebe as fontes e responde de novo. Use isso só quando realmente precisar (não pra analisar prato, não pra zoar, não pra perguntas básicas).
+
+FORMATO (WhatsApp):
+- Sem cabeçalho markdown (#), sem tabelas, sem listas com "-".
 - Negrito do WhatsApp é UM asterisco de cada lado: *assim*. NUNCA use dois asteriscos (**assim**) nem sublinhado duplo.
-- Análise de comida (texto ou foto):
+- Quando for ANÁLISE DE COMIDA (texto ou foto), inclua este bloco no meio da resposta (pode ter fala antes e depois):
   🍽️ *O que eu vi:* (itens e porções estimadas)
   🔥 *Estimativa:* ~XXX kcal | P: XXg | C: XXg | G: XXg
   ⚖️ *Veredito:* (nota 0 a 10 + esculacho ou elogio ligado ao objetivo)
   💡 *Dica ácida:* (a orientação prática)
 - Se não dá pra ver comida na foto, zoa e pede outra.
-- Papo aleatório sem NENHUMA relação com comida, treino, corpo, emoção, saúde ou com você: responda EXATAMENTE a palavra SILENCIO (sem mais nada). Caso contrário, responda no personagem.
 
 Seu objetivo final: estimar macros e calorias, dar o veredito e manter essas duas criaturas na linha rumo ao objetivo delas, sendo cada dia mais VOCÊ.`;
 
@@ -76,11 +83,21 @@ export function montarSystem(persona) {
 function blocoPerfis(perfis) {
   if (!perfis?.length) return 'Nenhum perfil cadastrado ainda.';
   return perfis
-    .map(
-      (p) =>
-        `- ${p.nome}: ${p.peso} kg, ${p.altura} cm, objetivo: ${p.objetivo}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`
-    )
+    .map((p) => {
+      const base = `- ${p.nome}: ${p.peso} kg, ${p.altura} cm, objetivo: ${p.objetivo}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
+      const horarios = p.horarios ? `\n  Horários habituais que eu já saquei: ${p.horarios}` : '';
+      const rotina = p.rotina ? `\n  O que eu já sei da rotina dela(e): ${p.rotina}` : '';
+      return base + horarios + rotina;
+    })
     .join('\n');
+}
+
+function blocoConhecimento(texto) {
+  if (!texto?.trim()) return '';
+  return (
+    `SUA BASE DE CONHECIMENTO (referência técnica que você estudou; traduza em conselho prático e números concretos pra pessoa, nunca cite como "segundo o documento"):\n` +
+    `${texto.trim()}\n\n`
+  );
 }
 
 function blocoHistorico(mensagens, limite = 60) {
@@ -91,26 +108,38 @@ function blocoHistorico(mensagens, limite = 60) {
     .join('\n');
 }
 
-async function gerar({ contents, config = {}, tentativas = 3 }) {
+// Modelos reserva quando o principal está em "alta demanda" (503) ou sem cota (429)
+const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.5-flash,gemini-3.7-flash')
+  .split(',')
+  .map((m) => m.trim())
+  .filter((m) => m && m !== MODELO);
+
+async function gerar({ contents, config = {}, tentativas = 4 }) {
   let erro;
-  for (let i = 0; i < tentativas; i++) {
-    try {
-      const res = await cliente().models.generateContent({
-        model: MODELO,
-        contents,
-        config: { safetySettings: SAFETY, temperature: 0.95, maxOutputTokens: 1024, ...config },
-      });
-      const texto = res.text?.trim();
-      if (!texto) throw new Error(`Gemini respondeu vazio (finishReason: ${res.candidates?.[0]?.finishReason})`);
-      return texto;
-    } catch (e) {
-      erro = e;
-      const status = e?.status || e?.code;
-      const transitorio =
-        status === 429 || status === 503 || /overloaded|RESOURCE_EXHAUSTED|UNAVAILABLE/i.test(e.message || '');
-      console.warn(`[gemini] tentativa ${i + 1} falhou: ${e.message}`);
-      if (!transitorio) break;
-      await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+  const modelos = [MODELO, ...MODELOS_RESERVA];
+  for (let mi = 0; mi < modelos.length; mi++) {
+    const model = modelos[mi];
+    const rodadas = mi === 0 ? tentativas : 2; // no reserva, tenta menos
+    for (let i = 0; i < rodadas; i++) {
+      try {
+        const res = await cliente().models.generateContent({
+          model,
+          contents,
+          config: { safetySettings: SAFETY, temperature: 0.95, maxOutputTokens: 1024, ...config },
+        });
+        const texto = res.text?.trim();
+        if (!texto) throw new Error(`Gemini respondeu vazio (finishReason: ${res.candidates?.[0]?.finishReason})`);
+        if (mi > 0) console.warn(`[gemini] respondido pelo modelo reserva ${model}`);
+        return texto;
+      } catch (e) {
+        erro = e;
+        const status = e?.status || e?.code;
+        const transitorio =
+          status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
+        console.warn(`[gemini] ${model} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
+        if (!transitorio) throw e; // erro de prompt/configuração: não adianta insistir
+        await new Promise((r) => setTimeout(r, Math.min(1500 * 2 ** i, 12_000)));
+      }
     }
   }
   throw erro;
@@ -119,10 +148,12 @@ async function gerar({ contents, config = {}, tentativas = 3 }) {
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, perfil, perfis, historico, dia, hora, persona }) {
+export async function responder({ texto, imagem, mimeType, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, jaPesquisou = false }) {
   const contexto =
-    `DATA E HORA: ${dia} ${hora || ''}\n\nPERFIS DO GRUPO:\n${blocoPerfis(perfis)}\n\n` +
+    `DATA E HORA: ${dia} ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\nPERFIS DO GRUPO:\n${blocoPerfis(perfis)}\n\n` +
     `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico)}\n\n` +
+    blocoConhecimento(conhecimento) +
+    (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
     `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada - analise a comida da imagem)' : ''}:\n${texto || '(sem legenda)'}`;
 
   const parts = [{ text: contexto }];
@@ -190,11 +221,12 @@ export async function cobrarDadosFaltando(faltando, persona) {
 // ============================================================
 // 3) Resumo Diário Ácido
 // ============================================================
-export async function resumoDiario({ dia, perfis, historico, persona }) {
+export async function resumoDiario({ dia, perfis, historico, persona, conhecimento }) {
   return gerar({
     contents:
       `Hoje é ${dia}. Abaixo está TUDO que rolou no grupo hoje.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
       `TRANSCRIÇÃO DO DIA:\n${blocoHistorico(historico, 400)}\n\n` +
+      blocoConhecimento(conhecimento) +
       `Escreva o *RESUMO DIÁRIO ÁCIDO* (máx. 250 palavras, formato WhatsApp, sem cabeçalhos #). Para CADA pessoa cadastrada:\n` +
       `- O que comeu (resumido) e total estimado do dia: ~kcal | P | C | G\n- Acertos e cagadas, ligando ao objetivo\n- Nota do dia (0-10)\n- 💡 Dica ácida pra amanhã (prática e específica)\n` +
       `Termine com um "🏆 Ranking da vergonha" comparando as duas pessoas. Se alguém não mandou nada hoje, esculache o sumiço. Use os [[links]] nos termos-chave e emojis.`,
@@ -205,12 +237,13 @@ export async function resumoDiario({ dia, perfis, historico, persona }) {
 // ============================================================
 // 4) Resumo Semanal (domingo)
 // ============================================================
-export async function resumoSemanal({ semana, perfis, resumosDiarios, persona }) {
+export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, conhecimento }) {
   const corpo =
     resumosDiarios.map((r) => `### ${r.dia}\n${r.conteudo}`).join('\n\n') || '(nenhum resumo diário encontrado)';
   return gerar({
     contents:
       `Semana ${semana}. PERFIS:\n${blocoPerfis(perfis)}\n\nRESUMOS DIÁRIOS DA SEMANA:\n${corpo}\n\n` +
+      blocoConhecimento(conhecimento) +
       `Escreva o *RESUMO SEMANAL ÁCIDO* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #). Para cada pessoa: tendência da semana (melhorou/piorou), média de kcal e proteína estimada, os 3 piores momentos, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta ácida pra próxima semana (mensurável). Feche com o "🏆 Ranking da vergonha semanal" e uma provocação final. Use os [[links]] e emojis.`,
     config: { systemInstruction: montarSystem(persona), maxOutputTokens: 2000 },
   });
@@ -270,5 +303,66 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico }) {
       `PERFIS:\n${blocoPerfis(perfis)}\n\nMEMÓRIA ATUAL:\n${personaAtual?.trim() || '(vazia, hoje é meu primeiro dia com eles)'}\n\n` +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 400)}`,
     config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.7, maxOutputTokens: 1200 },
+  });
+}
+
+// ============================================================
+// 7) Cobrança de refeição que não apareceu no horário de costume
+// ============================================================
+export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, costume, persona, historico, conhecimento }) {
+  return gerar({
+    contents:
+      `São ${horaAgora}. ${perfil.nome} costuma mandar o(a) ${slot} por volta das ${horaHabitual}${costume ? ` (normalmente: ${costume})` : ''} e HOJE ainda não mandou nada dessa refeição.\n` +
+      `Conversa de hoje até agora:\n${blocoHistorico(historico, 40)}\n\n` +
+      blocoConhecimento(conhecimento) +
+      `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem: pergunte onde está a refeição (foto ou descrição), zoe o sumiço, lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já falou algo hoje que explique o sumiço, leve em conta. Curta e direta, com emojis. Não use "SILENCIO".`,
+    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 400 },
+  });
+}
+
+// ============================================================
+// 8) Rotina aprendida de cada pessoa (atualizada no fechamento do dia)
+// ============================================================
+export async function atualizarRotina({ perfil, refeicoes, historico, dia }) {
+  const lista = refeicoes.length
+    ? refeicoes.map((r) => `${r.dia} ${r.hora} [${r.slot}] ${r.resumo}`).join('\n')
+    : '(nenhuma refeição registrada ainda)';
+  return gerar({
+    contents:
+      `Hoje é ${dia}. Você acompanha ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n` +
+      `ROTINA QUE VOCÊ JÁ TINHA ANOTADO:\n${perfil.rotina || '(nada ainda)'}\n\n` +
+      `REFEIÇÕES REGISTRADAS NOS ÚLTIMOS DIAS (data hora [refeição] descrição):\n${lista}\n\n` +
+      `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico.filter((m) => m.nome === perfil.nome || m.tipo === 'bot'), 120)}\n\n` +
+      `Reescreva a ficha de rotina dessa pessoa em até 150 palavras, em terceira pessoa, direto e concreto, cobrindo: horários em que costuma comer cada refeição; o que costuma comer em cada uma (recorrências); refeições que costuma pular; dias/horários de fraqueza (ex: sexta à noite); treino/sono se souber; o que melhorou ou piorou recentemente. Só fatos observados, nada inventado. Sem markdown, sem emojis, sem #.`,
+    config: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 500 },
+  });
+}
+
+// ============================================================
+// 9) Revisão da base de conhecimento com fontes novas (mensal / !estudar)
+// ============================================================
+export async function revisarConhecimento({ doc, fontes, dia }) {
+  return gerar({
+    contents:
+      `Você é a Nutri revisando seu material de estudo em ${dia}. Abaixo está um documento da sua base de conhecimento e as fontes mais recentes encontradas no PubMed/Wikipedia sobre o tema.\n\n` +
+      `Regras:\n` +
+      `1. Se as fontes NÃO trazem nada que mude recomendações, números ou acrescente algo realmente útil, responda EXATAMENTE: SEM_MUDANCA\n` +
+      `2. Se trazem, reescreva o documento INTEIRO em markdown (mesma estrutura de seções, mesmo tom direto, português do Brasil), incorporando o que mudou, mantendo tudo que continua válido, e acrescente as novas referências na seção "## Fontes" com URL. Não invente estudos. Não use frontmatter (---). Não encurte o documento mais que 20%.\n` +
+      `3. Não mude o título principal (#).\n\n` +
+      `DOCUMENTO ATUAL (${doc.titulo}, v${doc.versao}, atualizado ${doc.atualizado}):\n${doc.corpo}\n\n` +
+      `FONTES NOVAS:\n${fontes}`,
+    config: { temperature: 0.2, maxOutputTokens: 6000 },
+  });
+}
+
+// ============================================================
+// 10) Nota de estudo depois de uma pesquisa feita no meio da conversa
+// ============================================================
+export async function notaDeEstudo({ consulta, fontes, dia }) {
+  return gerar({
+    contents:
+      `Em ${dia} você pesquisou sobre "${consulta}" porque sua base não tinha a resposta. Fontes encontradas:\n${fontes}\n\n` +
+      `Escreva uma NOTA DE ESTUDO em português do Brasil, até 250 palavras, sem markdown de cabeçalho (#), com: o que a evidência diz (números concretos quando houver), o que é consenso e o que ainda é incerto, e como isso vira conselho prático pra alguém que treina. Se as fontes forem fracas ou não responderem, diga isso na nota. Sem emojis, tom direto.`,
+    config: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 700 },
   });
 }

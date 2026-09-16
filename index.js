@@ -29,9 +29,14 @@ import {
   persistirMemoria,
   carregarPersona,
   salvarPersona,
+  registrarRefeicao,
+  refeicoesDesde,
+  refeicoesDoDia,
 } from './mongo.js';
 import { iniciarDrive, salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdInteracao, mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
+import { carregarConhecimento, docsPara, atualizarConhecimento, listarDocs, salvarPesquisa } from './conhecimento.js';
+import { pesquisar, formatarFontes } from './pesquisa.js';
 
 // ============================================================
 // Configuração
@@ -91,9 +96,66 @@ function diasAnteriores(diaStr, n) {
 }
 
 // ============================================================
+// Refeições e horários
+// ============================================================
+const SLOTS = [
+  { id: 'cafe', nome: 'café da manhã', ini: 5 * 60, fim: 10 * 60 + 30, padrao: 8 * 60 + 30, cobrar: true },
+  { id: 'almoco', nome: 'almoço', ini: 10 * 60 + 30, fim: 14 * 60 + 30, padrao: 12 * 60 + 30, cobrar: true },
+  { id: 'lanche', nome: 'lanche da tarde', ini: 14 * 60 + 30, fim: 18 * 60, padrao: 16 * 60, cobrar: false },
+  { id: 'jantar', nome: 'jantar', ini: 18 * 60, fim: 22 * 60 + 30, padrao: 20 * 60, cobrar: true },
+  { id: 'ceia', nome: 'ceia', ini: 22 * 60 + 30, fim: 29 * 60, padrao: 23 * 60, cobrar: false }, // até 5h
+];
+const ATRASO_COBRANCA_MIN = Number(process.env.ATRASO_COBRANCA_MIN) || 75; // minutos depois do horário habitual
+const DIAS_ROTINA = 21; // janela pra aprender horários
+
+const minutosDe = (hhmm) => {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+};
+const hhmmDe = (min) => `${String(Math.floor((min % 1440) / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+function slotDaHora(hhmm) {
+  let min = minutosDe(hhmm);
+  if (min < 5 * 60) min += 24 * 60; // madrugada conta como ceia do dia anterior
+  return SLOTS.find((s) => min >= s.ini && min < s.fim) || SLOTS[SLOTS.length - 1];
+}
+
+const mediana = (xs) => {
+  const a = [...xs].sort((x, y) => x - y);
+  return a.length ? a[Math.floor(a.length / 2)] : null;
+};
+
+/** Horário habitual de cada refeição pra uma pessoa, a partir do que ela já mandou (mediana; precisa de 3+ registros). */
+function horariosHabituais(refeicoes) {
+  const out = {};
+  for (const s of SLOTS) {
+    const mins = refeicoes.filter((r) => r.slot === s.id).map((r) => r.minutos);
+    out[s.id] = { minutos: mins.length >= 3 ? mediana(mins) : s.padrao, aprendido: mins.length >= 3, amostras: mins.length };
+  }
+  return out;
+}
+
+function descreverHorarios(hab) {
+  return SLOTS.filter((s) => s.cobrar || hab[s.id].aprendido)
+    .map((s) => `${s.nome} ~${hhmmDe(hab[s.id].minutos)}${hab[s.id].aprendido ? '' : ' (chute, ainda aprendendo)'}`)
+    .join(', ');
+}
+
+async function enriquecerPerfis(perfis, dia) {
+  const desde = diasAnteriores(dia, DIAS_ROTINA)[0];
+  return Promise.all(
+    perfis.map(async (p) => {
+      const refs = await refeicoesDesde(p.jids, desde).catch(() => []);
+      const hab = horariosHabituais(refs);
+      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs };
+    })
+  );
+}
+
+// ============================================================
 // Memória do dia (RAM + backup no Mongo)
 // ============================================================
-let memoria = { dia: agora().dia, grupo: GRUPO_PERMITIDO || null, mensagens: [] };
+let memoria = { dia: agora().dia, grupo: GRUPO_PERMITIDO || null, mensagens: [], cobrancas: {} };
 let fechandoDia = false;
 let persona = ''; // memória de personalidade da Nutri (evolui a cada fechamento de dia)
 
@@ -207,16 +269,28 @@ export function paraWhatsApp(texto) {
 // IDs das mensagens que o próprio bot enviou (pra não responder a si mesmo quando roda no número de um dos usuários)
 const enviadosPeloBot = new Set();
 
-// Pausa "humana" antes de responder: entre 1,5 s e ~6 s, proporcional ao tamanho do texto.
-// Responder instantâneo e sempre no mesmo ritmo é um dos sinais que o WhatsApp usa pra detectar automação.
+// Pausa "humana" curta antes de responder (0,6 a ~2,5 s, proporcional ao texto). Ritmo sempre igual e instantâneo
+// é sinal de automação pro WhatsApp; mas resposta básica não pode demorar. O Gemini já toma o resto do tempo.
 function pausaHumana(texto) {
-  const base = 1500 + Math.min(texto.length, 400) * 8;
-  return base + Math.random() * 1500;
+  const base = 600 + Math.min(texto.length, 300) * 4;
+  return base + Math.random() * 700;
 }
 
-async function enviar(jid, texto, quoted) {
+// Frases instantâneas quando chega foto de comida (sem IA): a pessoa sabe que a Nutri "tá olhando"
+const ACKS_FOTO = [
+  '👀 Deixa eu ver esse prato...',
+  '🔍 Analisando essa refeição, segura aí.',
+  'Hmm, verificando isso aqui... 🧐',
+  'Calma que eu tô olhando essa comida. 👀🍽️',
+  'Já vi. Calculando o estrago... 🧮',
+  'Peraí, dando zoom no prato. 🔎',
+  'Ó a foto chegando. Tô avaliando... 🤨',
+];
+const acaso = (lista) => lista[Math.floor(Math.random() * lista.length)];
+
+async function enviar(jid, texto, quoted, { rapido = false } = {}) {
   await sock.sendPresenceUpdate('composing', jid).catch(() => {});
-  await new Promise((r) => setTimeout(r, pausaHumana(texto)));
+  if (!rapido) await new Promise((r) => setTimeout(r, pausaHumana(texto)));
   await sock.sendPresenceUpdate('paused', jid).catch(() => {});
   const r = await sock.sendMessage(jid, { text: paraWhatsApp(texto) }, quoted ? { quoted } : undefined);
   if (r?.key?.id) {
@@ -341,15 +415,25 @@ async function processar(msg) {
     }
     if (cmd === '!perfil') {
       const p = await buscarPerfil(jids);
-      const ficha = p?.onboarded
-        ? `${p.nome}: ${p.peso} kg, ${p.altura} cm, objetivo: ${p.objetivo}.\nGírias que eu já peguei: ${(p.girias || []).join(', ') || 'nenhuma ainda'}`
+      const [pe] = p?.onboarded ? await enriquecerPerfis([p], dia) : [null];
+      const ficha = pe
+        ? `${pe.nome}: ${pe.peso} kg, ${pe.altura} cm, objetivo: ${pe.objetivo}.\nGírias que eu já peguei: ${(pe.girias || []).join(', ') || 'nenhuma ainda'}\nHorários: ${pe.horarios}\nRotina: ${pe.rotina || 'ainda te observando 👀'}`
         : 'Você nem cadastro tem, porra.';
       return enviar(jidGrupo, ficha, msg);
+    }
+    if (cmd === '!fontes') {
+      const lista = listarDocs().map((d) => `• ${d.titulo} (v${d.versao}, ${d.atualizado})`).join('\n');
+      return enviar(jidGrupo, `📚 *O que eu já estudei:*\n${lista || 'nada ainda'}\n\nTá tudo no Drive, pasta Conhecimento. Manda !estudar se quiser que eu revise com o que saiu de novo.`, msg);
+    }
+    if (cmd === '!estudar') {
+      await enviar(jidGrupo, 'Tá, vou revisar meu material. Isso leva uns minutos, não me enche. 📚🙄', msg);
+      estudar({ dia, motivo: 'pedido no grupo' }).catch((e) => console.error('[conhecimento] falha ao estudar:', e.message));
+      return;
     }
     if (cmd === '!persona') {
       return enviar(jidGrupo, persona ? `🧠 *Minha memória de personalidade:*\n\n${persona}` : 'Ainda tô te conhecendo, criatura. Volta depois do primeiro resumo do dia. 🙄', msg);
     }
-    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !perfil, !persona (o que eu já sei de vocês), !reset, !resumo (fecha o dia agora), !ajuda', msg);
+    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !perfil, !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !reset, !resumo (fecha o dia agora), !ajuda', msg);
   }
 
   // ---------- Onboarding ----------
@@ -391,6 +475,8 @@ async function processar(msg) {
   let imagem = null;
   let mimeType = null;
   if (temImagem) {
+    // aviso imediato: a análise da foto demora alguns segundos
+    enviar(jidGrupo, acaso(ACKS_FOTO), msg, { rapido: true }).catch(() => {});
     try {
       imagem = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
       mimeType = conteudo.imageMessage.mimetype || 'image/jpeg';
@@ -400,16 +486,56 @@ async function processar(msg) {
     }
   }
 
-  const perfis = await listarPerfis();
+  const perfis = await enriquecerPerfis(await listarPerfis(), dia);
+  const eu = perfis.find((p) => p.jids?.some((j) => jids.includes(j))) || perfil;
+  const slot = slotDaHora(hora);
+  const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
+  const contextoHorario = `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}`;
   const entradaTexto = temImagem ? `📷 [foto de comida]${texto ? ` ${texto}` : ''}` : texto;
   const historico = [...memoria.mensagens];
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : 'texto' });
 
-  const resposta = await ia.responder({ texto, imagem, mimeType, perfil, perfis, historico, dia, hora, persona });
+  let resposta = await ia.responder({ texto, imagem, mimeType, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu) });
 
-  if (resposta) {
-    await enviar(jidGrupo, resposta, msg);
+  // A Nutri não sabia: pesquisa (PubMed/Wikipedia), responde de novo e guarda a nota de estudo no Drive
+  const pedido = resposta?.match(/^\s*PESQUISAR:\s*(.+?)\s*$/im);
+  if (pedido) {
+    const consulta = pedido[1].replace(/["*]/g, '').trim();
+    console.log(`[pesquisa] Nutri pediu pra pesquisar: ${consulta}`);
+    enviar(jidGrupo, acaso(['Boa pergunta. Deixa eu conferir isso direito antes de falar besteira. 📚', 'Isso eu não vou chutar. Pesquisando... 🔎', 'Segura que eu vou ler sobre isso rapidinho. 🤓']), msg, { rapido: true }).catch(() => {});
+    const fontes = await pesquisar({ en: consulta, pt: texto }).catch((e) => (console.error('[pesquisa]', e.message), []));
+    const fontesTxt = formatarFontes(fontes, 8);
+    resposta = await ia.responder({
+      texto, imagem, mimeType, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, jaPesquisou: true,
+      conhecimento: `${docsPara(eu)}\n\n### Pesquisa que você acabou de fazer sobre "${consulta}"\n${fontesTxt}`,
+    });
+    if (fontes.length) {
+      ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
+        .then((nota) => salvarPesquisa({ consulta, nota, fontes, dia }))
+        .then((d) => console.log(`[pesquisa] nota salva: ${d.id}`))
+        .catch((e) => console.error('[pesquisa] falha ao salvar nota:', e.message));
+    }
+  }
+
+  if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
+    await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
     await lembrar({ hora, jid: jids[0], nome: 'Nutri', texto: resposta, tipo: 'bot' });
+  }
+
+  // Foi refeição? (foto, ou a Nutri analisou comida) -> registra pra aprender a rotina e não cobrar depois
+  const foiRefeicao = temImagem || /O que eu vi|Estimativa:/i.test(resposta || '');
+  if (foiRefeicao) {
+    registrarRefeicao({
+      jid: jids[0],
+      nome: perfil.nome,
+      dia,
+      hora,
+      minutos: minutosDe(hora),
+      slot: slot.id,
+      resumo: (texto || '[foto]').slice(0, 120),
+    }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
+    const ultima = memoria.mensagens[memoria.mensagens.length - (resposta ? 2 : 1)];
+    if (ultima) ultima.refeicao = slot.id;
   }
 
   // Cérebro no Drive (não bloqueia a conversa)
@@ -429,6 +555,86 @@ async function processar(msg) {
 }
 
 // ============================================================
+// Estudo: revisa a base de conhecimento com o que saiu de novo (PubMed)
+// ============================================================
+let estudando = false;
+async function estudar({ dia, motivo }) {
+  if (estudando) return;
+  estudando = true;
+  try {
+    console.log(`[conhecimento] revisando base (${motivo})...`);
+    const relatorio = await atualizarConhecimento({ ia, dia });
+    const mudou = relatorio.filter((l) => /ATUALIZADO/.test(l));
+    console.log('[conhecimento]\n' + relatorio.join('\n'));
+    await registrarLog(dia, `revisão da base de conhecimento (${motivo}): ${mudou.length} doc(s) atualizados`);
+    if (memoria.grupo && statusConexao === 'conectado') {
+      const texto = mudou.length
+        ? `📚 Revisei meu material com estudos novos. Atualizei:\n${mudou.join('\n')}\n\nTá tudo no Drive, pasta Conhecimento. Preparem-se, agora eu sei mais. 😈`
+        : motivo === 'pedido no grupo'
+          ? `📚 Revisei tudo. Nenhuma novidade que mude o que eu já falo pra vocês. O problema continua sendo vocês, não a ciência. 🙄`
+          : null;
+      if (texto) await enviar(memoria.grupo, texto);
+    }
+  } finally {
+    estudando = false;
+  }
+}
+
+// ============================================================
+// Cobrança: "cadê a refeição de hoje?"
+// ============================================================
+async function verificarCobrancas() {
+  if (statusConexao !== 'conectado' || !memoria.grupo || fechandoDia) return;
+  await garantirDiaAtual();
+  const { dia, hora } = agora();
+  const agoraMin = minutosDe(hora);
+  if (agoraMin < 7 * 60 || agoraMin > 23 * 60) return; // ninguém merece cobrança de madrugada
+
+  const perfis = await enriquecerPerfis(await listarPerfis(), dia);
+  const hoje = await refeicoesDoDia(dia).catch(() => []);
+  memoria.cobrancas ||= {};
+
+  for (const p of perfis) {
+    // pega só a refeição atrasada mais recente (se o bot ficou fora, não dispara 3 cobranças de uma vez)
+    const pendentes = SLOTS.filter((s) => s.cobrar).filter((s) => {
+      const limite = p._hab[s.id].minutos + ATRASO_COBRANCA_MIN;
+      const jaMandou = hoje.some((r) => r.slot === s.id && p.jids.includes(r.jid));
+      return agoraMin >= limite && !jaMandou && !memoria.cobrancas[`${p.nome}:${s.id}`];
+    });
+    if (!pendentes.length) continue;
+    const slot = pendentes[pendentes.length - 1];
+    for (const s of pendentes) memoria.cobrancas[`${p.nome}:${s.id}`] = true; // marca todas, cobra só a última
+    persistirMemoria(memoria).catch(() => {});
+
+    const costume = p._refs
+      .filter((r) => r.slot === slot.id)
+      .slice(-5)
+      .map((r) => r.resumo)
+      .filter((r) => r && r !== '[foto]')
+      .join('; ');
+    try {
+      const msg = await ia.cobrarRefeicao({
+        perfil: p,
+        slot: slot.nome,
+        horaAgora: hora,
+        horaHabitual: hhmmDe(p._hab[slot.id].minutos),
+        costume,
+        persona,
+        historico: memoria.mensagens,
+        conhecimento: docsPara(p),
+      });
+      if (msg && !/^silencio\W*$/i.test(msg)) {
+        await enviar(memoria.grupo, msg);
+        await lembrar({ hora, jid: null, nome: 'Nutri', texto: msg, tipo: 'bot' });
+        console.log(`[cobranca] ${p.nome} sem ${slot.nome} (habitual ${hhmmDe(p._hab[slot.id].minutos)})`);
+      }
+    } catch (e) {
+      console.error('[cobranca] falha:', e.message);
+    }
+  }
+}
+
+// ============================================================
 // Fechamento do dia / semana
 // ============================================================
 async function garantirDiaAtual() {
@@ -444,11 +650,11 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
   const dia = diaAlvo || memoria.dia;
   const grupo = memoria.grupo;
   try {
-    const perfis = await listarPerfis();
+    const perfis = await enriquecerPerfis(await listarPerfis(), dia);
     const historico = [...memoria.mensagens];
 
     if (grupo && (perfis.length || forcado)) {
-      const resumo = await ia.resumoDiario({ dia, perfis, historico, persona });
+      const resumo = await ia.resumoDiario({ dia, perfis, historico, persona, conhecimento: docsPara(perfis) });
       await enviar(grupo, `📋 *RESUMO DO DIA ${dia}*\n\n${resumo}`);
       await salvarMarkdown(
         'Resumos',
@@ -457,7 +663,7 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
           `\n# Resumo do dia [[${dia}]]\n\n${resumo}\n\n---\nInterações do dia: pasta \`Diario/${dia}\`\n`
       );
 
-      // Aprende gírias e atualiza fichas
+      // Aprende gírias, rotina de cada um e atualiza fichas
       const girias = await ia.extrairGirias({ perfis, historico }).catch(() => ({}));
       for (const p of perfis) {
         const novas = girias[p.nome.toLowerCase()] || [];
@@ -465,6 +671,15 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
           const conjunto = [...new Set([...(p.girias || []), ...novas])].slice(-15);
           p.girias = conjunto;
           await salvarPerfil({ jids: p.jids, girias: conjunto });
+        }
+        try {
+          const rotina = await ia.atualizarRotina({ perfil: p, refeicoes: p._refs || [], historico, dia });
+          if (rotina?.trim()) {
+            p.rotina = rotina.trim();
+            await salvarPerfil({ jids: p.jids, rotina: p.rotina });
+          }
+        } catch (e) {
+          console.error(`[rotina] falha para ${p.nome}:`, e.message);
         }
         await salvarMarkdown('Perfis', `${p.nome}.md`, mdPerfil(p)).catch(() => {});
       }
@@ -500,7 +715,7 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
     if (grupo) await enviar(grupo, `Deu merda no meu resumo (${e.message}). Amanhã eu cobro em dobro.`).catch(() => {});
   } finally {
     // Limpa a RAM e começa o próximo dia
-    memoria = { dia: agora().dia, grupo, mensagens: [] };
+    memoria = { dia: agora().dia, grupo, mensagens: [], cobrancas: {} };
     await persistirMemoria(memoria).catch(() => {});
     fechandoDia = false;
   }
@@ -513,7 +728,7 @@ async function fecharSemana({ dia, perfis, grupo }) {
     const conteudo = await lerMarkdown('Resumos', `${d}.md`).catch(() => null);
     if (conteudo) resumosDiarios.push({ dia: d, conteudo: conteudo.replace(/^---[\s\S]*?---\n/, '') });
   }
-  const resumo = await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona });
+  const resumo = await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona, conhecimento: docsPara(perfis) });
   await enviar(grupo, `📆 *RESUMO DA SEMANA ${semana}*\n\n${resumo}`);
   await salvarMarkdown(
     'Resumos',
@@ -530,13 +745,14 @@ async function fecharSemana({ dia, perfis, grupo }) {
   try {
     await conectarMongo();
     iniciarDrive();
+    await carregarConhecimento().catch((e) => console.error('[conhecimento] falha ao carregar:', e.message));
 
     persona = await carregarPersona().catch(() => '');
     if (persona) console.log(`[persona] carregada (${persona.length} chars)`);
 
     const salva = await carregarMemoria();
     if (salva?.mensagens) {
-      memoria = { dia: salva.dia, grupo: salva.grupo || GRUPO_PERMITIDO || null, mensagens: salva.mensagens };
+      memoria = { dia: salva.dia, grupo: salva.grupo || GRUPO_PERMITIDO || null, mensagens: salva.mensagens, cobrancas: salva.cobrancas || {} };
       console.log(`[memoria] restaurada: ${memoria.mensagens.length} mensagens de ${memoria.dia}`);
       // se a data mudou enquanto o bot dormia, o dia antigo é fechado assim que o WhatsApp conectar
     }
@@ -546,6 +762,14 @@ async function fecharSemana({ dia, perfis, grupo }) {
     // 23:59 todo dia (fuso TZ). Domingo o fecharDia também dispara o semanal.
     cron.schedule('59 23 * * *', () => fecharDia(), { timezone: TZ });
     console.log(`[cron] resumo diário agendado para 23:59 (${TZ})`);
+
+    // A cada 10 min: alguém pulou a refeição do horário de costume? Cobra.
+    cron.schedule('*/10 * * * *', () => verificarCobrancas().catch((e) => console.error('[cobranca] erro:', e.message)), { timezone: TZ });
+    console.log(`[cron] cobrança de refeições a cada 10 min (atraso tolerado: ${ATRASO_COBRANCA_MIN} min)`);
+
+    // Dia 1 de cada mês, 4h: a Nutri estuda o que saiu de novo e revisa a base de conhecimento
+    cron.schedule('0 4 1 * *', () => estudar({ dia: agora().dia, motivo: 'revisão mensal' }).catch((e) => console.error('[conhecimento]', e.message)), { timezone: TZ });
+    console.log('[cron] revisão mensal da base de conhecimento (dia 1, 04:00)');
   } catch (e) {
     console.error('[boot] falha fatal:', e);
     process.exit(1);

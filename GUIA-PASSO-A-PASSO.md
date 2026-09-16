@@ -142,9 +142,20 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 | `!id`     | Mostra o ID do grupo (pro `ALLOWED_GROUP_ID`)|
 | `!perfil` | Mostra seu cadastro e as gírias aprendidas   |
 | `!persona`| Mostra a memória de personalidade da Nutri (apelidos, piadas internas, padrões) |
+| `!fontes` | Lista os documentos da base de conhecimento (pasta Conhecimento no Drive) |
+| `!estudar`| Manda a Nutri revisar a base com estudos novos do PubMed (roda sozinho todo dia 1) |
 | `!reset`  | Apaga seu cadastro pra refazer o onboarding  |
 | `!resumo` | Força o Resumo Diário Ácido agora            |
 | `!ajuda`  | Lista os comandos                            |
+
+## Como a Nutri funciona por dentro
+
+- **Base de conhecimento** (`conhecimento/*.md` no código → Mongo → Drive `Conhecimento/`): Base, Hipertrofia, Emagrecimento, Saúde-Índices, Performance-Salto e Rotina. Os documentos do foco de cada pessoa entram em toda resposta. Todo dia 1 às 4h ela pesquisa no PubMed e reescreve o que mudou; `!estudar` força isso.
+- **Pesquisa sob demanda**: quando a base não basta, ela pesquisa (PubMed/Wikipedia), responde e salva uma nota de estudo em `Conhecimento/Pesquisas/` pra não pesquisar de novo.
+- **Rotina de cada pessoa**: cada refeição analisada é registrada com horário. Com 3+ registros ela aprende o horário habitual de café, almoço e jantar; no fechamento do dia reescreve a ficha de rotina (`Perfis/Nome.md`).
+- **Cobrança**: a cada 10 min ela checa quem passou 75 min do horário habitual sem mandar a refeição e cobra no grupo (uma vez por refeição por dia, só entre 7h e 23h). `ATRASO_COBRANCA_MIN` muda a tolerância.
+- **Personalidade**: `Perfis/Nutri.md` é a memória que ela mesma reescreve toda noite (apelidos, piadas internas, padrões, bordões).
+- **Velocidade**: texto responde em 1 a 3 s. Foto recebe um "deixa eu ver esse prato..." na hora e a análise vem em seguida.
 
 ## Se der erro
 

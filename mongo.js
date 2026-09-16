@@ -132,3 +132,18 @@ export async function salvarPersona(texto) {
     { upsert: true }
   );
 }
+
+// ---------- Refeições registradas (pra aprender a rotina de cada um e cobrar quem sumiu) ----------
+
+export async function registrarRefeicao(r) {
+  // r = { jid, nome, dia, hora, minutos, slot, resumo }
+  await colecao('refeicoes').insertOne({ ...r, criadoEm: new Date() });
+}
+
+export async function refeicoesDesde(jids, diaInicial) {
+  return colecao('refeicoes').find({ jid: { $in: jids }, dia: { $gte: diaInicial } }).sort({ dia: 1, minutos: 1 }).toArray();
+}
+
+export async function refeicoesDoDia(dia) {
+  return colecao('refeicoes').find({ dia }).toArray();
+}

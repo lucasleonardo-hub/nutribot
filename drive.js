@@ -3,7 +3,8 @@
 //   Diario/YYYY-MM-DD/HH-mm-ss-nome.md   -> cada interação
 //   Resumos/YYYY-MM-DD.md                -> resumo diário ácido
 //   Resumos/Semana-YYYY-Www.md           -> resumo semanal
-//   Perfis/Nome.md                       -> ficha de cada pessoa
+//   Perfis/Nome.md                       -> ficha de cada pessoa (+ Perfis/Nutri.md = memória de personalidade)
+//   Conhecimento/*.md                    -> base de conhecimento por foco (revisada mensalmente)
 //   Logs/YYYY-MM-DD.md                   -> log técnico do dia
 
 import { google } from 'googleapis';
@@ -154,6 +155,8 @@ export function mdPerfil(p) {
     frontmatter({ tipo: 'perfil', nome: p.nome, peso_kg: p.peso, altura_cm: p.altura, objetivo: `"${p.objetivo}"`, tags: ['nutribot', 'perfil'] }) +
     `\n# ${p.nome}\n\n- Peso: ${p.peso} kg\n- Altura: ${p.altura} cm\n- Objetivo: [[${p.objetivo}]]\n` +
     `- Gírias aprendidas: ${(p.girias || []).map((g) => `[[${g}]]`).join(', ') || 'nenhuma ainda'}\n` +
+    (p.horarios ? `- Horários habituais: ${p.horarios}\n` : '') +
+    (p.rotina ? `\n## Rotina observada\n${p.rotina}\n` : '') +
     `- Cadastro: ${p.criadoEm ? new Date(p.criadoEm).toISOString().slice(0, 10) : ''}\n`
   );
 }
