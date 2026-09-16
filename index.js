@@ -392,7 +392,8 @@ async function processar(msg) {
   if (!conteudo) return;
   const texto = (conteudo.conversation || conteudo.extendedTextMessage?.text || conteudo.imageMessage?.caption || '').trim();
   const temImagem = Boolean(conteudo.imageMessage);
-  if (!texto && !temImagem) return; // áudio, sticker, etc.
+  const temAudio = Boolean(conteudo.audioMessage);
+  if (!texto && !temImagem && !temAudio) return; // sticker, vídeo, documento etc.
 
   await garantirDiaAtual();
   if (!GRUPO_PERMITIDO && memoria.grupo !== jidGrupo) {
@@ -456,7 +457,7 @@ async function processar(msg) {
   }
 
   if (!perfil.onboarded) {
-    if (!texto) return enviar(jidGrupo, 'Foto não é cadastro, gênio. Manda nome, peso, altura e objetivo em TEXTO.', msg);
+    if (!texto) return enviar(jidGrupo, 'Foto e áudio não são cadastro, gênio. Manda nome, peso, altura e objetivo em TEXTO.', msg);
     const d = await ia.extrairDadosOnboarding(texto);
     const parcial = { jids };
     if (d.nome) parcial.nome = d.nome;
@@ -496,17 +497,46 @@ async function processar(msg) {
     }
   }
 
+  let audio = null;
+  let audioMime = null;
+  if (temAudio) {
+    try {
+      audio = await downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: sock.updateMediaMessage });
+      audioMime = (conteudo.audioMessage.mimetype || 'audio/ogg').split(';')[0];
+    } catch (e) {
+      console.error('[wa] falha ao baixar áudio:', e.message);
+      return enviar(jidGrupo, 'Teu áudio não baixou. Digita, criatura, ou manda de novo.', msg);
+    }
+  }
+
   const perfis = await enriquecerPerfis(await listarPerfis(), dia);
   const eu = perfis.find((p) => p.jids?.some((j) => jids.includes(j))) || perfil;
   const slot = slotDaHora(hora);
   const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
   const contextoHorario = `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}`;
   const dossie = await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), ''));
-  const entradaTexto = temImagem ? `📷 [foto de comida]${texto ? ` ${texto}` : ''}` : texto;
+  const entradaTexto = temImagem ? `📷 [foto de comida]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto;
   const historico = [...memoria.mensagens];
-  await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : 'texto' });
+  await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : temAudio ? 'audio' : 'texto' });
 
-  let resposta = await ia.responder({ texto, imagem, mimeType, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie });
+  let resposta;
+  try {
+    resposta = await ia.responder({ texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie });
+  } catch (e) {
+    // Gemini (todos) e Groq fora do ar: avisa em vez de ficar muda
+    console.error('[ia] falha total:', e.message);
+    memoria.mensagens.pop(); // não deixa a mensagem sem resposta no histórico como se tivesse sido ignorada
+    return enviar(
+      jidGrupo,
+      acaso([
+        'Meu cérebro travou agora (a IA tá fora do ar). Me manda isso de novo daqui a 1 min, criatura. 🤯',
+        'Puta que pariu, minha conexão com a IA caiu. Repete em um minutinho que eu respondo. 🔌',
+        'Tô offline da cabeça por uns segundos, o servidor da IA engasgou. Manda de novo já já. 😵‍💫',
+      ]),
+      msg,
+      { rapido: true }
+    );
+  }
 
   // A Nutri não sabia: pesquisa (PubMed/Wikipedia), responde de novo e guarda a nota de estudo no Drive
   const pedido = resposta?.match(/^\s*PESQUISAR:\s*(.+?)\s*$/im);
@@ -517,7 +547,7 @@ async function processar(msg) {
     const fontes = await pesquisar({ en: consulta, pt: texto }).catch((e) => (console.error('[pesquisa]', e.message), []));
     const fontesTxt = formatarFontes(fontes, 8);
     resposta = await ia.responder({
-      texto, imagem, mimeType, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, dossie, jaPesquisou: true,
+      texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, dossie, jaPesquisou: true,
       conhecimento: `${docsPara(eu)}\n\n### Pesquisa que você acabou de fazer sobre "${consulta}"\n${fontesTxt}`,
     });
     if (fontes.length) {
@@ -535,6 +565,7 @@ async function processar(msg) {
 
   // Foi refeição? (foto, ou a Nutri analisou comida) -> registra pra aprender a rotina e não cobrar depois
   const foiRefeicao = temImagem || /O que eu vi|Estimativa:/i.test(resposta || '');
+  const resumoRefeicao = texto || (temImagem ? '[foto]' : temAudio ? '[áudio]' : '');
   if (foiRefeicao) {
     registrarRefeicao({
       jid: jids[0],
@@ -543,7 +574,7 @@ async function processar(msg) {
       hora,
       minutos: minutosDe(hora),
       slot: slot.id,
-      resumo: (texto || '[foto]').slice(0, 120),
+      resumo: resumoRefeicao.slice(0, 120),
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
     const ultima = memoria.mensagens[memoria.mensagens.length - (resposta ? 2 : 1)];
     if (ultima) ultima.refeicao = slot.id;
@@ -558,7 +589,7 @@ async function processar(msg) {
       dia,
       hora,
       nome: perfil.nome,
-      tipo: temImagem ? 'refeicao-foto' : 'conversa',
+      tipo: temImagem ? 'refeicao-foto' : temAudio ? 'audio' : 'conversa',
       entrada: entradaTexto,
       resposta: resposta || '_(sem resposta - SILENCIO)_',
     })

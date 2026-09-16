@@ -157,6 +157,8 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 - **Rotina de cada pessoa**: cada refeição analisada é registrada com horário. Com 3+ registros ela aprende o horário habitual de café, almoço e jantar; no fechamento do dia reescreve a ficha de rotina (`Perfis/Nome.md`).
 - **Cobrança**: a cada 10 min ela checa quem passou 75 min do horário habitual sem mandar a refeição e cobra no grupo (uma vez por refeição por dia, só entre 7h e 23h). `ATRASO_COBRANCA_MIN` muda a tolerância.
 - **Personalidade**: `Perfis/Nutri.md` é a memória que ela mesma reescreve toda noite (apelidos, piadas internas, padrões, bordões).
+- **Reserva de IA**: se todos os modelos Gemini falharem (503 "alta demanda"), ela responde pelo Groq (`qwen/qwen3.8-27b`, só texto). Se até isso cair, ela avisa no grupo que travou em vez de ficar muda.
+- **Áudio**: mensagem de voz é entendida pelo Gemini direto (sem transcrição separada). Vale como relato de refeição.
 - **Velocidade**: texto responde em 1 a 3 s. Foto recebe um "deixa eu ver esse prato..." na hora e a análise vem em seguida.
 
 ## Se der erro

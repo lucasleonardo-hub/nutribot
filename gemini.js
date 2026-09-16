@@ -1,6 +1,7 @@
 // gemini.js - A "Nutri de bolso" (Google Gemini via @google/genai)
 
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
+import { gerarGroq, groqDisponivel } from './groq.js';
 
 const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 let ai;
@@ -149,23 +150,55 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
       }
     }
   }
+
+  // Todos os Gemini falharam. Última cartada: Groq (só texto; foto/áudio/PDF não dá).
+  if (groqDisponivel() && !temMidia(contents)) {
+    try {
+      console.warn('[gemini] todos os modelos Gemini falharam; tentando Groq');
+      const texto = await gerarGroq({
+        system: config.systemInstruction || '',
+        usuario: textoDe(contents),
+        json: config.responseMimeType === 'application/json',
+        maxTokens: Math.min(config.maxOutputTokens || 1024, 2048),
+        temperature: config.temperature ?? 0.9,
+      });
+      console.warn('[gemini] respondido pelo Groq');
+      return texto;
+    } catch (e) {
+      console.error('[groq] também falhou:', e.message);
+    }
+  }
   throw erro;
 }
+
+// contents do Gemini -> texto puro (pro Groq) / detecta mídia
+function partesDe(contents) {
+  if (typeof contents === 'string') return [{ text: contents }];
+  const lista = Array.isArray(contents) ? contents : [contents];
+  return lista.flatMap((c) => (c?.parts ? c.parts : [c]));
+}
+const temMidia = (contents) => partesDe(contents).some((p) => p?.inlineData);
+const textoDe = (contents) =>
+  partesDe(contents)
+    .map((p) => p?.text)
+    .filter(Boolean)
+    .join('\n\n');
 
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, jaPesquisou = false }) {
+export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, jaPesquisou = false }) {
   const contexto =
     `DATA E HORA: ${dia} ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\nPERFIS DO GRUPO:\n${blocoPerfis(perfis)}\n\n` +
     `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico)}\n\n` +
     blocoConhecimento(conhecimento) +
     blocoDossie(perfil.nome, dossie) +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
-    `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada - analise a comida da imagem)' : ''}:\n${texto || '(sem legenda)'}`;
+    `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada - analise a comida da imagem)' : ''}${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
 
   const parts = [{ text: contexto }];
   if (imagem) parts.push({ inlineData: { mimeType: mimeType || 'image/jpeg', data: imagem.toString('base64') } });
+  if (audio) parts.push({ inlineData: { mimeType: audioMime || 'audio/ogg', data: audio.toString('base64') } });
 
   const resposta = await gerar({
     contents: [{ role: 'user', parts }],
