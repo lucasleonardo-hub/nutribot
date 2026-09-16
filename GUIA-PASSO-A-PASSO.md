@@ -20,7 +20,7 @@ Regras pra não ser banido:
 - O bot só responde em UM grupo (`ALLOWED_GROUP_ID`) e nunca manda mensagem pra quem não falou com ele. Não mude isso.
 - Ele já espera uns segundos "digitando" antes de responder (parece humano). Não tire.
 - Não use o número do bot pra mais nada (marketing, disparos, muitos grupos).
-- Se um dia precisar trocar de número: `npm run logout` (local) ou abra `https://SEU-APP.onrender.com/logout?token=SEU_ADMIN_TOKEN` e escaneie de novo em `/qr`.
+- Se um dia precisar trocar de número: `npm run logout` (local) ou abra `https://nutribot-5gwk.onrender.com/logout?token=SEU_ADMIN_TOKEN` e escaneie de novo em `/qr`.
 
 ---
 
@@ -92,17 +92,17 @@ O Render redeploya sozinho a cada push.
    - `DRIVE_FOLDER_ID`
    - `GOOGLE_SERVICE_ACCOUNT_JSON` (o conteúdo inteiro do `drive-oauth.json` colado)
    - `ALLOWED_GROUP_ID` (deixe vazio por enquanto)
-4. **Apply** e espere o deploy terminar. A URL fica tipo `https://nutribot-xxxx.onrender.com`.
+4. **Apply** e espere o deploy terminar. A URL é https://nutribot-5gwk.onrender.com (painel: https://dashboard.render.com/web/srv-daktqflbedkc73d3njpg).
 
 > Se preferir sem Blueprint: https://dashboard.render.com/select-repo?type=web → `nutribot` → Free, Build `npm install`, Start `npm start` → adicione as variáveis acima mais `TZ=America/Sao_Paulo`, `KEEPALIVE_MINUTES=10` e um `ADMIN_TOKEN` inventado por você.
 
 ### 4.2 Pegar o ADMIN_TOKEN
 No Render: serviço `nutribot` → **Environment** → copie o valor de `ADMIN_TOKEN`. Ele libera:
-- `https://SUA-URL.onrender.com/status?token=TOKEN` → mostra número conectado, grupo, keepalive, uptime
-- `https://SUA-URL.onrender.com/logout?token=TOKEN` → desvincula o número atual e gera QR novo
+- `https://nutribot-5gwk.onrender.com/status?token=TOKEN` → mostra número conectado, grupo, keepalive, uptime
+- `https://nutribot-5gwk.onrender.com/logout?token=TOKEN` → desvincula o número atual e gera QR novo
 
 ### 4.3 Escanear o QR Code (com o celular do eSIM!)
-1. Abra `https://SUA-URL.onrender.com/qr`
+1. Abra `https://nutribot-5gwk.onrender.com/qr`
 2. No celular do BOT: WhatsApp → **⋮** → **Aparelhos conectados** → **Conectar um aparelho** → escaneie
 3. Coloque o número do bot no grupo com as 2 pessoas.
 4. Mande `!id` no grupo. O bot responde o ID do grupo. Copie e cole em `ALLOWED_GROUP_ID` no Render (**Environment** → salvar). O Render reinicia sozinho e a sessão continua salva no Mongo (não precisa escanear de novo).
@@ -112,10 +112,9 @@ O plano Free do Render desliga o serviço após 15 min sem tráfego. O bot resol
 
 **Camada 1 - automática (já no código):** o próprio bot bate em `/ping` na URL pública a cada 10 min usando a `RENDER_EXTERNAL_URL` que o Render preenche sozinho. Confira em `/status?token=...` o campo `keepalive`.
 
-**Camada 2 - monitor externo (cobre reinícios e deploys):**
-1. https://dashboard.uptimerobot.com/monitors → criar conta grátis → **+ New Monitor**
-2. **Monitor Type:** HTTP(s) · **URL:** `https://SUA-URL.onrender.com/ping` · **Interval:** 5 minutes → **Create Monitor**
-   (alternativa: https://cron-job.org → **Create cronjob** → mesma URL, a cada 5 min)
+**Camada 2 - GitHub Actions (já configurada):** o arquivo `.github/workflows/keepalive.yml` faz o GitHub bater em `/ping` a cada 5 min. Acompanhe em https://github.com/lucasleonardo-hub/nutribot/actions. Atenção: o GitHub desativa agendamentos se o repositório ficar 60 dias sem nenhum commit; se isso acontecer, é só fazer qualquer commit ou clicar em **Enable workflow**.
+
+**Camada 3 - opcional (UptimeRobot):** https://dashboard.uptimerobot.com/monitors → **+ New Monitor** → HTTP(s) · URL `https://nutribot-5gwk.onrender.com/ping` · 5 minutes.
 
 Limites do Free que você precisa saber:
 - 750 horas/mês de instância grátis. Um serviço 24/7 gasta ~744. Ou seja: **só pode ter ESSE serviço** rodando na conta Free do Render.
@@ -152,6 +151,6 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 - **`invalid_grant` no Drive:** a credencial OAuth expirou ou foi revogada. Refaça o passo 3.2 (ou 3.3) e atualize `GOOGLE_SERVICE_ACCOUNT_JSON` no Render.
 - **Bot deslogou (`loggedOut`):** ele limpa a sessão no Mongo sozinho. Abra `/qr` de novo e escaneie com o celular do eSIM.
 - **Número do bot foi banido:** peça revisão dentro do próprio WhatsApp (geralmente libera em horas quando é a primeira vez). Se não liberar, novo eSIM → passo 0 → `/logout?token=` → `/qr`.
-- **Quer trocar o número do bot:** `https://SUA-URL.onrender.com/logout?token=ADMIN_TOKEN` → depois `/qr`. Localmente: `npm run logout`.
-- **`/status` diz `keepalive: desligado` no Render:** a variável `RENDER_EXTERNAL_URL` não veio. Adicione `KEEPALIVE_URL=https://SUA-URL.onrender.com` no Environment.
+- **Quer trocar o número do bot:** `https://nutribot-5gwk.onrender.com/logout?token=ADMIN_TOKEN` → depois `/qr`. Localmente: `npm run logout`.
+- **`/status` diz `keepalive: desligado` no Render:** a variável `RENDER_EXTERNAL_URL` não veio. Adicione `KEEPALIVE_URL=https://nutribot-5gwk.onrender.com` no Environment.
 - **Resumo não chegou às 23:59:** o bot estava dormindo (confira o UptimeRobot). Na primeira mensagem do dia seguinte ele fecha o dia anterior automaticamente.
