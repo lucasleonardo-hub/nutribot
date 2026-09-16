@@ -112,9 +112,21 @@ app.get('/', (_req, res) =>
   res.json({ status: statusConexao, dia: memoria.dia, mensagensHoje: memoria.mensagens.length, grupo: memoria.grupo })
 );
 app.get('/qr', async (_req, res) => {
-  if (!ultimoQR) return res.send(`<h2>Status: ${statusConexao}</h2><p>Sem QR pendente. Se já conectou, tá tudo certo.</p>`);
+  const pagina = (corpo, recarregarEm) =>
+    res.send(
+      `<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NutriBot QR</title></head>` +
+        `<body style="font-family:sans-serif;text-align:center;padding:16px">${corpo}` +
+        `<p><small>Status: ${statusConexao} · página recarrega a cada ${recarregarEm}s</small></p>` +
+        `<script>setTimeout(()=>location.reload(),${recarregarEm * 1000})</script></body></html>`
+    );
+  if (statusConexao === 'conectado') return pagina(`<h2>✅ WhatsApp conectado</h2><p>${sock?.user?.id || ''}</p><p>Não precisa escanear nada.</p>`, 60);
+  if (!ultimoQR) return pagina(`<h2>⏳ Gerando QR novo...</h2><p>Aguarde alguns segundos, a página atualiza sozinha.</p>`, 5);
   const img = await QRCode.toDataURL(ultimoQR, { width: 360 });
-  res.send(`<html><body style="font-family:sans-serif;text-align:center"><h2>Escaneie no WhatsApp</h2><p>Aparelhos conectados &rarr; Conectar aparelho</p><img src="${img}"/><p><small>A página recarrega a cada 20s</small></p><script>setTimeout(()=>location.reload(),20000)</script></body></html>`);
+  pagina(
+    `<h2>Escaneie no WhatsApp do número do BOT</h2><p>⋮ &rarr; Aparelhos conectados &rarr; Conectar um aparelho</p><img src="${img}" style="max-width:100%"/>` +
+      `<p>O código muda a cada 20s. Deixe a câmera pronta antes de abrir.</p>`,
+    20
+  );
 });
 // Rotas de administração (exigem ?token=ADMIN_TOKEN)
 function autorizado(req, res) {
@@ -237,7 +249,8 @@ async function conectarWhatsApp() {
     }
     if (connection === 'close') {
       const codigo = lastDisconnect?.error?.output?.statusCode;
-      statusConexao = `desconectado (${codigo})`;
+      ultimoQR = null; // QR antigo não vale mais; /qr mostra "gerando" até vir outro
+      statusConexao = codigo === DisconnectReason.timedOut ? 'gerando QR novo' : `desconectado (${codigo})`;
       if (codigo === DisconnectReason.loggedOut) {
         console.log('[wa] sessão deslogada. Limpando sessão no Mongo e gerando novo QR...');
         await limparSessao();
