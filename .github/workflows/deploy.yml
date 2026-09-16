@@ -1,0 +1,19 @@
+# Dispara o deploy no Render a cada push na main (o repo não está conectado via GitHub App, então não há webhook automático).
+name: deploy-render
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: trigger Render deploy
+        run: |
+          code=$(curl -s -o /tmp/out.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}" \
+            -H "Content-Type: application/json" -d '{"clearCache":"do_not_clear"}' \
+            https://api.render.com/v1/services/srv-daktqflbedkc73d3njpg/deploys)
+          echo "HTTP $code"; cat /tmp/out.json; echo
+          test "$code" = "201"
