@@ -1,7 +1,7 @@
 // gemini.js - A "Nutri de bolso" (Google Gemini via @google/genai)
 
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
-import { gerarGroq, groqDisponivel } from './groq.js';
+import { gerarReserva, reservasDisponiveis } from './reservas.js';
 
 const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 let ai;
@@ -151,21 +151,23 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
     }
   }
 
-  // Todos os Gemini falharam. Última cartada: Groq (só texto; foto/áudio/PDF não dá).
-  if (groqDisponivel() && !temMidia(contents)) {
+  // Todos os Gemini falharam. Reservas (Groq / Hugging Face / Cohere): texto e foto sim; áudio e PDF não.
+  const partes = partesDe(contents);
+  const imagens = partes.filter((p) => p?.inlineData?.mimeType?.startsWith('image/')).map((p) => p.inlineData);
+  const temOutraMidia = partes.some((p) => p?.inlineData && !p.inlineData.mimeType?.startsWith('image/'));
+  if (reservasDisponiveis().length && !temOutraMidia) {
     try {
-      console.warn('[gemini] todos os modelos Gemini falharam; tentando Groq');
-      const texto = await gerarGroq({
+      console.warn(`[gemini] todos os modelos Gemini falharam; tentando reservas (${reservasDisponiveis().join(', ')})`);
+      return await gerarReserva({
         system: config.systemInstruction || '',
         usuario: textoDe(contents),
+        imagens,
         json: config.responseMimeType === 'application/json',
-        maxTokens: Math.min(config.maxOutputTokens || 1024, 2048),
+        maxTokens: config.maxOutputTokens || 1024,
         temperature: config.temperature ?? 0.9,
       });
-      console.warn('[gemini] respondido pelo Groq');
-      return texto;
     } catch (e) {
-      console.error('[groq] também falhou:', e.message);
+      console.error('[reserva] todos falharam:', e.message);
     }
   }
   throw erro;
@@ -177,7 +179,6 @@ function partesDe(contents) {
   const lista = Array.isArray(contents) ? contents : [contents];
   return lista.flatMap((c) => (c?.parts ? c.parts : [c]));
 }
-const temMidia = (contents) => partesDe(contents).some((p) => p?.inlineData);
 const textoDe = (contents) =>
   partesDe(contents)
     .map((p) => p?.text)

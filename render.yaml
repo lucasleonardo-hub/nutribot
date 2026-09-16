@@ -37,3 +37,7 @@ services:
         sync: false
       - key: GROQ_MODEL
         value: qwen/qwen3.8-27b
+      - key: HF_API_KEY
+        sync: false
+      - key: COHERE_API_KEY
+        sync: false
