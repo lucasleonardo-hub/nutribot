@@ -27,6 +27,8 @@ import {
   apagarPerfil,
   carregarMemoria,
   persistirMemoria,
+  carregarPersona,
+  salvarPersona,
 } from './mongo.js';
 import { iniciarDrive, salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdInteracao, mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
@@ -93,6 +95,7 @@ function diasAnteriores(diaStr, n) {
 // ============================================================
 let memoria = { dia: agora().dia, grupo: GRUPO_PERMITIDO || null, mensagens: [] };
 let fechandoDia = false;
+let persona = ''; // memória de personalidade da Nutri (evolui a cada fechamento de dia)
 
 async function lembrar(entrada) {
   memoria.mensagens.push(entrada);
@@ -185,8 +188,20 @@ if (KEEPALIVE_URL) {
 let sock;
 let gruposIgnoradosLogados = new Set();
 
-function paraWhatsApp(texto) {
-  return MANTER_COLCHETES ? texto : texto.replace(/\[\[([^\]]+)\]\]/g, '*$1*');
+// Converte o markdown que o Gemini insiste em mandar pro formato do WhatsApp
+// (negrito é UM asterisco de cada lado; **dois** aparecem literalmente no zap).
+export function paraWhatsApp(texto) {
+  let t = String(texto || '');
+  if (!MANTER_COLCHETES) t = t.replace(/\[\[([^\]]+)\]\]/g, '*$1*');
+  return t
+    .replace(/^#{1,6}\s*/gm, '') // cabeçalhos markdown
+    .replace(/\*\*\*(.+?)\*\*\*/g, '*$1*') // ***x*** -> *x*
+    .replace(/\*\*(.+?)\*\*/g, '*$1*') // **x** -> *x*
+    .replace(/__(.+?)__/g, '_$1_') // __x__ -> _x_
+    .replace(/^\s*[-*•]\s+/gm, '• ') // bullets -> •
+    .replace(/\*{2,}/g, '*') // sobras de asterisco
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 // IDs das mensagens que o próprio bot enviou (pra não responder a si mesmo quando roda no número de um dos usuários)
@@ -331,7 +346,10 @@ async function processar(msg) {
         : 'Você nem cadastro tem, porra.';
       return enviar(jidGrupo, ficha, msg);
     }
-    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !perfil, !reset, !resumo (fecha o dia agora), !ajuda', msg);
+    if (cmd === '!persona') {
+      return enviar(jidGrupo, persona ? `🧠 *Minha memória de personalidade:*\n\n${persona}` : 'Ainda tô te conhecendo, criatura. Volta depois do primeiro resumo do dia. 🙄', msg);
+    }
+    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !perfil, !persona (o que eu já sei de vocês), !reset, !resumo (fecha o dia agora), !ajuda', msg);
   }
 
   // ---------- Onboarding ----------
@@ -339,7 +357,7 @@ async function processar(msg) {
 
   if (!perfil) {
     await salvarPerfil({ jids, nome: nomeContato, onboarded: false, girias: [], criadoEm: new Date() });
-    const pedido = await ia.pedirOnboarding(nomeContato);
+    const pedido = await ia.pedirOnboarding(nomeContato, persona);
     await enviar(jidGrupo, pedido, msg);
     return;
   }
@@ -359,10 +377,10 @@ async function processar(msg) {
     if (!perfil.altura) faltando.push('altura');
     if (!perfil.objetivo) faltando.push('objetivo');
     if (!perfil.nome) faltando.push('nome');
-    if (faltando.length) return enviar(jidGrupo, await ia.cobrarDadosFaltando(faltando), msg);
+    if (faltando.length) return enviar(jidGrupo, await ia.cobrarDadosFaltando(faltando, persona), msg);
 
     perfil = await salvarPerfil({ jids, onboarded: true });
-    const bemVindo = await ia.boasVindas(perfil);
+    const bemVindo = await ia.boasVindas(perfil, persona);
     await enviar(jidGrupo, bemVindo);
     await lembrar({ hora, jid: jids[0], nome: 'Nutri', texto: bemVindo, tipo: 'bot' });
     salvarMarkdown('Perfis', `${perfil.nome}.md`, mdPerfil(perfil)).catch((e) => console.error('[drive]', e.message));
@@ -387,7 +405,7 @@ async function processar(msg) {
   const historico = [...memoria.mensagens];
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : 'texto' });
 
-  const resposta = await ia.responder({ texto, imagem, mimeType, perfil, perfis, historico, dia });
+  const resposta = await ia.responder({ texto, imagem, mimeType, perfil, perfis, historico, dia, hora, persona });
 
   if (resposta) {
     await enviar(jidGrupo, resposta, msg);
@@ -430,7 +448,7 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
     const historico = [...memoria.mensagens];
 
     if (grupo && (perfis.length || forcado)) {
-      const resumo = await ia.resumoDiario({ dia, perfis, historico });
+      const resumo = await ia.resumoDiario({ dia, perfis, historico, persona });
       await enviar(grupo, `📋 *RESUMO DO DIA ${dia}*\n\n${resumo}`);
       await salvarMarkdown(
         'Resumos',
@@ -449,6 +467,23 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
           await salvarPerfil({ jids: p.jids, girias: conjunto });
         }
         await salvarMarkdown('Perfis', `${p.nome}.md`, mdPerfil(p)).catch(() => {});
+      }
+
+      // A Nutri revisa quem ela é: apelidos, piadas internas, padrões e o que afiar amanhã
+      try {
+        const nova = await ia.evoluirPersona({ dia, personaAtual: persona, perfis, historico });
+        if (nova?.trim()) {
+          persona = nova.trim();
+          await salvarPersona(persona);
+          await salvarMarkdown(
+            'Perfis',
+            'Nutri.md',
+            frontmatter({ tipo: 'persona', atualizado: dia, tags: ['nutribot', 'persona'] }) + `\n# Nutri (memória de personalidade)\n\n${persona}\n`
+          ).catch(() => {});
+          console.log(`[persona] atualizada (${persona.length} chars)`);
+        }
+      } catch (e) {
+        console.error('[persona] falha ao evoluir:', e.message);
       }
 
       const dataAlvo = new Date(`${dia}T12:00:00Z`);
@@ -478,7 +513,7 @@ async function fecharSemana({ dia, perfis, grupo }) {
     const conteudo = await lerMarkdown('Resumos', `${d}.md`).catch(() => null);
     if (conteudo) resumosDiarios.push({ dia: d, conteudo: conteudo.replace(/^---[\s\S]*?---\n/, '') });
   }
-  const resumo = await ia.resumoSemanal({ semana, perfis, resumosDiarios });
+  const resumo = await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona });
   await enviar(grupo, `📆 *RESUMO DA SEMANA ${semana}*\n\n${resumo}`);
   await salvarMarkdown(
     'Resumos',
@@ -495,6 +530,9 @@ async function fecharSemana({ dia, perfis, grupo }) {
   try {
     await conectarMongo();
     iniciarDrive();
+
+    persona = await carregarPersona().catch(() => '');
+    if (persona) console.log(`[persona] carregada (${persona.length} chars)`);
 
     const salva = await carregarMemoria();
     if (salva?.mensagens) {

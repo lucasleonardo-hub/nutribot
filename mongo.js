@@ -117,3 +117,18 @@ export async function carregarMemoria() {
 export async function persistirMemoria(memoria) {
   await colecao('memoria').replaceOne({ _id: 'hoje' }, { _id: 'hoje', ...memoria }, { upsert: true });
 }
+
+// ---------- Personalidade da Nutri (evolui a cada fechamento de dia) ----------
+
+export async function carregarPersona() {
+  const doc = await colecao('persona').findOne({ _id: 'nutri' });
+  return doc?.texto || '';
+}
+
+export async function salvarPersona(texto) {
+  await colecao('persona').replaceOne(
+    { _id: 'nutri' },
+    { _id: 'nutri', texto, atualizadoEm: new Date() },
+    { upsert: true }
+  );
+}

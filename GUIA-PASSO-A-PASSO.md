@@ -141,6 +141,7 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 |-----------|---------------------------------------------|
 | `!id`     | Mostra o ID do grupo (pro `ALLOWED_GROUP_ID`)|
 | `!perfil` | Mostra seu cadastro e as gírias aprendidas   |
+| `!persona`| Mostra a memória de personalidade da Nutri (apelidos, piadas internas, padrões) |
 | `!reset`  | Apaga seu cadastro pra refazer o onboarding  |
 | `!resumo` | Força o Resumo Diário Ácido agora            |
 | `!ajuda`  | Lista os comandos                            |
