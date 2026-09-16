@@ -142,6 +142,7 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 | `!id`     | Mostra o ID do grupo (pro `ALLOWED_GROUP_ID`)|
 | `!perfil` | Mostra seu cadastro e as gírias aprendidas   |
 | `!persona`| Mostra a memória de personalidade da Nutri (apelidos, piadas internas, padrões) |
+| `!dossie` | Mostra o que há na sua pasta do Drive (o que ela conseguiu ler) e as notas dela sobre você |
 | `!fontes` | Lista os documentos da base de conhecimento (pasta Conhecimento no Drive) |
 | `!estudar`| Manda a Nutri revisar a base com estudos novos do PubMed (roda sozinho todo dia 1) |
 | `!reset`  | Apaga seu cadastro pra refazer o onboarding  |
@@ -152,6 +153,7 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 
 - **Base de conhecimento** (`conhecimento/*.md` no código → Mongo → Drive `Conhecimento/`): Base, Hipertrofia, Emagrecimento, Saúde-Índices, Performance-Salto e Rotina. Os documentos do foco de cada pessoa entram em toda resposta. Todo dia 1 às 4h ela pesquisa no PubMed e reescreve o que mudou; `!estudar` força isso.
 - **Pesquisa sob demanda**: quando a base não basta, ela pesquisa (PubMed/Wikipedia), responde e salva uma nota de estudo em `Conhecimento/Pesquisas/` pra não pesquisar de novo.
+- **Pasta de cada pessoa no Drive** (raiz, com o nome da pessoa): tudo que a pessoa colocar lá (PDF, Google Docs, .md, .txt, imagem de exame) a Nutri lê e usa como memória sobre ela (PDF e imagem são transcritos pelo Gemini uma vez e ficam em cache). O que ela aprende conversando vai pra `Nutri-Notas.md` na mesma pasta, reescrito toda noite; a ficha (peso, altura, horários, rotina) fica em `Nutri-Ficha.md`. Ela faz perguntas quando falta algo (no máximo uma por mensagem). A pasta é achada pelo primeiro nome; se não existir, ela cria.
 - **Rotina de cada pessoa**: cada refeição analisada é registrada com horário. Com 3+ registros ela aprende o horário habitual de café, almoço e jantar; no fechamento do dia reescreve a ficha de rotina (`Perfis/Nome.md`).
 - **Cobrança**: a cada 10 min ela checa quem passou 75 min do horário habitual sem mandar a refeição e cobra no grupo (uma vez por refeição por dia, só entre 7h e 23h). `ATRASO_COBRANCA_MIN` muda a tolerância.
 - **Personalidade**: `Perfis/Nutri.md` é a memória que ela mesma reescreve toda noite (apelidos, piadas internas, padrões, bordões).

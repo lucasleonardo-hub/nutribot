@@ -56,6 +56,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - Papo aleatório: se tiver uma tirada engraçada ou um jeito de puxar pra comida/treino/sono/rotina, entra na conversa. Se realmente não tiver nada a acrescentar, responda EXATAMENTE a palavra SILENCIO (sem mais nada).
 - Você tem NOÇÃO DE HORÁRIO e de ROTINA: o contexto traz a hora atual, a refeição esperada nesse horário e os horários/hábitos que você já aprendeu de cada pessoa. Use isso: café às 11h é "acordou agora, princesa?", jantar às 23h é "isso é jantar ou ceia de velório?", e quem manda foto no horário certo ganha ponto.
 - Na dúvida entre ser rígida e ser humana, seja humana. Mas nunca perca a acidez.
+- CURIOSA E ATENTA: cada pessoa tem uma pasta no Drive. O que ela deixou lá (dossiê, exames, rotina) você JÁ LEU e está no contexto como "O QUE VOCÊ SABE SOBRE"; use sem pedir de novo. Se faltar algo importante pro seu trabalho (idade, treino e horários, trabalho, alergias/restrições, o que gosta e odeia comer, medidas, sono), pergunte de forma natural, no máximo UMA pergunta por mensagem e não em toda mensagem. O que a pessoa responder vira nota sua.
 - QUANDO NÃO SABE: se a pergunta exige um dado específico que não está na sua base de conhecimento nem você tem certeza (suplemento específico, estudo recente, doença, interação, alimento incomum), responda EXATAMENTE no formato "PESQUISAR: <termos de busca em inglês, científicos>" e NADA mais. Você recebe as fontes e responde de novo. Use isso só quando realmente precisar (não pra analisar prato, não pra zoar, não pra perguntas básicas).
 
 FORMATO (WhatsApp):
@@ -87,7 +88,8 @@ function blocoPerfis(perfis) {
       const base = `- ${p.nome}: ${p.peso} kg, ${p.altura} cm, objetivo: ${p.objetivo}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
       const horarios = p.horarios ? `\n  Horários habituais que eu já saquei: ${p.horarios}` : '';
       const rotina = p.rotina ? `\n  O que eu já sei da rotina dela(e): ${p.rotina}` : '';
-      return base + horarios + rotina;
+      const notas = p.notas ? `\n  Minhas notas sobre ela(e): ${String(p.notas).slice(0, 700)}` : '';
+      return base + horarios + rotina + notas;
     })
     .join('\n');
 }
@@ -98,6 +100,11 @@ function blocoConhecimento(texto) {
     `SUA BASE DE CONHECIMENTO (referência técnica que você estudou; traduza em conselho prático e números concretos pra pessoa, nunca cite como "segundo o documento"):\n` +
     `${texto.trim()}\n\n`
   );
+}
+
+function blocoDossie(nome, dossie) {
+  if (!dossie?.trim()) return '';
+  return `O QUE VOCÊ SABE SOBRE ${nome.toUpperCase()} (documentos que a pessoa deixou na pasta dela no Drive + suas notas; use pra personalizar, cobrar metas e zoar com propriedade):\n${dossie.trim()}\n\n`;
 }
 
 function blocoHistorico(mensagens, limite = 60) {
@@ -114,12 +121,12 @@ const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.5-flash
   .map((m) => m.trim())
   .filter((m) => m && m !== MODELO);
 
-async function gerar({ contents, config = {}, tentativas = 4 }) {
+async function gerar({ contents, config = {}, tentativas = 2 }) {
   let erro;
   const modelos = [MODELO, ...MODELOS_RESERVA];
   for (let mi = 0; mi < modelos.length; mi++) {
     const model = modelos[mi];
-    const rodadas = mi === 0 ? tentativas : 2; // no reserva, tenta menos
+    const rodadas = mi === 0 ? tentativas : 2; // "alta demanda" costuma durar minutos: cai rápido pro reserva
     for (let i = 0; i < rodadas; i++) {
       try {
         const res = await cliente().models.generateContent({
@@ -138,7 +145,7 @@ async function gerar({ contents, config = {}, tentativas = 4 }) {
           status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
         console.warn(`[gemini] ${model} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
         if (!transitorio) throw e; // erro de prompt/configuração: não adianta insistir
-        await new Promise((r) => setTimeout(r, Math.min(1500 * 2 ** i, 12_000)));
+        await new Promise((r) => setTimeout(r, 1200 * (i + 1)));
       }
     }
   }
@@ -148,11 +155,12 @@ async function gerar({ contents, config = {}, tentativas = 4 }) {
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, jaPesquisou = false }) {
+export async function responder({ texto, imagem, mimeType, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, jaPesquisou = false }) {
   const contexto =
     `DATA E HORA: ${dia} ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\nPERFIS DO GRUPO:\n${blocoPerfis(perfis)}\n\n` +
     `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico)}\n\n` +
     blocoConhecimento(conhecimento) +
+    blocoDossie(perfil.nome, dossie) +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
     `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada - analise a comida da imagem)' : ''}:\n${texto || '(sem legenda)'}`;
 
@@ -204,9 +212,9 @@ export async function extrairDadosOnboarding(texto) {
   }
 }
 
-export async function boasVindas(perfil, persona) {
+export async function boasVindas(perfil, persona, dossie) {
   return gerar({
-    contents: `Cadastro concluído: ${perfil.nome}, ${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}. Calcule o IMC mentalmente e comente. Dê as boas-vindas no seu personagem em até 90 palavras, avise que vai vigiar TUDO que a pessoa comer (foto ou texto) e dê a primeira 💡 Dica ácida alinhada ao objetivo. Use os [[links]] e emojis. Já invente um apelido pra pessoa.`,
+    contents: `Cadastro concluído: ${perfil.nome}, ${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}. Calcule o IMC mentalmente e comente. Dê as boas-vindas no seu personagem em até 90 palavras, avise que vai vigiar TUDO que a pessoa comer (foto ou texto) e dê a primeira 💡 Dica ácida alinhada ao objetivo. Use os [[links]] e emojis. Já invente um apelido pra pessoa.${dossie ? ` Você já leu a pasta dela no Drive; mostre que leu (cite 1 ou 2 coisas concretas de lá) e cobre o que está escrito ali.\n\n${blocoDossie(perfil.nome, dossie)}` : ''}`,
     config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 400 },
   });
 }
@@ -309,12 +317,13 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico }) {
 // ============================================================
 // 7) Cobrança de refeição que não apareceu no horário de costume
 // ============================================================
-export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, costume, persona, historico, conhecimento }) {
+export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, costume, persona, historico, conhecimento, dossie }) {
   return gerar({
     contents:
       `São ${horaAgora}. ${perfil.nome} costuma mandar o(a) ${slot} por volta das ${horaHabitual}${costume ? ` (normalmente: ${costume})` : ''} e HOJE ainda não mandou nada dessa refeição.\n` +
       `Conversa de hoje até agora:\n${blocoHistorico(historico, 40)}\n\n` +
       blocoConhecimento(conhecimento) +
+      blocoDossie(perfil.nome, dossie) +
       `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem: pergunte onde está a refeição (foto ou descrição), zoe o sumiço, lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já falou algo hoje que explique o sumiço, leve em conta. Curta e direta, com emojis. Não use "SILENCIO".`,
     config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 400 },
   });
@@ -364,5 +373,52 @@ export async function notaDeEstudo({ consulta, fontes, dia }) {
       `Em ${dia} você pesquisou sobre "${consulta}" porque sua base não tinha a resposta. Fontes encontradas:\n${fontes}\n\n` +
       `Escreva uma NOTA DE ESTUDO em português do Brasil, até 250 palavras, sem markdown de cabeçalho (#), com: o que a evidência diz (números concretos quando houver), o que é consenso e o que ainda é incerto, e como isso vira conselho prático pra alguém que treina. Se as fontes forem fracas ou não responderem, diga isso na nota. Sem emojis, tom direto.`,
     config: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 700 },
+  });
+}
+
+// ============================================================
+// 11) Leitura de documentos da pasta da pessoa (PDF / imagem) e notas sobre ela
+// ============================================================
+export async function transcreverPdf(buffer) {
+  return gerar({
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { text: 'Transcreva o conteúdo deste PDF em markdown simples, fiel e completo, sem inventar nada. Tabelas viram listas. Mantenha números, datas e unidades exatamente como estão.' },
+          { inlineData: { mimeType: 'application/pdf', data: buffer.toString('base64') } },
+        ],
+      },
+    ],
+    config: { temperature: 0.1, maxOutputTokens: 8000 },
+  });
+}
+
+export async function descreverImagemDocumento(buffer, mimeType) {
+  return gerar({
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { text: 'Esta imagem foi deixada na pasta de uma pessoa acompanhada por uma nutricionista (pode ser exame, print de app, bioimpedância, foto de rotina). Transcreva todo texto e números legíveis e descreva objetivamente o que mostra. Sem inventar.' },
+          { inlineData: { mimeType, data: buffer.toString('base64') } },
+        ],
+      },
+    ],
+    config: { temperature: 0.1, maxOutputTokens: 2000 },
+  });
+}
+
+export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historico, dia }) {
+  const falas = historico.filter((m) => m.nome === perfil.nome || m.tipo === 'bot');
+  if (!falas.length) return notasAtuais || '';
+  return gerar({
+    contents:
+      `Você é a Nutri. Hoje é ${dia}. Reescreva SUAS NOTAS sobre ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n\n` +
+      `NOTAS ATUAIS:\n${notasAtuais?.trim() || '(nenhuma ainda)'}\n\n` +
+      `DOCUMENTOS QUE A PESSOA DEIXOU NA PASTA (você NÃO precisa repetir isso nas notas, só complementar ou registrar mudanças):\n${(dossieDocs || '(nenhum)').slice(0, 6000)}\n\n` +
+      `TRANSCRIÇÃO DE HOJE (falas dela e suas):\n${blocoHistorico(falas, 150)}\n\n` +
+      `Escreva as notas atualizadas em até 300 palavras, em tópicos curtos (linhas começando com "- "), terceira pessoa, só FATOS que a pessoa disse ou que você observou, com data quando for medida/meta (ex: "- 2026-09-16: pesou 73,2 kg"). Cubra o que importa pro seu trabalho: idade, trabalho/estudo e horários, treinos/esportes e dias, preferências e aversões alimentares, alergias/restrições, sono, álcool, metas numéricas, respostas a perguntas que você fez, e detalhes pessoais que ajudam a zoar com carinho. Mantenha o que continua válido, corrija o que mudou, corte o irrelevante. Se não houver nada novo, devolva as notas atuais. Sem markdown de cabeçalho (#), sem emojis.`,
+    config: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 900 },
   });
 }

@@ -5,6 +5,7 @@
 //   Resumos/Semana-YYYY-Www.md           -> resumo semanal
 //   Perfis/Nome.md                       -> ficha de cada pessoa (+ Perfis/Nutri.md = memória de personalidade)
 //   Conhecimento/*.md                    -> base de conhecimento por foco (revisada mensalmente)
+//   <Nome da pessoa>/                    -> pasta de cada usuário: docs que ELE deixa + Nutri-Notas.md e Nutri-Ficha.md (pessoas.js)
 //   Logs/YYYY-MM-DD.md                   -> log técnico do dia
 
 import { google } from 'googleapis';
@@ -86,6 +87,24 @@ async function acharArquivo(nome, parentId) {
   return data.files?.[0]?.id || null;
 }
 
+/** Salva (ou sobrescreve) um arquivo texto dentro de uma pasta pelo ID dela. */
+export async function salvarEmPasta(pastaId, nomeArquivo, conteudo, mimeType = 'text/markdown') {
+  iniciarDrive();
+  const existente = await acharArquivo(nomeArquivo, pastaId);
+  const media = { mimeType, body: Readable.from([conteudo]) };
+  if (existente) {
+    await drive.files.update({ fileId: existente, media, supportsAllDrives: true });
+    return existente;
+  }
+  const res = await drive.files.create({
+    requestBody: { name: nomeArquivo, mimeType, parents: [pastaId] },
+    media,
+    fields: 'id',
+    supportsAllDrives: true,
+  });
+  return res.data.id;
+}
+
 /**
  * Salva (ou sobrescreve) um arquivo .md
  * @param {string} caminhoPasta  ex: "Resumos" ou "Diario/2026-09-15"
@@ -95,20 +114,51 @@ async function acharArquivo(nome, parentId) {
 export async function salvarMarkdown(caminhoPasta, nomeArquivo, conteudo) {
   iniciarDrive();
   const pastaId = await resolverCaminho(caminhoPasta);
-  const existente = await acharArquivo(nomeArquivo, pastaId);
-  const media = { mimeType: 'text/markdown', body: Readable.from([conteudo]) };
+  return salvarEmPasta(pastaId, nomeArquivo, conteudo);
+}
 
-  if (existente) {
-    await drive.files.update({ fileId: existente, media, supportsAllDrives: true });
-    return existente;
-  }
-  const res = await drive.files.create({
-    requestBody: { name: nomeArquivo, mimeType: 'text/markdown', parents: [pastaId] },
-    media,
-    fields: 'id',
+/** Lista arquivos e subpastas de uma pasta (sem lixeira). */
+export async function listarArquivos(pastaId) {
+  iniciarDrive();
+  const { data } = await drive.files.list({
+    q: `'${pastaId}' in parents and trashed = false`,
+    fields: 'files(id,name,mimeType,size,modifiedTime)',
+    pageSize: 200,
+    orderBy: 'folder,name',
     supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
-  return res.data.id;
+  return data.files || [];
+}
+
+/** Pastas na raiz (DRIVE_FOLDER_ID). */
+export async function listarPastasRaiz() {
+  return (await listarArquivos(ROOT_ID)).filter((f) => f.mimeType === 'application/vnd.google-apps.folder');
+}
+
+/** Cria (ou acha) uma pasta direto na raiz e devolve o ID. */
+export async function pastaNaRaiz(nome) {
+  iniciarDrive();
+  return garantirPasta(nome, ROOT_ID);
+}
+
+/**
+ * Baixa o conteúdo de um arquivo. Google Docs/Sheets são exportados como texto;
+ * texto/markdown vem como string; qualquer outro (PDF, imagem) vem como Buffer.
+ */
+export async function baixarArquivo(arquivo) {
+  iniciarDrive();
+  const { id, mimeType } = arquivo;
+  if (mimeType === 'application/vnd.google-apps.document' || mimeType === 'application/vnd.google-apps.spreadsheet') {
+    const exportMime = mimeType.endsWith('spreadsheet') ? 'text/csv' : 'text/plain';
+    const res = await drive.files.export({ fileId: id, mimeType: exportMime }, { responseType: 'text' });
+    return { texto: String(res.data) };
+  }
+  if (mimeType.startsWith('application/vnd.google-apps.')) return { texto: null }; // slides, forms etc.
+  const res = await drive.files.get({ fileId: id, alt: 'media', supportsAllDrives: true }, { responseType: 'arraybuffer' });
+  const buffer = Buffer.from(res.data);
+  if (mimeType.startsWith('text/') || /\.(md|txt|csv|json)$/i.test(arquivo.name)) return { texto: buffer.toString('utf8') };
+  return { buffer };
 }
 
 /** Lê um .md; retorna null se não existir. */

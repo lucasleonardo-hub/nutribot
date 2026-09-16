@@ -37,6 +37,7 @@ import { iniciarDrive, salvarMarkdown, lerMarkdown, registrarLog, frontmatter, m
 import * as ia from './gemini.js';
 import { carregarConhecimento, docsPara, atualizarConhecimento, listarDocs, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
+import { dossieDe, notasDe, salvarNotas, salvarFicha, listarDocumentosDe } from './pessoas.js';
 
 // ============================================================
 // Configuração
@@ -421,6 +422,14 @@ async function processar(msg) {
         : 'Você nem cadastro tem, porra.';
       return enviar(jidGrupo, ficha, msg);
     }
+    if (cmd === '!dossie' || cmd === '!pasta') {
+      const p = await buscarPerfil(jids);
+      if (!p?.onboarded) return enviar(jidGrupo, 'Você nem cadastro tem, porra.', msg);
+      const docs = await listarDocumentosDe(p).catch(() => []);
+      const notas = await notasDe(p).catch(() => '');
+      const lista = docs.map((d) => `• ${d.nome}${d.daNutri ? ' (meu)' : d.lido ? ' ✅ lido' : ' ⚠️ não consegui ler'}`).join('\n') || '(pasta vazia)';
+      return enviar(jidGrupo, `📂 *Sua pasta no Drive:*\n${lista}\n\n🧠 *Minhas notas sobre você:*\n${notas ? notas.slice(0, 1200) : 'ainda nada, mas eu tô de olho 👀'}`, msg);
+    }
     if (cmd === '!fontes') {
       const lista = listarDocs().map((d) => `• ${d.titulo} (v${d.versao}, ${d.atualizado})`).join('\n');
       return enviar(jidGrupo, `📚 *O que eu já estudei:*\n${lista || 'nada ainda'}\n\nTá tudo no Drive, pasta Conhecimento. Manda !estudar se quiser que eu revise com o que saiu de novo.`, msg);
@@ -433,7 +442,7 @@ async function processar(msg) {
     if (cmd === '!persona') {
       return enviar(jidGrupo, persona ? `🧠 *Minha memória de personalidade:*\n\n${persona}` : 'Ainda tô te conhecendo, criatura. Volta depois do primeiro resumo do dia. 🙄', msg);
     }
-    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !perfil, !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !reset, !resumo (fecha o dia agora), !ajuda', msg);
+    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !reset, !resumo (fecha o dia agora), !ajuda', msg);
   }
 
   // ---------- Onboarding ----------
@@ -464,10 +473,11 @@ async function processar(msg) {
     if (faltando.length) return enviar(jidGrupo, await ia.cobrarDadosFaltando(faltando, persona), msg);
 
     perfil = await salvarPerfil({ jids, onboarded: true });
-    const bemVindo = await ia.boasVindas(perfil, persona);
+    const dossieNovo = await dossieDe(perfil).catch((e) => (console.error('[pessoas]', e.message), ''));
+    const bemVindo = await ia.boasVindas(perfil, persona, dossieNovo);
     await enviar(jidGrupo, bemVindo);
     await lembrar({ hora, jid: jids[0], nome: 'Nutri', texto: bemVindo, tipo: 'bot' });
-    salvarMarkdown('Perfis', `${perfil.nome}.md`, mdPerfil(perfil)).catch((e) => console.error('[drive]', e.message));
+    salvarFicha(perfil, mdPerfil(perfil)).catch((e) => console.error('[drive]', e.message));
     return;
   }
 
@@ -491,11 +501,12 @@ async function processar(msg) {
   const slot = slotDaHora(hora);
   const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
   const contextoHorario = `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}`;
+  const dossie = await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), ''));
   const entradaTexto = temImagem ? `📷 [foto de comida]${texto ? ` ${texto}` : ''}` : texto;
   const historico = [...memoria.mensagens];
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : 'texto' });
 
-  let resposta = await ia.responder({ texto, imagem, mimeType, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu) });
+  let resposta = await ia.responder({ texto, imagem, mimeType, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie });
 
   // A Nutri não sabia: pesquisa (PubMed/Wikipedia), responde de novo e guarda a nota de estudo no Drive
   const pedido = resposta?.match(/^\s*PESQUISAR:\s*(.+?)\s*$/im);
@@ -506,7 +517,7 @@ async function processar(msg) {
     const fontes = await pesquisar({ en: consulta, pt: texto }).catch((e) => (console.error('[pesquisa]', e.message), []));
     const fontesTxt = formatarFontes(fontes, 8);
     resposta = await ia.responder({
-      texto, imagem, mimeType, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, jaPesquisou: true,
+      texto, imagem, mimeType, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, dossie, jaPesquisou: true,
       conhecimento: `${docsPara(eu)}\n\n### Pesquisa que você acabou de fazer sobre "${consulta}"\n${fontesTxt}`,
     });
     if (fontes.length) {
@@ -622,6 +633,7 @@ async function verificarCobrancas() {
         persona,
         historico: memoria.mensagens,
         conhecimento: docsPara(p),
+        dossie: await dossieDe(p).catch(() => ''),
       });
       if (msg && !/^silencio\W*$/i.test(msg)) {
         await enviar(memoria.grupo, msg);
@@ -681,7 +693,20 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
         } catch (e) {
           console.error(`[rotina] falha para ${p.nome}:`, e.message);
         }
-        await salvarMarkdown('Perfis', `${p.nome}.md`, mdPerfil(p)).catch(() => {});
+        // Notas da Nutri sobre a pessoa (o que ela contou hoje, respostas às perguntas, metas) -> pasta da pessoa no Drive
+        try {
+          const notasAtuais = await notasDe(p);
+          const dossieDocs = (await dossieDe(p)).split('--- Suas notas sobre')[0];
+          const notas = await ia.atualizarNotas({ perfil: p, notasAtuais, dossieDocs, historico, dia });
+          if (notas?.trim() && notas.trim() !== notasAtuais.trim()) {
+            await salvarNotas(p, notas, dia);
+            p.notas = notas.trim();
+            console.log(`[pessoas] notas de ${p.nome} atualizadas`);
+          }
+        } catch (e) {
+          console.error(`[pessoas] falha nas notas de ${p.nome}:`, e.message);
+        }
+        await salvarFicha(p, mdPerfil(p)).catch(() => {});
       }
 
       // A Nutri revisa quem ela é: apelidos, piadas internas, padrões e o que afiar amanhã
@@ -746,6 +771,10 @@ async function fecharSemana({ dia, perfis, grupo }) {
     await conectarMongo();
     iniciarDrive();
     await carregarConhecimento().catch((e) => console.error('[conhecimento] falha ao carregar:', e.message));
+    // Pré-carrega a pasta de cada pessoa (transcreve PDFs novos agora, não na primeira mensagem do dia)
+    listarPerfis()
+      .then((ps) => Promise.all(ps.map((p) => dossieDe(p).then((d) => console.log(`[pessoas] dossiê de ${p.nome}: ${d.length} chars`)))))
+      .catch((e) => console.error('[pessoas] pré-carga falhou:', e.message));
 
     persona = await carregarPersona().catch(() => '');
     if (persona) console.log(`[persona] carregada (${persona.length} chars)`);
