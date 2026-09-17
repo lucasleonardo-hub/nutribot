@@ -1,10 +1,12 @@
 // drive.js - "Cérebro" do bot: salva tudo como .md no Google Drive (compatível com Obsidian)
 // Estrutura criada automaticamente dentro da pasta raiz (DRIVE_FOLDER_ID):
-//   Diario/YYYY-MM-DD/HH-mm-ss-nome.md   -> cada interação
+//   Diario/YYYY-MM-DD.md                 -> daily note: todas as conversas do dia (regerada a partir da memória do dia)
 //   Resumos/YYYY-MM-DD.md                -> resumo diário ácido
 //   Resumos/Semana-YYYY-Www.md           -> resumo semanal
-//   Perfis/Nome.md                       -> ficha de cada pessoa (+ Perfis/Nutri.md = memória de personalidade)
+//   Perfis/Nutri.md                      -> memória de personalidade (reescrita toda noite; histórico no Mongo)
+//   Perfis/Nutri-Momentos.md             -> momentos memoráveis (só acrescenta, nunca reescreve)
 //   Conhecimento/*.md                    -> base de conhecimento por foco (revisada mensalmente)
+//   Conhecimento/Pesquisas/*.md          -> notas de estudo de pesquisas feitas no meio da conversa
 //   <Nome da pessoa>/                    -> pasta de cada usuário: docs que ELE deixa + Nutri-Notas.md e Nutri-Ficha.md (pessoas.js)
 //   Logs/YYYY-MM-DD.md                   -> log técnico do dia
 
@@ -16,7 +18,7 @@ const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const ROOT_ID = process.env.DRIVE_FOLDER_ID;
 
 let drive;
-const cachePastas = new Map(); // "parentId/nome" -> folderId
+const cachePastas = new Map(); // "parentId/nome" -> Promise<folderId> (a Promise em andamento também entra, pra duas escritas simultâneas não criarem a pasta duas vezes)
 
 function carregarCredenciais() {
   // Opção 1: conteúdo do JSON direto na variável (bom pro Render)
@@ -44,10 +46,18 @@ export function iniciarDrive() {
 
 const escapar = (s) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
-async function garantirPasta(nome, parentId = ROOT_ID) {
+function garantirPasta(nome, parentId = ROOT_ID) {
   const chave = `${parentId}/${nome}`;
   if (cachePastas.has(chave)) return cachePastas.get(chave);
+  const promessa = criarOuAcharPasta(nome, parentId).catch((e) => {
+    cachePastas.delete(chave); // falhou: próxima chamada tenta de novo
+    throw e;
+  });
+  cachePastas.set(chave, promessa);
+  return promessa;
+}
 
+async function criarOuAcharPasta(nome, parentId) {
   const { data } = await drive.files.list({
     q: `name = '${escapar(nome)}' and '${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
     fields: 'files(id)',
@@ -64,7 +74,6 @@ async function garantirPasta(nome, parentId = ROOT_ID) {
     });
     id = res.data.id;
   }
-  cachePastas.set(chave, id);
   return id;
 }
 
@@ -190,14 +199,24 @@ export function frontmatter(campos) {
   return `---\n${linhas.join('\n')}\n---\n`;
 }
 
-export function mdInteracao({ dia, hora, nome, tipo, entrada, resposta }) {
+/** Daily note do dia: toda a conversa, na ordem, com wikilinks pra cada pessoa (Obsidian). */
+export function mdDiario({ dia, mensagens, nomeBot }) {
+  const pessoas = [...new Set(mensagens.filter((m) => m.tipo !== 'bot').map((m) => m.nome))];
+  const icone = { foto: '📷', audio: '🎤', bot: '', texto: '' };
+  const linhas = mensagens.map((m) => {
+    const quem = m.tipo === 'bot' ? `**${nomeBot}**` : `[[${m.nome}]]`;
+    const marca = m.refeicao ? ` #refeicao/${m.refeicao}` : '';
+    return `- **${m.hora}** ${icone[m.tipo] || ''}${quem}:${marca}\n  ${String(m.texto || '').replace(/\n/g, '\n  ')}`;
+  });
   return (
-    frontmatter({ tipo, data: dia, hora, usuario: `"[[${nome}]]"`, tags: ['nutribot', tipo] }) +
-    `\n# ${hora} · [[${nome}]] · ${tipo}\n\n` +
-    `## Entrada\n${entrada}\n\n` +
-    `## Veredito da Nutri\n${resposta}\n\n` +
-    `---\nDia: [[${dia}]]\n`
+    frontmatter({ tipo: 'diario', data: dia, pessoas: pessoas.map((n) => `"[[${n}]]"`), mensagens: mensagens.length, tags: ['nutribot', 'diario'] }) +
+    `\n# Diário ${dia}\n\n${linhas.join('\n') || '_(nenhuma conversa ainda)_'}\n\n---\nResumo do dia: [[Resumos/${dia}|${dia}]]\n`
   );
+}
+
+/** Uma linha nova no registro de momentos memoráveis (Perfis/Nutri-Momentos.md). */
+export function mdMomento(m) {
+  return `- ${m.dia} · [[${m.pessoa}]] · #${m.tipo}: ${m.texto}`;
 }
 
 export function mdPerfil(p) {

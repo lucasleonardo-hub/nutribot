@@ -34,8 +34,12 @@ import {
   refeicoesDoDia,
   lerConfig,
   salvarConfig,
+  garantirIndices,
+  fecharMongo,
+  registrarMomentos,
+  momentosRecentes,
 } from './mongo.js';
-import { iniciarDrive, salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdInteracao, mdPerfil } from './drive.js';
+import { iniciarDrive, salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { carregarConhecimento, docsPara, atualizarConhecimento, listarDocs, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
@@ -87,6 +91,12 @@ function semanaISO(diaStr) {
   const inicioAno = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   const semana = Math.ceil(((d - inicioAno) / 86400000 + 1) / 7);
   return `${d.getUTCFullYear()}-W${String(semana).padStart(2, '0')}`;
+}
+
+function diaSeguinte(diaStr) {
+  const d = new Date(`${diaStr}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 function diasAnteriores(diaStr, n) {
@@ -167,6 +177,28 @@ async function lembrar(entrada) {
   memoria.mensagens.push(entrada);
   if (memoria.mensagens.length > 600) memoria.mensagens.splice(0, memoria.mensagens.length - 600);
   persistirMemoria(memoria).catch((e) => console.error('[memoria] falha ao persistir:', e.message));
+  agendarDiario();
+}
+
+// Daily note no Drive (Diario/YYYY-MM-DD.md): regerada a partir da memória do dia, no máximo uma escrita a cada 30 s.
+// Substitui o arquivo-por-mensagem: 1 chamada ao Drive em vez de 3 por mensagem, e sem corrida de pasta duplicada.
+const DIARIO_DEBOUNCE_MS = 30_000;
+let diarioTimer = null;
+let diarioSujo = false;
+function agendarDiario() {
+  diarioSujo = true;
+  if (diarioTimer) return;
+  diarioTimer = setTimeout(() => {
+    diarioTimer = null;
+    gravarDiario().catch((e) => console.error('[drive] falha ao salvar diário:', e.message));
+  }, DIARIO_DEBOUNCE_MS);
+  diarioTimer.unref?.();
+}
+async function gravarDiario(snapshot = memoria) {
+  if (!diarioSujo && snapshot === memoria) return;
+  diarioSujo = false;
+  if (!snapshot.mensagens?.length) return;
+  await salvarMarkdown('Diario', `${snapshot.dia}.md`, mdDiario({ dia: snapshot.dia, mensagens: snapshot.mensagens, nomeBot: ia.nomeDaBot() }));
 }
 
 // ============================================================
@@ -303,12 +335,18 @@ async function enviar(jid, texto, quoted, { rapido = false } = {}) {
   }
 }
 
+// JIDs do próprio bot (número e LID), normalizados
+const meusJids = () => [sock?.user?.id, sock?.user?.lid].filter(Boolean).map((j) => jidNormalizedUser(j));
+
 function jidsDoRemetente(key) {
-  let lista = [key.participant, key.participantAlt].filter(Boolean);
+  let lista = [key.participant, key.participantAlt].filter(Boolean).map((j) => jidNormalizedUser(j));
   // Mensagem digitada no próprio celular do bot (fromMe) pode vir sem participant
-  if (key.fromMe && !lista.length) lista = [sock.user?.id, sock.user?.lid].filter(Boolean);
-  return [...new Set(lista.map((j) => jidNormalizedUser(j)))];
+  if (key.fromMe && !lista.length) lista = meusJids();
+  return [...new Set(lista)];
 }
+
+let quedasSeguidas = 0; // pra reconectar com espera crescente (3 s, 6 s, 12 s... até 2 min) em vez de martelar o WhatsApp
+let encerrando = false;
 
 async function conectarWhatsApp() {
   const { state, saveCreds, limparSessao } = await useMongoAuthState();
@@ -336,6 +374,7 @@ async function conectarWhatsApp() {
     }
     if (connection === 'open') {
       ultimoQR = null;
+      quedasSeguidas = 0;
       statusConexao = 'conectado';
       console.log('[wa] conectado como', sock.user?.id, sock.user?.name ? `(${sock.user.name})` : '');
       garantirDiaAtual().catch((e) => console.error('[bot] erro na virada de dia:', e.message));
@@ -344,20 +383,25 @@ async function conectarWhatsApp() {
       const codigo = lastDisconnect?.error?.output?.statusCode;
       ultimoQR = null; // QR antigo não vale mais; /qr mostra "gerando" até vir outro
       statusConexao = codigo === DisconnectReason.timedOut ? 'gerando QR novo' : `desconectado (${codigo})`;
+      if (encerrando) return;
+      let espera = 3000;
       if (codigo === DisconnectReason.loggedOut) {
         console.log('[wa] sessão deslogada. Limpando sessão no Mongo e gerando novo QR...');
         await limparSessao();
+        quedasSeguidas = 0;
       } else {
-        console.log('[wa] conexão caiu, reconectando em 3s...', codigo);
+        espera = Math.min(3000 * 2 ** quedasSeguidas, 120_000);
+        quedasSeguidas++;
+        console.log(`[wa] conexão caiu (${codigo}), reconectando em ${Math.round(espera / 1000)}s...`);
       }
-      setTimeout(conectarWhatsApp, 3000);
+      setTimeout(() => conectarWhatsApp().catch((e) => console.error('[wa] falha ao reconectar:', e.message)), espera);
     }
   });
 
   // Entrou num grupo? Se apresenta.
   sock.ev.on('group-participants.update', ({ id, participants, action }) => {
     if (action !== 'add') return;
-    const meus = [sock.user?.id, sock.user?.lid].filter(Boolean).map((j) => jidNormalizedUser(j));
+    const meus = meusJids();
     const euEntrei = (participants || []).some((p) => meus.includes(jidNormalizedUser(typeof p === 'string' ? p : p?.id || '')));
     if (!euEntrei) return;
     if (GRUPO_PERMITIDO && id !== GRUPO_PERMITIDO) return;
@@ -384,20 +428,21 @@ function enfileirar(msg) {
 // ============================================================
 // Apresentação e nome
 // ============================================================
+// Chave do grupo dentro de config.apresentadoEm (JID tem ponto em "@g.us" e o Mongo não aceita ponto em nome de campo)
+const chaveGrupo = (jid) => jid.replace(/\./g, '_');
+const jaApresentada = (jidGrupo) => Boolean(config.apresentadoEm?.[chaveGrupo(jidGrupo)]);
+
 async function apresentar(jidGrupo, motivo) {
-  if (config.apresentadoEm?.[jidGrupo]) return;
+  if (jaApresentada(jidGrupo)) return;
   const meta = await sock.groupMetadata(jidGrupo).catch(() => null);
   console.log(`[apresentacao] ${motivo} em "${meta?.subject || jidGrupo}"`);
-  config = await salvarConfig({ [`apresentadoEm.${jidGrupo.replace(/\./g, '_')}`]: new Date().toISOString(), aguardandoNomeDesde: config.nomeBot ? null : new Date().toISOString() });
-  config.apresentadoEm ||= {};
-  config.apresentadoEm[jidGrupo] = true;
   if (!memoria.grupo) memoria.grupo = jidGrupo;
   const texto = await ia.apresentacao({ grupoNome: meta?.subject, membros: meta?.participants?.length, persona });
   await enviar(jidGrupo, texto);
+  // Só marca como apresentada DEPOIS que a mensagem saiu: se a IA ou o envio falhar, tenta de novo na próxima
+  config = await salvarConfig({ [`apresentadoEm.${chaveGrupo(jidGrupo)}`]: new Date().toISOString(), aguardandoNomeDesde: config.nomeBot ? null : new Date().toISOString() });
   await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto, tipo: 'bot' });
 }
-
-const jaApresentada = (jidGrupo) => Boolean(config.apresentadoEm?.[jidGrupo] || config.apresentadoEm?.[jidGrupo.replace(/\./g, '_')]);
 
 async function batizar(nome, quem, jidGrupo, msg) {
   config = await salvarConfig({ nomeBot: nome, aguardandoNomeDesde: null });
@@ -444,13 +489,14 @@ async function processar(msg) {
   const jids = jidsDoRemetente(msg.key);
   if (!jids.length) return;
   const nomeContato = msg.pushName || jids[0].split('@')[0];
-  const { dia, hora, horaArquivo } = agora();
+  const { dia, hora } = agora();
 
   // Primeira vez que ela vê esse grupo (ex.: entrou enquanto o bot estava offline): se apresenta antes de tudo
   if (!jaApresentada(jidGrupo)) await apresentar(jidGrupo, 'primeira mensagem vista no grupo').catch((e) => console.error('[apresentacao]', e.message));
 
-  // Escolha do nome dela (nas 48h após a apresentação, mensagens curtas)
-  if (!config.nomeBot && config.aguardandoNomeDesde && texto && !texto.startsWith('!') && texto.length <= 80) {
+  // Escolha do nome dela (nas 48h após a apresentação). Só mensagens curtas e SEM número: "Lucas, 80kg, 1,80m, secar" é cadastro,
+  // não batismo, e não pode gastar uma chamada de IA nem virar nome da bot.
+  if (!config.nomeBot && config.aguardandoNomeDesde && texto && !texto.startsWith('!') && texto.length <= 40 && !/\d/.test(texto)) {
     const horas = (Date.now() - new Date(config.aguardandoNomeDesde).getTime()) / 36e5;
     if (horas <= 48) {
       const nome = await ia.extrairNomeBot(texto).catch(() => null);
@@ -576,17 +622,19 @@ async function processar(msg) {
   const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
   const contextoHorario = `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}`;
   const dossie = await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), ''));
+  const momentos = await momentosRecentes(12).catch(() => []);
   const entradaTexto = temImagem ? `📷 [foto de comida]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto;
   const historico = [...memoria.mensagens];
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : temAudio ? 'audio' : 'texto' });
 
   let resposta;
   try {
-    resposta = await ia.responder({ texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie });
+    resposta = await ia.responder({ texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie, momentos });
   } catch (e) {
     // Gemini (todos) e Groq fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
     memoria.mensagens.pop(); // não deixa a mensagem sem resposta no histórico como se tivesse sido ignorada
+    persistirMemoria(memoria).catch(() => {});
     return enviar(
       jidGrupo,
       acaso([
@@ -608,7 +656,7 @@ async function processar(msg) {
     const fontes = await pesquisar({ en: consulta, pt: texto }).catch((e) => (console.error('[pesquisa]', e.message), []));
     const fontesTxt = formatarFontes(fontes, 8);
     resposta = await ia.responder({
-      texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, dossie, jaPesquisou: true,
+      texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, dossie, momentos, jaPesquisou: true,
       conhecimento: `${docsPara(eu)}\n\n### Pesquisa que você acabou de fazer sobre "${consulta}"\n${fontesTxt}`,
     });
     if (fontes.length) {
@@ -640,21 +688,7 @@ async function processar(msg) {
     const ultima = memoria.mensagens[memoria.mensagens.length - (resposta ? 2 : 1)];
     if (ultima) ultima.refeicao = slot.id;
   }
-
-  // Cérebro no Drive (não bloqueia a conversa)
-  const nomeArquivo = `${horaArquivo}-${perfil.nome.replace(/[^\w\-]+/g, '_')}.md`;
-  salvarMarkdown(
-    `Diario/${dia}`,
-    nomeArquivo,
-    mdInteracao({
-      dia,
-      hora,
-      nome: perfil.nome,
-      tipo: temImagem ? 'refeicao-foto' : temAudio ? 'audio' : 'conversa',
-      entrada: entradaTexto,
-      resposta: resposta || '_(sem resposta - SILENCIO)_',
-    })
-  ).catch((e) => console.error('[drive] falha ao salvar interação:', e.message));
+  // A daily note do Drive é regerada a partir da memória (agendarDiario, chamado por lembrar)
 }
 
 // ============================================================
@@ -742,7 +776,8 @@ async function verificarCobrancas() {
 // Fechamento do dia / semana
 // ============================================================
 async function garantirDiaAtual() {
-  if (memoria.dia !== agora().dia && !fechandoDia) {
+  // "<" e não "!==": depois do fechamento das 23:59 a memória já aponta pro dia seguinte, e isso não pode disparar outro fechamento
+  if (memoria.dia < agora().dia && !fechandoDia) {
     console.log(`[bot] virada de dia detectada (${memoria.dia} -> ${agora().dia}); fechando o dia anterior`);
     await fecharDia({ diaAlvo: memoria.dia });
   }
@@ -764,8 +799,21 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
         'Resumos',
         `${dia}.md`,
         frontmatter({ tipo: 'resumo-diario', data: dia, tags: ['nutribot', 'resumo'] }) +
-          `\n# Resumo do dia [[${dia}]]\n\n${resumo}\n\n---\nInterações do dia: pasta \`Diario/${dia}\`\n`
+          `\n# Resumo do dia ${dia}\n\n${resumo}\n\n---\nConversa completa: [[Diario/${dia}|Diário de ${dia}]]\n`
       );
+
+      // Momentos memoráveis do dia -> memória de longo prazo (Mongo + Perfis/Nutri-Momentos.md, só acrescenta)
+      try {
+        const momentos = await ia.extrairMomentos({ dia, perfis, historico });
+        if (momentos.length) {
+          await registrarMomentos(momentos);
+          const atual = (await lerMarkdown('Perfis', 'Nutri-Momentos.md').catch(() => null)) || frontmatter({ tipo: 'momentos', tags: ['nutribot', 'momentos'] }) + `\n# Momentos memoráveis\n`;
+          await salvarMarkdown('Perfis', 'Nutri-Momentos.md', `${atual.trimEnd()}\n${momentos.map(mdMomento).join('\n')}\n`).catch(() => {});
+          console.log(`[momentos] ${momentos.length} registrados`);
+        }
+      } catch (e) {
+        console.error('[momentos] falha:', e.message);
+      }
 
       // Aprende gírias, rotina de cada um e atualiza fichas
       const girias = await ia.extrairGirias({ perfis, historico }).catch(() => ({}));
@@ -790,7 +838,9 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
           const notasAtuais = await notasDe(p);
           const dossieDocs = (await dossieDe(p)).split('--- Suas notas sobre')[0];
           const notas = await ia.atualizarNotas({ perfil: p, notasAtuais, dossieDocs, historico, dia });
-          if (notas?.trim() && notas.trim() !== notasAtuais.trim()) {
+          const encolheuDemais = notasAtuais.trim().length > 300 && (notas?.trim().length || 0) < notasAtuais.trim().length * 0.4;
+          if (encolheuDemais) console.warn(`[pessoas] notas de ${p.nome} descartadas: reescrita perdeu mais de 60% do conteúdo`);
+          if (notas?.trim() && !encolheuDemais && notas.trim() !== notasAtuais.trim()) {
             await salvarNotas(p, notas, dia);
             p.notas = notas.trim();
             console.log(`[pessoas] notas de ${p.nome} atualizadas`);
@@ -803,14 +853,17 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
 
       // A Nutri revisa quem ela é: apelidos, piadas internas, padrões e o que afiar amanhã
       try {
-        const nova = await ia.evoluirPersona({ dia, personaAtual: persona, perfis, historico });
-        if (nova?.trim()) {
+        const momentos = await momentosRecentes(30).catch(() => []);
+        const nova = await ia.evoluirPersona({ dia, personaAtual: persona, perfis, historico, momentos });
+        if (persona.length > 300 && (nova?.trim().length || 0) < persona.length * 0.4) {
+          console.warn('[persona] reescrita descartada: perdeu mais de 60% do conteúdo');
+        } else if (nova?.trim()) {
           persona = nova.trim();
-          await salvarPersona(persona);
+          await salvarPersona(persona, dia);
           await salvarMarkdown(
             'Perfis',
             'Nutri.md',
-            frontmatter({ tipo: 'persona', atualizado: dia, tags: ['nutribot', 'persona'] }) + `\n# Nutri (memória de personalidade)\n\n${persona}\n`
+            frontmatter({ tipo: 'persona', atualizado: dia, tags: ['nutribot', 'persona'] }) + `\n# ${ia.nomeDaBot()} (memória de personalidade)\n\n${persona}\n\n---\nMomentos memoráveis: [[Nutri-Momentos]]\n`
           ).catch(() => {});
           console.log(`[persona] atualizada (${persona.length} chars)`);
         }
@@ -831,9 +884,18 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
     console.error('[bot] erro ao fechar o dia:', e);
     if (grupo) await enviar(grupo, `Deu merda no meu resumo (${e.message}). Amanhã eu cobro em dobro.`).catch(() => {});
   } finally {
-    // Limpa a RAM e começa o próximo dia
-    memoria = { dia: agora().dia, grupo, mensagens: [], cobrancas: {} };
-    await persistirMemoria(memoria).catch(() => {});
+    if (forcado) {
+      // !resumo no meio do dia: fecha o resumo mas NÃO apaga a memória, senão a tarde começa sem contexto
+      agendarDiario();
+    } else {
+      // Daily note final do dia fechado, depois começa o próximo. Se o cron das 23:59 terminou antes da meia-noite,
+      // o próximo dia é "amanhã" (senão a virada às 00:00 fecharia o mesmo dia de novo, com resumo vazio).
+      await gravarDiario(memoria).catch(() => {});
+      const proximo = agora().dia > dia ? agora().dia : diaSeguinte(dia);
+      memoria = { dia: proximo, grupo, mensagens: [], cobrancas: {} };
+      diarioSujo = false;
+      await persistirMemoria(memoria).catch(() => {});
+    }
     fechandoDia = false;
   }
 }
@@ -851,7 +913,7 @@ async function fecharSemana({ dia, perfis, grupo }) {
     'Resumos',
     `Semana-${semana}.md`,
     frontmatter({ tipo: 'resumo-semanal', semana, tags: ['nutribot', 'resumo', 'semanal'] }) +
-      `\n# Semana [[${semana}]]\n\n${resumo}\n\n---\nDias: ${resumosDiarios.map((r) => `[[${r.dia}]]`).join(' · ')}\n`
+      `\n# Semana ${semana}\n\n${resumo}\n\n---\nDias: ${resumosDiarios.map((r) => `[[Resumos/${r.dia}|${r.dia}]]`).join(' · ')}\n`
   );
 }
 
@@ -861,6 +923,7 @@ async function fecharSemana({ dia, perfis, grupo }) {
 (async () => {
   try {
     await conectarMongo();
+    await garantirIndices();
     iniciarDrive();
     await carregarConhecimento().catch((e) => console.error('[conhecimento] falha ao carregar:', e.message));
     // Pré-carrega a pasta de cada pessoa (transcreve PDFs novos agora, não na primeira mensagem do dia)
@@ -882,14 +945,27 @@ async function fecharSemana({ dia, perfis, grupo }) {
       // se a data mudou enquanto o bot dormia, o dia antigo é fechado assim que o WhatsApp conectar
     }
 
+    // Grupo onde ela já trabalhava antes de existir a apresentação: marca como apresentada, senão ela "chega" num grupo
+    // onde já está há semanas e pede cadastro de quem já tem.
+    if (!Object.keys(config.apresentadoEm).length && memoria.grupo && (await listarPerfis()).length) {
+      config = await salvarConfig({ [`apresentadoEm.${chaveGrupo(memoria.grupo)}`]: new Date().toISOString() });
+      config.apresentadoEm ||= {};
+      console.log(`[config] grupo ${memoria.grupo} marcado como já apresentado (bot já ativo nele)`);
+    }
+
     await conectarWhatsApp();
 
+    // Tudo que mexe na memória do dia passa pela mesma fila das mensagens: fechamento e cobrança nunca rodam no meio de uma resposta.
+    const naFila = (nome, fn) => () => {
+      fila = fila.then(fn).catch((e) => console.error(`[${nome}] erro:`, e.message));
+    };
+
     // 23:59 todo dia (fuso TZ). Domingo o fecharDia também dispara o semanal.
-    cron.schedule('59 23 * * *', () => fecharDia(), { timezone: TZ });
+    cron.schedule('59 23 * * *', naFila('cron', () => fecharDia()), { timezone: TZ });
     console.log(`[cron] resumo diário agendado para 23:59 (${TZ})`);
 
     // A cada 10 min: alguém pulou a refeição do horário de costume? Cobra.
-    cron.schedule('*/10 * * * *', () => verificarCobrancas().catch((e) => console.error('[cobranca] erro:', e.message)), { timezone: TZ });
+    cron.schedule('*/10 * * * *', naFila('cobranca', verificarCobrancas), { timezone: TZ });
     console.log(`[cron] cobrança de refeições a cada 10 min (atraso tolerado: ${ATRASO_COBRANCA_MIN} min)`);
 
     // Dia 1 de cada mês, 4h: a Nutri estuda o que saiu de novo e revisa a base de conhecimento
@@ -903,3 +979,22 @@ async function fecharSemana({ dia, perfis, grupo }) {
 
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));
 process.on('uncaughtException', (e) => console.error('[uncaughtException]', e));
+
+// Render manda SIGTERM a cada deploy: salva o que está pendente e fecha as conexões em vez de morrer no meio de uma escrita
+async function encerrar(sinal) {
+  if (encerrando) return;
+  encerrando = true;
+  console.log(`[boot] ${sinal} recebido, encerrando...`);
+  const limite = setTimeout(() => process.exit(0), 8000).unref();
+  try {
+    await persistirMemoria(memoria).catch(() => {});
+    if (diarioSujo) await gravarDiario().catch(() => {});
+    sock?.end?.(undefined);
+    await fecharMongo();
+  } finally {
+    clearTimeout(limite);
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => encerrar('SIGTERM'));
+process.on('SIGINT', () => encerrar('SIGINT'));

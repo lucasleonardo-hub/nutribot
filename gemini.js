@@ -117,6 +117,11 @@ function blocoDossie(nome, dossie) {
   return `O QUE VOCÊ SABE SOBRE ${nome.toUpperCase()} (documentos que a pessoa deixou na pasta dela no Drive + suas notas; use pra personalizar, cobrar metas e zoar com propriedade):\n${dossie.trim()}\n\n`;
 }
 
+function blocoMomentos(momentos) {
+  if (!momentos?.length) return '';
+  return `MOMENTOS MEMORÁVEIS (sua memória de longo prazo; puxe quando couber, com data):\n${momentos.map((m) => `- ${m.dia} · ${m.pessoa}: ${m.texto}`).join('\n')}\n\n`;
+}
+
 function blocoHistorico(mensagens, limite = 60) {
   if (!mensagens?.length) return '(nenhuma mensagem ainda hoje)';
   return mensagens
@@ -132,18 +137,36 @@ const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.5-flash
   .filter((m) => m && m !== MODELO);
 
 // Modelo que acabou de falhar fica "de castigo" por um tempo, pra não gastar tentativas (e segundos) nele a cada mensagem.
-// 429 de cota diária: 15 min. 503 "alta demanda": 90 s.
+// 429 de cota DIÁRIA: 15 min. 429 por minuto: o que a API pedir (retryDelay) ou 60 s. 503 "alta demanda": 90 s. 404 (modelo não existe): 30 min.
 const castigoAte = new Map();
 const emCastigo = (model) => (castigoAte.get(model) || 0) > Date.now();
 function castigar(model, e) {
   const msg = String(e?.message || '');
   const status = e?.status || e?.code;
-  const ms = status === 429 || /quota|RESOURCE_EXHAUSTED/i.test(msg) ? 15 * 60_000 : 90_000;
+  let ms = 90_000;
+  if (status === 404 || /NOT_FOUND|not found/i.test(msg)) ms = 30 * 60_000;
+  else if (status === 429 || /quota|RESOURCE_EXHAUSTED/i.test(msg)) {
+    const pedido = msg.match(/retry(?:Delay|\s+in)\D*(\d+(?:\.\d+)?)\s*s/i)?.[1];
+    ms = /per\s*day|daily|PerDay/i.test(msg) ? 15 * 60_000 : pedido ? Math.ceil(Number(pedido) * 1000) + 1000 : 60_000;
+  }
   castigoAte.set(model, Date.now() + ms);
   console.warn(`[gemini] ${model} fora por ${Math.round(ms / 1000)}s`);
 }
 
+// Série Gemini 3 controla raciocínio por thinkingLevel (MINIMAL só no Flash); a 2.5 usa thinkingBudget (0 = desligado).
+function configPensar(model, pensar) {
+  if (pensar !== false) return {};
+  if (/gemini-3/i.test(model)) return { thinkingConfig: { thinkingLevel: /flash|lite/i.test(model) ? 'MINIMAL' : 'LOW' } };
+  return { thinkingConfig: { thinkingBudget: 0 } };
+}
+
+/**
+ * Gera texto tentando o modelo principal, os reserva do Gemini e por fim Groq/HF/Cohere.
+ * config.pensar=false desliga o raciocínio (do jeito certo pra cada série).
+ * config.estrito=true faz resposta cortada por maxOutputTokens virar erro (documentos que serão gravados).
+ */
 async function gerar({ contents, config = {}, tentativas = 2 }) {
+  const { pensar, estrito, ...configApi } = config;
   let erro;
   const modelos = [MODELO, ...MODELOS_RESERVA];
   for (let mi = 0; mi < modelos.length; mi++) {
@@ -155,19 +178,30 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         const res = await cliente().models.generateContent({
           model,
           contents,
-          config: { safetySettings: SAFETY, temperature: 0.95, maxOutputTokens: 1024, ...config },
+          config: { safetySettings: SAFETY, temperature: 0.95, maxOutputTokens: 1024, ...configPensar(model, pensar), ...configApi },
         });
         const texto = res.text?.trim();
-        if (!texto) throw new Error(`Gemini respondeu vazio (finishReason: ${res.candidates?.[0]?.finishReason})`);
+        const fim = res.candidates?.[0]?.finishReason;
+        if (!texto) throw new Error(`Gemini respondeu vazio (finishReason: ${fim})`);
+        if (fim === 'MAX_TOKENS') {
+          if (estrito) throw Object.assign(new Error(`resposta cortada por maxOutputTokens (${configApi.maxOutputTokens || 1024})`), { cortada: true, parcial: texto });
+          console.warn(`[gemini] ${model}: resposta cortada por maxOutputTokens`);
+        }
         if (mi > 0) console.warn(`[gemini] respondido pelo modelo reserva ${model}`);
         return texto;
       } catch (e) {
         erro = e;
+        if (e.cortada) throw e; // insistir não resolve e trocar de modelo também não
         const status = e?.status || e?.code;
         const transitorio =
           status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
         console.warn(`[gemini] ${model} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
-        if (!transitorio) throw e; // erro de prompt/configuração: não adianta insistir
+        if (!transitorio) {
+          // 404 = nome de modelo errado: castigo longo e segue pro próximo. Outros (400 etc.): não insiste neste modelo,
+          // mas ainda tenta os demais e as reservas antes de desistir.
+          if (status === 404 || /NOT_FOUND|not found/i.test(e.message || '')) castigar(model, e);
+          break;
+        }
         if (i === rodadas - 1) castigar(model, e);
         else await new Promise((r) => setTimeout(r, 1200 * (i + 1)));
       }
@@ -183,12 +217,12 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
     try {
       console.warn(`[gemini] todos os modelos Gemini falharam; tentando reservas (${reservasDisponiveis().join(', ')})`);
       return await gerarReserva({
-        system: config.systemInstruction || '',
+        system: configApi.systemInstruction || '',
         usuario: textoDe(contents),
         imagens,
-        json: config.responseMimeType === 'application/json',
-        maxTokens: config.maxOutputTokens || 1024,
-        temperature: config.temperature ?? 0.9,
+        json: configApi.responseMimeType === 'application/json',
+        maxTokens: configApi.maxOutputTokens || 1024,
+        temperature: configApi.temperature ?? 0.9,
       });
     } catch (e) {
       console.error('[reserva] todos falharam:', e.message);
@@ -212,13 +246,17 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, jaPesquisou = false }) {
+export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, jaPesquisou = false }) {
+  // Ordem pensada pro cache implícito do Gemini: o que não muda entre mensagens vem primeiro (conhecimento, perfis, dossiê),
+  // o que muda a cada mensagem (hora, histórico, mensagem atual) vem por último.
   const contexto =
-    `DATA E HORA: ${dia} ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\nPERFIS DO GRUPO:\n${blocoPerfis(perfis)}\n\n` +
-    `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico)}\n\n` +
     blocoConhecimento(conhecimento) +
+    `PERFIS DO GRUPO:\n${blocoPerfis(perfis)}\n\n` +
     blocoDossie(perfil.nome, dossie) +
+    blocoMomentos(momentos) +
+    `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico)}\n\n` +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
+    `DATA E HORA: ${dia} ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
     `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada - analise a comida da imagem)' : ''}${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
 
   const parts = [{ text: contexto }];
@@ -227,7 +265,7 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
 
   const resposta = await gerar({
     contents: [{ role: 'user', parts }],
-    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 } },
+    config: { systemInstruction: montarSystem(persona), pensar: false },
   });
 
   return /^silencio\W*$/i.test(resposta) ? null : resposta;
@@ -239,7 +277,7 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
 export async function pedirOnboarding(nomeContato, persona) {
   return gerar({
     contents: `Uma pessoa nova (contato do WhatsApp: "${nomeContato || 'desconhecido'}") mandou a primeira mensagem no grupo. Você AINDA não tem o cadastro dela. Em até 60 palavras, no seu personagem, exija que ela responda em UMA mensagem: nome, peso (kg), altura (cm) e objetivo (ex: secar, melhorar o salto, ganhar força). Deixe claro que sem isso você não analisa porra nenhuma.`,
-    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 300 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 300 },
   });
 }
 
@@ -248,7 +286,7 @@ export async function extrairDadosOnboarding(texto) {
     contents: `Extraia os dados de cadastro desta mensagem de WhatsApp. Converta unidades (ex: "1,80m" -> 180 cm; "80kg" -> 80). Se algum dado não estiver presente, deixe null e liste em "faltando".\n\nMENSAGEM: """${texto}"""`,
     config: {
       temperature: 0.1,
-      thinkingConfig: { thinkingBudget: 0 },
+      pensar: false,
       responseMimeType: 'application/json',
       responseSchema: {
         type: 'object',
@@ -273,14 +311,14 @@ export async function extrairDadosOnboarding(texto) {
 export async function boasVindas(perfil, persona, dossie) {
   return gerar({
     contents: `Cadastro concluído: ${perfil.nome}, ${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}. Calcule o IMC mentalmente e comente. Dê as boas-vindas no seu personagem em até 90 palavras, avise que vai vigiar TUDO que a pessoa comer (foto ou texto) e dê a primeira 💡 Dica ácida alinhada ao objetivo. Use os [[links]] e emojis. Já invente um apelido pra pessoa.${dossie ? ` Você já leu a pasta dela no Drive; mostre que leu (cite 1 ou 2 coisas concretas de lá) e cobre o que está escrito ali.\n\n${blocoDossie(perfil.nome, dossie)}` : ''}`,
-    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 400 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 400 },
   });
 }
 
 export async function cobrarDadosFaltando(faltando, persona) {
   return gerar({
     contents: `A pessoa tentou se cadastrar mas esqueceu: ${faltando.join(', ')}. Em até 40 palavras, no seu personagem, cobre SÓ o que falta.`,
-    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 200 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200 },
   });
 }
 
@@ -325,7 +363,7 @@ export async function extrairGirias({ perfis, historico }) {
       `Analise a transcrição e liste, para cada pessoa, gírias, bordões, apelidos e jeitos de falar característicos que ela usou (máx. 6 por pessoa, só o que for realmente característico). Pessoas: ${perfis.map((p) => p.nome).join(', ')}.\n\nTRANSCRIÇÃO:\n${blocoHistorico(historico, 400)}`,
     config: {
       temperature: 0.2,
-      thinkingConfig: { thinkingBudget: 0 },
+      pensar: false,
       responseMimeType: 'application/json',
       responseSchema: {
         type: 'object',
@@ -354,22 +392,60 @@ export async function extrairGirias({ perfis, historico }) {
 // ============================================================
 // 6) Evolução da personalidade (roda junto com o resumo diário)
 // ============================================================
-export async function evoluirPersona({ dia, personaAtual, perfis, historico }) {
+export async function evoluirPersona({ dia, personaAtual, perfis, historico, momentos }) {
   if (!historico?.length) return personaAtual || '';
   return gerar({
     contents:
-      `Você é a Nutri. Hoje é ${dia}. Abaixo está sua MEMÓRIA DE PERSONALIDADE atual e a transcrição do dia. ` +
+      `Você é a ${nomeDaBot()}. Hoje é ${dia}. Abaixo está sua MEMÓRIA DE PERSONALIDADE atual, seus momentos memoráveis já registrados e a transcrição do dia. ` +
       `Reescreva a memória atualizada, em primeira pessoa, no seu tom, com no máximo 350 palavras. Mantenha o que ainda vale e incorpore o que aconteceu hoje. Seções (títulos em maiúsculo, sem #):\n` +
       `APELIDOS QUE EU DEI: um por pessoa, e por quê.\n` +
-      `PIADAS INTERNAS E MOMENTOS: as 5 a 8 melhores histórias/vexames/acertos memoráveis (com data), pra eu puxar depois.\n` +
+      `PIADAS INTERNAS: as 3 a 5 que eu mais uso hoje em dia (os momentos completos ficam no registro separado, não precisa listar todos).\n` +
       `PADRÕES DE CADA UM: hábitos, horários, fraquezas e pontos fortes que eu já saquei (ex: "Fulano come porcaria toda sexta à noite").\n` +
       `MEUS BORDÕES QUE FUNCIONARAM: frases minhas que renderam risada ou reação, pra reutilizar variando.\n` +
       `MEU ESTILO AGORA: 2 ou 3 linhas sobre como estou falando com eles e o que quero afiar amanhã (mais ácida onde? mais didática onde?).\n` +
-      `Não invente fatos que não estão na memória ou na transcrição. Se algo antigo ficou irrelevante, corte.\n\n` +
+      `Não invente fatos que não estão na memória, nos momentos ou na transcrição. Se algo antigo ficou irrelevante, corte.\n\n` +
       `PERFIS:\n${blocoPerfis(perfis)}\n\nMEMÓRIA ATUAL:\n${personaAtual?.trim() || '(vazia, hoje é meu primeiro dia com eles)'}\n\n` +
+      blocoMomentos(momentos) +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 400)}`,
-    config: { systemInstruction: SYSTEM_PROMPT, temperature: 0.7, maxOutputTokens: 1200 },
+    config: { systemInstruction: montarSystem(''), temperature: 0.7, maxOutputTokens: 1200, estrito: true },
   });
+}
+
+/** Momentos memoráveis do dia (vexames, acertos, frases, promessas) -> memória de longo prazo que só cresce. */
+export async function extrairMomentos({ dia, perfis, historico }) {
+  if (!historico?.length || !perfis?.length) return [];
+  const json = await gerar({
+    contents:
+      `Você é a ${nomeDaBot()}. Da transcrição de hoje (${dia}), extraia de 0 a 4 MOMENTOS que valem lembrar daqui a semanas: vexames alimentares, acertos raros, frases marcantes, promessas/metas que a pessoa fez, mudanças de rotina, piadas que pegaram. ` +
+      `Cada momento: uma frase curta (até 25 palavras), concreta, em terceira pessoa, com o nome da pessoa (${perfis.map((p) => p.nome).join(', ')}). Só o que realmente aconteceu. Dia comum sem nada marcante = lista vazia.\n\n` +
+      `TRANSCRIÇÃO:\n${blocoHistorico(historico, 400)}`,
+    config: {
+      temperature: 0.3,
+      pensar: false,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          momentos: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { pessoa: { type: 'string' }, texto: { type: 'string' }, tipo: { type: 'string', enum: ['vexame', 'acerto', 'frase', 'meta', 'rotina', 'piada'] } },
+              required: ['pessoa', 'texto', 'tipo'],
+            },
+          },
+        },
+        required: ['momentos'],
+      },
+      maxOutputTokens: 600,
+    },
+  });
+  try {
+    const { momentos } = JSON.parse(json);
+    return (momentos || []).filter((m) => m?.texto?.trim()).slice(0, 4).map((m) => ({ dia, pessoa: m.pessoa, texto: m.texto.trim(), tipo: m.tipo }));
+  } catch {
+    return [];
+  }
 }
 
 // ============================================================
@@ -383,7 +459,7 @@ export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, co
       blocoConhecimento(conhecimento) +
       blocoDossie(perfil.nome, dossie) +
       `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem: pergunte onde está a refeição (foto ou descrição), zoe o sumiço, lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já falou algo hoje que explique o sumiço, leve em conta. Curta e direta, com emojis. Não use "SILENCIO".`,
-    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 400 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 400 },
   });
 }
 
@@ -396,12 +472,12 @@ export async function atualizarRotina({ perfil, refeicoes, historico, dia }) {
     : '(nenhuma refeição registrada ainda)';
   return gerar({
     contents:
-      `Hoje é ${dia}. Você acompanha ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n` +
+      `Você é a ${nomeDaBot()}. Hoje é ${dia}. Você acompanha ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n` +
       `ROTINA QUE VOCÊ JÁ TINHA ANOTADO:\n${perfil.rotina || '(nada ainda)'}\n\n` +
       `REFEIÇÕES REGISTRADAS NOS ÚLTIMOS DIAS (data hora [refeição] descrição):\n${lista}\n\n` +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico.filter((m) => m.nome === perfil.nome || m.tipo === 'bot'), 120)}\n\n` +
       `Reescreva a ficha de rotina dessa pessoa em até 150 palavras, em terceira pessoa, direto e concreto, cobrindo: horários em que costuma comer cada refeição; o que costuma comer em cada uma (recorrências); refeições que costuma pular; dias/horários de fraqueza (ex: sexta à noite); treino/sono se souber; o que melhorou ou piorou recentemente. Só fatos observados, nada inventado. Sem markdown, sem emojis, sem #.`,
-    config: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 500 },
+    config: { temperature: 0.3, pensar: false, maxOutputTokens: 500 },
   });
 }
 
@@ -411,14 +487,14 @@ export async function atualizarRotina({ perfil, refeicoes, historico, dia }) {
 export async function revisarConhecimento({ doc, fontes, dia }) {
   return gerar({
     contents:
-      `Você é a Nutri revisando seu material de estudo em ${dia}. Abaixo está um documento da sua base de conhecimento e as fontes mais recentes encontradas no PubMed/Wikipedia sobre o tema.\n\n` +
+      `Você é a ${nomeDaBot()}, nutricionista, revisando seu material de estudo em ${dia}. Abaixo está um documento da sua base de conhecimento e as fontes mais recentes encontradas no PubMed/Wikipedia sobre o tema.\n\n` +
       `Regras:\n` +
       `1. Se as fontes NÃO trazem nada que mude recomendações, números ou acrescente algo realmente útil, responda EXATAMENTE: SEM_MUDANCA\n` +
       `2. Se trazem, reescreva o documento INTEIRO em markdown (mesma estrutura de seções, mesmo tom direto, português do Brasil), incorporando o que mudou, mantendo tudo que continua válido, e acrescente as novas referências na seção "## Fontes" com URL. Não invente estudos. Não use frontmatter (---). Não encurte o documento mais que 20%.\n` +
       `3. Não mude o título principal (#).\n\n` +
       `DOCUMENTO ATUAL (${doc.titulo}, v${doc.versao}, atualizado ${doc.atualizado}):\n${doc.corpo}\n\n` +
       `FONTES NOVAS:\n${fontes}`,
-    config: { temperature: 0.2, maxOutputTokens: 6000 },
+    config: { temperature: 0.2, maxOutputTokens: 6000, estrito: true },
   });
 }
 
@@ -430,7 +506,7 @@ export async function notaDeEstudo({ consulta, fontes, dia }) {
     contents:
       `Em ${dia} você pesquisou sobre "${consulta}" porque sua base não tinha a resposta. Fontes encontradas:\n${fontes}\n\n` +
       `Escreva uma NOTA DE ESTUDO em português do Brasil, até 250 palavras, sem markdown de cabeçalho (#), com: o que a evidência diz (números concretos quando houver), o que é consenso e o que ainda é incerto, e como isso vira conselho prático pra alguém que treina. Se as fontes forem fracas ou não responderem, diga isso na nota. Sem emojis, tom direto.`,
-    config: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 700 },
+    config: { temperature: 0.3, pensar: false, maxOutputTokens: 700 },
   });
 }
 
@@ -448,7 +524,7 @@ export async function transcreverPdf(buffer) {
         ],
       },
     ],
-    config: { temperature: 0.1, maxOutputTokens: 8000 },
+    config: { temperature: 0.1, maxOutputTokens: 8000, estrito: true },
   });
 }
 
@@ -463,7 +539,7 @@ export async function descreverImagemDocumento(buffer, mimeType) {
         ],
       },
     ],
-    config: { temperature: 0.1, maxOutputTokens: 2000 },
+    config: { temperature: 0.1, maxOutputTokens: 2000, estrito: true },
   });
 }
 
@@ -472,12 +548,12 @@ export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historic
   if (!falas.length) return notasAtuais || '';
   return gerar({
     contents:
-      `Você é a Nutri. Hoje é ${dia}. Reescreva SUAS NOTAS sobre ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n\n` +
+      `Você é a ${nomeDaBot()}, nutricionista. Hoje é ${dia}. Reescreva SUAS NOTAS sobre ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n\n` +
       `NOTAS ATUAIS:\n${notasAtuais?.trim() || '(nenhuma ainda)'}\n\n` +
       `DOCUMENTOS QUE A PESSOA DEIXOU NA PASTA (você NÃO precisa repetir isso nas notas, só complementar ou registrar mudanças):\n${(dossieDocs || '(nenhum)').slice(0, 6000)}\n\n` +
       `TRANSCRIÇÃO DE HOJE (falas dela e suas):\n${blocoHistorico(falas, 150)}\n\n` +
       `Escreva as notas atualizadas em até 300 palavras, em tópicos curtos (linhas começando com "- "), terceira pessoa, só FATOS que a pessoa disse ou que você observou, com data quando for medida/meta (ex: "- 2026-09-16: pesou 73,2 kg"). Cubra o que importa pro seu trabalho: idade, trabalho/estudo e horários, treinos/esportes e dias, preferências e aversões alimentares, alergias/restrições, sono, álcool, metas numéricas, respostas a perguntas que você fez, e detalhes pessoais que ajudam a zoar com carinho. Mantenha o que continua válido, corrija o que mudou, corte o irrelevante. Se não houver nada novo, devolva as notas atuais. Sem markdown de cabeçalho (#), sem emojis.`,
-    config: { temperature: 0.3, thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 900 },
+    config: { temperature: 0.3, pensar: false, maxOutputTokens: 900, estrito: true },
   });
 }
 
@@ -490,10 +566,12 @@ export async function apresentacao({ grupoNome, membros, persona }) {
       `Você acabou de ser adicionada ao grupo de WhatsApp "${grupoNome || 'sem nome'}"${membros ? ` (${membros} pessoas)` : ''}. Ninguém te conhece ainda.\n` +
       `Escreva sua mensagem de apresentação, no seu personagem, em até 170 palavras, com emojis:\n` +
       `1. Quem você é (nutricionista de bolso ácida que vai vigiar TUDO que eles comerem) e o que você faz: analisa foto ou descrição de refeição com kcal e macros, dá veredito e dica, cobra quem some no horário da refeição, manda resumo diário às 23:59 e semanal no domingo, e aprende com cada um.\n` +
-      `2. Diga que ainda não tem nome e PERGUNTE como querem te chamar (dê 2 ou 3 sugestões debochadas). Avise que dá pra mudar depois com !nome.\n` +
+      (nomeBot
+        ? `2. Diga que seu nome é ${nomeBot} e que dá pra te rebatizar com !nome, se tiverem coragem.\n`
+        : `2. Diga que ainda não tem nome e PERGUNTE como querem te chamar (dê 2 ou 3 sugestões debochadas). Avise que dá pra mudar depois com !nome.\n`) +
       `3. Peça que cada um se cadastre mandando em UMA mensagem: nome, peso, altura e objetivo. Sem cadastro você não analisa nada.\n` +
       `4. Feche com uma provocação curta. Formato WhatsApp (*negrito* com um asterisco), sem cabeçalho #.`,
-    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 600 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 600 },
   });
 }
 
@@ -505,7 +583,7 @@ export async function extrairNomeBot(texto) {
       `Ela está escolhendo/propondo um NOME pra bot? Se sim, devolva o nome exatamente como a pessoa quer (capitalizado, sem aspas, máx. 3 palavras). Se a mensagem é outra coisa (pergunta, comida, cadastro, papo), devolva null. Em dúvida, null.`,
     config: {
       temperature: 0,
-      thinkingConfig: { thinkingBudget: 0 },
+      pensar: false,
       responseMimeType: 'application/json',
       responseSchema: { type: 'object', properties: { nome: { type: 'string', nullable: true } }, required: ['nome'] },
       maxOutputTokens: 60,
@@ -522,6 +600,6 @@ export async function extrairNomeBot(texto) {
 export async function reagirAoNome({ nome, quem, persona }) {
   return gerar({
     contents: `${quem} acabou de te batizar de "${nome}". Reaja no seu personagem em até 50 palavras: aceite (ou finja reclamar e aceite), já assine com o nome novo, e lembre quem ainda não se cadastrou de mandar nome, peso, altura e objetivo. Emojis.`,
-    config: { systemInstruction: montarSystem(persona), thinkingConfig: { thinkingBudget: 0 }, maxOutputTokens: 200 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200 },
   });
 }

@@ -18,7 +18,7 @@ const ARQ_FICHA = 'Nutri-Ficha.md';
 const normalizar = (t) =>
   String(t || '')
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
@@ -81,7 +81,11 @@ async function textoDoArquivo(arq) {
     }
   } catch (e) {
     console.error(`[pessoas] falha ao ler "${arq.name}":`, e.message);
-    return null;
+    // Documento longo demais pro limite de saída: guarda o que veio, com aviso, em vez de tentar de novo a cada 10 min
+    if (!e.cortada || !e.parcial) return null;
+    texto = `${e.parcial}
+
+[... documento longo: transcrição cortada aqui ...]`;
   }
   if (texto) {
     await col.replaceOne({ _id: chave }, { _id: chave, arquivoId: arq.id, nome: arq.name, texto, salvoEm: new Date() }, { upsert: true });

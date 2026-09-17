@@ -163,7 +163,13 @@ export async function atualizarConhecimento({ ia, dia, apenas }) {
         relatorio.push(`• ${doc.titulo}: sem novidade relevante (${fontes.length} fontes checadas)`);
         continue;
       }
-      const revisado = { ...doc, corpo: resposta.trim(), versao: (doc.versao || 1) + 1, atualizado: dia, fontesNovas: fontes.slice(0, 10).map((f) => ({ titulo: f.titulo, url: f.url })) };
+      const corpo = resposta.trim();
+      // Revisão que encolheu demais ou perdeu o título = resposta truncada ou fora das regras: não sobrescreve o documento.
+      if (corpo.length < doc.corpo.length * 0.7 || !/^#\s/m.test(corpo)) {
+        relatorio.push(`• ${doc.titulo}: revisão descartada (veio com ${corpo.length} chars, original ${doc.corpo.length})`);
+        continue;
+      }
+      const revisado = { ...doc, corpo, versao: (doc.versao || 1) + 1, atualizado: dia, fontesNovas: fontes.slice(0, 10).map((f) => ({ titulo: f.titulo, url: f.url })) };
       await persistir(revisado);
       relatorio.push(`• ${doc.titulo}: ATUALIZADO pra v${revisado.versao} (${fontes.length} fontes)`);
     } catch (e) {
