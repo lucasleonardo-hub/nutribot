@@ -1,4 +1,4 @@
-// index.js - NutriBot: nutricionista de bolso ácida no WhatsApp
+// index.js - NutriBot: nutricionista de bolso (simpática, sincera e engraçada) no WhatsApp
 // Baileys (WhatsApp) + MongoDB Atlas (sessão/perfis) + Gemini (IA) + Google Drive (cérebro .md)
 
 import 'dotenv/config';
@@ -64,9 +64,20 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 // ============================================================
 // Data / hora no fuso certo
 // ============================================================
-function agora() {
+function fusoValido(tz) {
+  if (!tz || typeof tz !== 'string') return false;
+  try {
+    new Intl.DateTimeFormat('sv-SE', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const fusoDe = (perfil) => (fusoValido(perfil?.fuso) ? perfil.fuso : TZ);
+
+function agora(tz = TZ) {
   const partes = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: TZ,
+    timeZone: tz,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -319,11 +330,11 @@ function pausaHumana(texto) {
 const ACKS_FOTO = [
   '👀 Deixa eu ver esse prato...',
   '🔍 Analisando essa refeição, segura aí.',
-  'Hmm, verificando isso aqui... 🧐',
+  'Hmm, olhando com carinho aqui... 🧐',
   'Calma que eu tô olhando essa comida. 👀🍽️',
-  'Já vi. Calculando o estrago... 🧮',
+  'Já vi. Fazendo as contas... 🧮',
   'Peraí, dando zoom no prato. 🔎',
-  'Ó a foto chegando. Tô avaliando... 🤨',
+  'Ó a foto chegando. Tô avaliando... 😊',
 ];
 const acaso = (lista) => lista[Math.floor(Math.random() * lista.length)];
 
@@ -506,6 +517,28 @@ function prioridade({ texto, temImagem, temAudio, conteudo, msg }) {
   return null; // papo aleatório
 }
 
+// Traduz a linha ATUALIZAR da IA em campos do perfil, com a data de cada mudança em perfil.atualizacoes
+function aplicarAtualizacao(perfil, a, dia) {
+  const novo = { jids: perfil.jids, atualizacoes: { ...(perfil.atualizacoes || {}) } };
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : Number(String(v ?? '').replace(',', '.')) || null);
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 120) : null);
+  const set = (campo, valor) => {
+    if (valor == null || valor === perfil[campo]) return;
+    novo[campo] = valor;
+    novo.atualizacoes[campo] = dia;
+  };
+  const peso = num(a.peso_kg ?? a.peso);
+  if (peso && peso > 25 && peso < 400) set('peso', peso);
+  const altura = num(a.altura_cm ?? a.altura);
+  if (altura && altura > 100 && altura < 250) set('altura', altura);
+  set('objetivo', str(a.objetivo));
+  set('cidade', str(a.cidade));
+  if (fusoValido(a.fuso)) set('fuso', a.fuso);
+  set('dieta', str(a.dieta)?.toLowerCase());
+  set('restricoes', str(a.restricoes));
+  return Object.keys(novo).length > 2 ? novo : null;
+}
+
 async function processar(msg) {
   if (!msg.message) return;
   if (msg.key.fromMe && enviadosPeloBot.has(msg.key.id)) return; // resposta do próprio bot
@@ -575,14 +608,15 @@ async function processar(msg) {
     if (cmd === '!perfil') {
       const p = await buscarPerfil(jids);
       const [pe] = p?.onboarded ? await enriquecerPerfis([p], dia) : [null];
+      const em = (c) => (pe?.atualizacoes?.[c] ? ` (desde ${pe.atualizacoes[c]})` : '');
       const ficha = pe
-        ? `${pe.nome}: ${pe.peso} kg, ${pe.altura} cm, objetivo: ${pe.objetivo}.\nGírias que eu já peguei: ${(pe.girias || []).join(', ') || 'nenhuma ainda'}\nHorários: ${pe.horarios}\nRotina: ${pe.rotina || 'ainda te observando 👀'}`
-        : 'Você nem cadastro tem, porra.';
+        ? `${pe.nome}: ${pe.peso} kg${em('peso')}, ${pe.altura} cm, objetivo: ${pe.objetivo}${em('objetivo')}.\nMora em: ${pe.cidade ? `${pe.cidade} (fuso ${fusoDe(pe)})` : 'ainda não me contou 🗺️'}\nDieta: ${pe.dieta || 'ainda não me contou'}${pe.restricoes ? ` · restrições: ${pe.restricoes}` : ''}\nGírias que eu já peguei: ${(pe.girias || []).join(', ') || 'nenhuma ainda'}\nHorários (no seu fuso): ${pe.horarios}\nRotina: ${pe.rotina || 'ainda te observando 👀'}`
+        : 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
       return enviar(jidGrupo, ficha, msg);
     }
     if (cmd === '!dossie' || cmd === '!pasta') {
       const p = await buscarPerfil(jids);
-      if (!p?.onboarded) return enviar(jidGrupo, 'Você nem cadastro tem, porra.', msg);
+      if (!p?.onboarded) return enviar(jidGrupo, 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉', msg);
       const docs = await listarDocumentosDe(p).catch(() => []);
       const notas = await notasDe(p).catch(() => '');
       const lista = docs.map((d) => `• ${d.nome}${d.daNutri ? ' (meu)' : d.lido ? ' ✅ lido' : ' ⚠️ não consegui ler'}`).join('\n') || '(pasta vazia)';
@@ -593,7 +627,7 @@ async function processar(msg) {
       return enviar(jidGrupo, `📚 *O que eu já estudei:*\n${lista || 'nada ainda'}\n\nTá tudo no Drive, pasta Conhecimento. Manda !estudar se quiser que eu revise com o que saiu de novo.`, msg);
     }
     if (cmd === '!estudar') {
-      await enviar(jidGrupo, 'Tá, vou revisar meu material. Isso leva uns minutos, não me enche. 📚🙄', msg);
+      await enviar(jidGrupo, 'Tá, vou revisar meu material. Isso leva uns minutos, já volto. 📚', msg);
       estudar({ dia, motivo: 'pedido no grupo' }).catch((e) => console.error('[conhecimento] falha ao estudar:', e.message));
       return;
     }
@@ -614,20 +648,30 @@ async function processar(msg) {
   }
 
   if (!perfil.onboarded) {
-    if (!texto) return enviar(jidGrupo, 'Foto e áudio não são cadastro, gênio. Manda nome, peso, altura e objetivo em TEXTO.', msg);
+    if (!texto) return enviar(jidGrupo, 'Foto e áudio não valem como cadastro 😅 Manda em TEXTO: nome, peso, altura, objetivo, cidade onde mora e se é vegetariana(o) ou tem restrição.', msg);
     const d = await ia.extrairDadosOnboarding(texto);
-    const parcial = { jids };
-    if (d.nome) parcial.nome = d.nome;
-    if (d.peso_kg) parcial.peso = d.peso_kg;
-    if (d.altura_cm) parcial.altura = d.altura_cm;
-    if (d.objetivo) parcial.objetivo = d.objetivo;
+    const parcial = { jids, atualizacoes: { ...(perfil.atualizacoes || {}) } };
+    const marcar = (campo, valor) => {
+      parcial[campo] = valor;
+      parcial.atualizacoes[campo] = dia;
+    };
+    if (d.nome) marcar('nome', d.nome);
+    if (d.peso_kg) marcar('peso', d.peso_kg);
+    if (d.altura_cm) marcar('altura', d.altura_cm);
+    if (d.objetivo) marcar('objetivo', d.objetivo);
+    if (d.cidade) marcar('cidade', d.cidade);
+    if (fusoValido(d.fuso)) marcar('fuso', d.fuso);
+    if (d.dieta) marcar('dieta', d.dieta);
+    if (d.restricoes) marcar('restricoes', d.restricoes);
     perfil = await salvarPerfil(parcial);
 
     const faltando = [];
+    if (!perfil.nome) faltando.push('nome');
     if (!perfil.peso) faltando.push('peso');
     if (!perfil.altura) faltando.push('altura');
     if (!perfil.objetivo) faltando.push('objetivo');
-    if (!perfil.nome) faltando.push('nome');
+    if (!perfil.cidade) faltando.push('cidade onde mora');
+    if (!perfil.dieta) faltando.push('se é vegetariana(o)/vegana(o) ou come de tudo');
     if (faltando.length) return enviar(jidGrupo, await ia.cobrarDadosFaltando(faltando, persona), msg);
 
     perfil = await salvarPerfil({ jids, onboarded: true });
@@ -650,7 +694,7 @@ async function processar(msg) {
       mimeType = conteudo.imageMessage.mimetype || 'image/jpeg';
     } catch (e) {
       console.error('[wa] falha ao baixar imagem:', e.message);
-      return enviar(jidGrupo, 'Tua foto não baixou, tá de sacanagem com minha conexão? Manda de novo.', msg);
+      return enviar(jidGrupo, 'Tua foto não chegou inteira aqui. Manda de novo? 🙏', msg);
     }
   }
 
@@ -662,7 +706,7 @@ async function processar(msg) {
       audioMime = (conteudo.audioMessage.mimetype || 'audio/ogg').split(';')[0];
     } catch (e) {
       console.error('[wa] falha ao baixar áudio:', e.message);
-      return enviar(jidGrupo, 'Teu áudio não baixou. Digita, criatura, ou manda de novo.', msg);
+      return enviar(jidGrupo, 'Teu áudio não baixou. Manda de novo ou digita pra mim? 🙏', msg);
     }
   }
 
@@ -676,9 +720,13 @@ async function processar(msg) {
 
   const perfis = await enriquecerPerfis(await listarPerfis(), dia);
   const eu = perfis.find((p) => p.jids?.some((j) => jids.includes(j))) || perfil;
-  const slot = slotDaHora(hora);
+  // Hora no fuso da pessoa (cidade informada no cadastro/conversa); sem cidade, usa o fuso do grupo
+  const horaLocal = agora(fusoDe(eu)).hora;
+  const slot = slotDaHora(horaLocal);
   const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
-  const contextoHorario = `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}`;
+  const contextoHorario =
+    `hora local de ${perfil.nome}: ${horaLocal}${eu.cidade ? ` em ${eu.cidade}` : ' (cidade/fuso ainda não informados, pode estar errada)'}; ` +
+    `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}`;
   const dossie = await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), ''));
   const momentos = await momentosRecentes(12).catch(() => []);
   const entradaTexto = temImagem ? `📷 [foto de comida]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto;
@@ -686,8 +734,9 @@ async function processar(msg) {
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : temAudio ? 'audio' : 'texto' });
 
   let resposta;
+  let atualizacao = null;
   try {
-    resposta = await ia.responder({ texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie, momentos });
+    ({ texto: resposta, atualizacao } = await ia.responder({ texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie, momentos }));
   } catch (e) {
     // Gemini (todos) e Groq fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -696,9 +745,9 @@ async function processar(msg) {
     return enviar(
       jidGrupo,
       acaso([
-        'Meu cérebro travou agora (a IA tá fora do ar). Me manda isso de novo daqui a 1 min, criatura. 🤯',
-        'Puta que pariu, minha conexão com a IA caiu. Repete em um minutinho que eu respondo. 🔌',
-        'Tô offline da cabeça por uns segundos, o servidor da IA engasgou. Manda de novo já já. 😵‍💫',
+        'Meu cérebro travou agora (a IA tá fora do ar). Me manda isso de novo daqui a 1 min? 🤯',
+        'Minha conexão com a IA caiu. Repete em um minutinho que eu respondo. 🔌',
+        'Tô offline da cabeça por uns segundos, o servidor engasgou. Manda de novo já já. 😵‍💫',
       ]),
       msg,
       { rapido: true }
@@ -713,10 +762,12 @@ async function processar(msg) {
     enviar(jidGrupo, acaso(['Boa pergunta. Deixa eu conferir isso direito antes de falar besteira. 📚', 'Isso eu não vou chutar. Pesquisando... 🔎', 'Segura que eu vou ler sobre isso rapidinho. 🤓']), msg, { rapido: true }).catch(() => {});
     const fontes = await pesquisar({ en: consulta, pt: texto }).catch((e) => (console.error('[pesquisa]', e.message), []));
     const fontesTxt = formatarFontes(fontes, 8);
-    resposta = await ia.responder({
+    const r2 = await ia.responder({
       texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, dossie, momentos, jaPesquisou: true,
       conhecimento: `${docsPara(eu)}\n\n### Pesquisa que você acabou de fazer sobre "${consulta}"\n${fontesTxt}`,
     });
+    resposta = r2.texto;
+    atualizacao = r2.atualizacao || atualizacao;
     if (fontes.length) {
       ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
         .then((nota) => salvarPesquisa({ consulta, nota, fontes, dia }))
@@ -731,6 +782,16 @@ async function processar(msg) {
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
   if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
 
+  // A pessoa contou um dado novo (peso, cidade, dieta...): sobrescreve o perfil agora, com a data, e a ficha no Drive
+  if (atualizacao && typeof atualizacao === 'object') {
+    const novo = aplicarAtualizacao(perfil, atualizacao, dia);
+    if (novo) {
+      perfil = await salvarPerfil(novo).catch((e) => (console.error('[perfil] falha ao atualizar:', e.message), perfil));
+      console.log(`[perfil] ${perfil.nome} atualizado: ${Object.keys(novo).filter((k) => !['jids', 'atualizacoes'].includes(k)).join(', ')}`);
+      salvarFicha(perfil, mdPerfil(perfil)).catch(() => {});
+    }
+  }
+
   if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
@@ -743,7 +804,7 @@ async function processar(msg) {
       nome: perfil.nome,
       dia,
       hora,
-      minutos: minutosDe(hora),
+      minutos: minutosDe(horaLocal), // no fuso da pessoa: é assim que ela aprende o horário habitual
       slot: slot.id,
       resumo: resumoRefeicao.slice(0, 120),
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
@@ -770,7 +831,7 @@ async function estudar({ dia, motivo }) {
       const texto = mudou.length
         ? `📚 Revisei meu material com estudos novos. Atualizei:\n${mudou.join('\n')}\n\nTá tudo no Drive, pasta Conhecimento. Preparem-se, agora eu sei mais. 😈`
         : motivo === 'pedido no grupo'
-          ? `📚 Revisei tudo. Nenhuma novidade que mude o que eu já falo pra vocês. O problema continua sendo vocês, não a ciência. 🙄`
+          ? `📚 Revisei tudo. Nenhuma novidade que mude o que eu já falo pra vocês. Ou seja: a ciência tá tranquila, agora é com a gente. 😉`
           : null;
       if (texto) await enviar(memoria.grupo, texto);
     }
@@ -785,15 +846,17 @@ async function estudar({ dia, motivo }) {
 async function verificarCobrancas() {
   if (statusConexao !== 'conectado' || !memoria.grupo || fechandoDia) return;
   await garantirDiaAtual();
-  const { dia, hora } = agora();
-  const agoraMin = minutosDe(hora);
-  if (agoraMin < 7 * 60 || agoraMin > 23 * 60) return; // ninguém merece cobrança de madrugada
+  const { dia } = agora();
 
   const perfis = await enriquecerPerfis(await listarPerfis(), dia);
   const hoje = await refeicoesDoDia(dia).catch(() => []);
   memoria.cobrancas ||= {};
 
   for (const p of perfis) {
+    // tudo no fuso da pessoa: hora atual, janela de 7h-23h e horário habitual aprendido
+    const hora = agora(fusoDe(p)).hora;
+    const agoraMin = minutosDe(hora);
+    if (agoraMin < 7 * 60 || agoraMin > 23 * 60) continue; // ninguém merece cobrança de madrugada
     // pega só a refeição atrasada mais recente (se o bot ficou fora, não dispara 3 cobranças de uma vez)
     const pendentes = SLOTS.filter((s) => s.cobrar).filter((s) => {
       const h = p._hab[s.id];
@@ -828,8 +891,8 @@ async function verificarCobrancas() {
       });
       if (msg && !/^silencio\W*$/i.test(msg)) {
         await enviar(memoria.grupo, msg);
-        await lembrar({ hora, jid: null, nome: ia.nomeDaBot(), texto: msg, tipo: 'bot' });
-        console.log(`[cobranca] ${p.nome} sem ${slot.nome} (habitual ${hhmmDe(p._hab[slot.id].minutos)})`);
+        await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: msg, tipo: 'bot' });
+        console.log(`[cobranca] ${p.nome} sem ${slot.nome} (habitual ${hhmmDe(p._hab[slot.id].minutos)}, fuso ${fusoDe(p)})`);
       }
     } catch (e) {
       console.error('[cobranca] falha:', e.message);
@@ -947,7 +1010,7 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
     await registrarLog(dia, `${agora().hora} dia fechado (${historico.length} mensagens)`);
   } catch (e) {
     console.error('[bot] erro ao fechar o dia:', e);
-    if (grupo) await enviar(grupo, `Deu merda no meu resumo (${e.message}). Amanhã eu cobro em dobro.`).catch(() => {});
+    if (grupo) await enviar(grupo, `Deu problema no meu resumo de hoje (${e.message}). Amanhã eu compenso. 🙏`).catch(() => {});
   } finally {
     if (forcado) {
       // !resumo no meio do dia: fecha o resumo mas NÃO apaga a memória, senão a tarde começa sem contexto

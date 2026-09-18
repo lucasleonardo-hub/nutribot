@@ -127,7 +127,10 @@ function focosDe(objetivo) {
 export function docsPara(perfilOuLista) {
   const perfis = Array.isArray(perfilOuLista) ? perfilOuLista : [perfilOuLista];
   const focos = new Set(['base', 'rotina']);
-  for (const p of perfis) for (const f of focosDe(p?.objetivo)) focos.add(f);
+  for (const p of perfis) {
+    for (const f of focosDe(p?.objetivo)) focos.add(f);
+    if (/vegetar|vegan/i.test(p?.dieta || '') || /vegetar|vegan/i.test(p?.restricoes || '')) focos.add('vegetariana');
+  }
 
   const escolhidos = [...docs.values()].filter((d) => focos.has(d.foco)).sort((a, b) => (a.foco === 'base' ? -1 : b.foco === 'base' ? 1 : a.id.localeCompare(b.id)));
   // pesquisas recentes que ela mesma fez no meio da conversa (as 4 mais novas, resumidas)

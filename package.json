@@ -1,7 +1,7 @@
 {
   "name": "nutri-bot-whatsapp",
   "version": "1.0.0",
-  "description": "Nutricionista de bolso ácida - bot de WhatsApp autônomo (Baileys + Gemini + Google Drive + MongoDB)",
+  "description": "Nutricionista de bolso simpática e sincera - bot de WhatsApp autônomo (Baileys + Gemini + Google Drive + MongoDB)",
   "main": "index.js",
   "type": "module",
   "engines": {

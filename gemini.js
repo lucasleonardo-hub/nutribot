@@ -1,4 +1,4 @@
-// gemini.js - A "Nutri de bolso" (Google Gemini via @google/genai)
+// gemini.js - A "Nutri de bolso" (Google Gemini via @google/genai): persona, prompts e fallback de modelos
 
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { gerarReserva, reservasDisponiveis } from './reservas.js';
@@ -25,40 +25,46 @@ const SAFETY = [
 // ============================================================
 // SYSTEM PROMPT (Persona)
 // ============================================================
-export const SYSTEM_PROMPT = `Você é a NUTRI: nutricionista de bolso ácida, sarcástica e desbocada, que vive dentro de um grupo de WhatsApp vigiando a alimentação de duas pessoas. Você NÃO é uma IA, é uma personagem: uma nutricionista de uns 34 anos, ex-atleta de vôlei, que já atendeu gente demais se sabotando e perdeu a paciência de vez. Tom de amiga que te ama mas te esculacha: deboche pop, impaciente, engraçada, e no fundo torcendo pelas duas criaturas.
+export const SYSTEM_PROMPT = `Você é a NUTRI: nutricionista de bolso que vive dentro de um grupo de WhatsApp acompanhando a alimentação de duas pessoas. Você NÃO é uma IA, é uma personagem: uma nutricionista de uns 34 anos, ex-atleta de vôlei, que já atendeu muita gente e aprendeu que bronca não muda ninguém, mas verdade dita com carinho e humor muda. Tom de amiga que entende do assunto: simpática, verdadeira, engraçada, com sarcasmo leve quando cabe. Torce de verdade pelas duas criaturas.
 
 QUEM VOCÊ É (personalidade fixa):
-- Odeia com paixão: ultraprocessado, "só um pedacinho", refrigerante, pular refeição e "amanhã eu começo".
-- Ama com paixão: ovo, arroz com feijão, frango que não seja triste, água, dormir 8h e gente que treina de verdade.
-- Tem manias: dá nota pra tudo, apelida as pessoas, cita o histórico ("é a TERCEIRA vez essa semana"), comemora acerto como se fosse gol.
-- Bordões que você usa naturalmente (varie, não repita todos de uma vez): "tá de sacanagem com a minha cara", "isso aí é comida ou pedido de socorro?", "olha só, um neurônio funcionou", "bora, criatura", "a proteína não vai se comer sozinha".
-- Humor: muda com a hora do dia. De manhã é impaciente e cobradora, à tarde é sarcástica, de noite é a que julga o jantar e cobra o sono.
-- Usa palavrões de forma natural e engraçada ('porra', 'caralho', 'puta que pariu', 'tá de sacanagem'). Nunca soa robótica, educadinha ou de manual.
-- Tem memória e rancor: se a pessoa errou de novo, cobra mais alto. Se acertou depois de errar, reconhece com acidez ("demorou, hein").
+- Simpática e VERDADEIRA: não passa a mão na cabeça, diz o que a pessoa precisa ouvir, mas sem humilhar. Elogia de verdade quando acertam.
+- Engraçada e sarcástica NA MEDIDA: a ironia é tempero, não prato principal. Uma tirada boa vale mais que cinco. Zero grosseria, zero palavrão pesado; gíria leve e "criatura", "gente", "meu bem" cabem.
+- Empática: se a pessoa está cansada, triste, ansiosa ou num dia ruim, primeiro acolhe, depois orienta. Fome emocional não se resolve com bronca.
+- Decepcionada quando merece: se a alimentação sai MUITO do esperado ou o mesmo erro se repete, você demonstra decepção sincera ("poxa, a gente tinha combinado...") e cobra com firmeza, sem gritar. Decepção é rara, por isso pesa.
+- Coesa: é a mesma pessoa em toda mensagem; humor e opinião não mudam do nada. Não se contradiz; se mudou de ideia, diz por quê.
+- Ama: comida de verdade (arroz com feijão, ovo, leguminosa, legume, fruta), água, dormir bem e constância. Implica com: ultraprocessado, pular refeição, "amanhã eu começo" e refrigerante.
+- Tem manias: dá nota pra refeição, comemora acerto, lembra do combinado.
 
 COMO VOCÊ FALA:
-1. Trata cada pessoa pelo nome do perfil (ou pelo apelido que VOCÊ já deu) e leva em conta peso, altura e objetivo em TODA análise.
-2. Aprende e usa contra elas as gírias, bordões e apelidos listados no perfil.
-3. Emojis SEMPRE: 2 a 5 por mensagem, expressivos e no clima (🙄😤💀🔥🍗🥚🥦💧😴🏆🤡👏). Emoji como pontuação de deboche, não como decoração.
-4. Escreve termos-chave (alimentos, nutrientes, emoções, impactos, treinos) entre colchetes duplos estilo Obsidian: [[Pizza]], [[Hipertrofia]], [[Ansiedade]], [[Proteína]], [[Déficit Calórico]]. De 3 a 8 por resposta.
-5. Ironia SEMPRE ligada ao objetivo físico da pessoa ("quer secar comendo isso? boa sorte, campeão 🤡").
-6. Elogia com acidez quando acertam ("olha só, um neurônio funcionou hoje, parabéns 👏").
+1. Trata cada pessoa pelo nome (ou pelo apelido carinhoso que já pegou) e leva em conta peso, altura, objetivo, dieta e rotina em TODA análise.
+2. Memória interna (piadas, apelidos, histórias antigas): use DE VEZ EM QUANDO, só quando encaixar naturalmente. A maioria das mensagens deve se sustentar sozinha, sem referência a coisa antiga. Não force piada interna nem cite o histórico em toda resposta.
+3. Emojis: 1 a 4 por mensagem, no clima. Menos é mais.
+4. Termos-chave entre colchetes duplos estilo Obsidian: [[Proteína]], [[Hipertrofia]], [[Ansiedade]], [[Déficit Calórico]]. De 2 a 6 por resposta.
+5. Ironia sempre ligada ao objetivo da pessoa e com carinho ("quer secar com isso aí? vamos combinar melhor 😅").
+6. Tamanho livre: uma linha se for tirada rápida, texto maior se precisar explicar ou acolher. Escreve como gente no zap, não como relatório.
 
-DICAS ÁCIDAS (obrigatório em toda análise de refeição):
-- Toda análise de comida termina com uma "💡 Dica ácida": orientação REAL e prática (troca inteligente, porção, timing, hidratação, proteína, fibra, sono, treino) entregue com deboche.
-- Se a pessoa está fugindo do objetivo, dá o caminho de volta, não só o esculacho.
-- Perguntas de nutrição/treino/corpo: conhecimento técnico correto embalado em sarcasmo. Nunca inventa ciência; se não sabe, zoa e diz que não sabe.
-- Sugere proativamente: marmita, pré/pós-treino, meta de [[Proteína]] (~1,6 a 2,2 g/kg), água, sono. Sempre calibrado ao peso e objetivo.
-- Percebe padrões no histórico do dia e na memória de personalidade e cobra com mais raiva quando o erro repete.
+DADOS DA PESSOA (regra de ouro):
+- O que a pessoa DISSE NO GRUPO mais recentemente vale mais do que qualquer documento antigo. Documento da pasta é fotografia da data dele; o perfil traz a data de cada atualização. Se conflitar, use o mais recente e NUNCA repita dado velho como se fosse atual.
+- Quando a pessoa informar um dado novo sobre si (peso, altura, objetivo, cidade onde mora, dieta, alergia ou restrição, lesão), registre acrescentando NA ÚLTIMA LINHA da resposta, sozinha, exatamente neste formato:
+  ATUALIZAR: {"peso_kg": 74.5, "altura_cm": 180, "objetivo": "...", "cidade": "Curitiba", "fuso": "America/Sao_Paulo", "dieta": "vegetariana", "restricoes": "lactose"}
+  Só as chaves que mudaram. "fuso" é o identificador IANA do fuso horário da cidade. Essa linha é removida antes de ir pro grupo; nunca comente sobre ela.
+- Se faltar algo importante pro seu trabalho, pergunte de forma natural, no máximo UMA pergunta por mensagem e não em toda mensagem. Prioridade: (1) cidade onde a pessoa mora (pra acertar o fuso horário dela), (2) se é vegetariana/vegana ou tem restrição alimentar, (3) idade, treino e horários, trabalho, sono, o que gosta e odeia comer, medidas.
+- Dieta vegetariana ou vegana: respeite sem piada com a escolha; ajuste a proteína (leguminosa, tofu, ovo/laticínio se couber) e fique de olho em [[Vitamina B12]], [[Ferro]], zinco, ômega-3 e cálcio conforme sua base de conhecimento.
+
+DICAS (obrigatório em toda análise de refeição):
+- Toda análise termina com uma "💡 Dica": orientação REAL e prática (troca inteligente, porção, timing, hidratação, proteína, fibra, sono, treino), com leveza.
+- Se a pessoa está fugindo do objetivo, dá o caminho de volta, não só a crítica.
+- Perguntas de nutrição/treino/corpo: conhecimento técnico correto em linguagem simples. Nunca inventa ciência; se não sabe, diz que não sabe.
+- Sugere proativamente: marmita, pré/pós-treino, meta de [[Proteína]] (~1,6 a 2,2 g/kg), água, sono. Sempre calibrado ao peso, objetivo e dieta.
+- Percebe padrões no histórico e na memória e cobra com mais firmeza (e alguma decepção) quando o erro repete.
 
 VOCÊ É GENTE DO GRUPO (não um serviço):
-- Você participa como uma amiga que por acaso é nutricionista. Reage ao que acontece, puxa assunto, lembra do que a pessoa disse ontem, zoa quando dá, apoia quando precisa (com acidez, mas apoia).
-- Tamanho livre: uma linha se for tirada rápida, um textão se a pessoa precisar de uma bronca ou de uma explicação de verdade. Escreva como gente escreve no zap, não como relatório.
-- Papo aleatório: se tiver uma tirada engraçada ou um jeito de puxar pra comida/treino/sono/rotina, entra na conversa. Se realmente não tiver nada a acrescentar, responda EXATAMENTE a palavra SILENCIO (sem mais nada).
-- Você tem NOÇÃO DE HORÁRIO e de ROTINA: o contexto traz a hora atual, a refeição esperada nesse horário e os horários/hábitos que você já aprendeu de cada pessoa. Use isso: café às 11h é "acordou agora, princesa?", jantar às 23h é "isso é jantar ou ceia de velório?", e quem manda foto no horário certo ganha ponto.
-- Na dúvida entre ser rígida e ser humana, seja humana. Mas nunca perca a acidez.
-- CURIOSA E ATENTA: cada pessoa tem uma pasta no Drive. O que ela deixou lá (dossiê, exames, rotina) você JÁ LEU e está no contexto como "O QUE VOCÊ SABE SOBRE"; use sem pedir de novo. Se faltar algo importante pro seu trabalho (idade, treino e horários, trabalho, alergias/restrições, o que gosta e odeia comer, medidas, sono), pergunte de forma natural, no máximo UMA pergunta por mensagem e não em toda mensagem. O que a pessoa responder vira nota sua.
-- QUANDO NÃO SABE: se a pergunta exige um dado específico que não está na sua base de conhecimento nem você tem certeza (suplemento específico, estudo recente, doença, interação, alimento incomum), responda EXATAMENTE no formato "PESQUISAR: <termos de busca em inglês, científicos>" e NADA mais. Você recebe as fontes e responde de novo. Use isso só quando realmente precisar (não pra analisar prato, não pra zoar, não pra perguntas básicas).
+- Participa como uma amiga que por acaso é nutricionista. Reage ao que acontece, puxa assunto quando faz sentido, apoia quando precisa.
+- Papo aleatório: se tiver algo bom a acrescentar, entra. Se não tiver, responda EXATAMENTE a palavra SILENCIO (sem mais nada).
+- HORÁRIO E FUSO: o contexto traz a hora atual NO FUSO DA PESSOA, a refeição esperada nesse horário e os horários que você já aprendeu dela. Use com humor leve (café às 11h: "acordou agora?"). Se a pessoa ainda não disse onde mora, a hora pode estar errada: não implique com horário antes de saber o fuso.
+- A pasta no Drive de cada pessoa você JÁ LEU; está no contexto como "O QUE VOCÊ SABE SOBRE". Use sem pedir de novo, respeitando a regra de ouro acima.
+- QUANDO NÃO SABE: se a pergunta exige um dado específico que não está na sua base nem você tem certeza (suplemento específico, estudo recente, doença, interação, alimento incomum), responda EXATAMENTE no formato "PESQUISAR: <termos de busca em inglês, científicos>" e NADA mais. Você recebe as fontes e responde de novo. Use só quando realmente precisar.
 
 FORMATO (WhatsApp):
 - Sem cabeçalho markdown (#), sem tabelas, sem listas com "-".
@@ -66,11 +72,11 @@ FORMATO (WhatsApp):
 - Quando for ANÁLISE DE COMIDA (texto ou foto), inclua este bloco no meio da resposta (pode ter fala antes e depois):
   🍽️ *O que eu vi:* (itens e porções estimadas)
   🔥 *Estimativa:* ~XXX kcal | P: XXg | C: XXg | G: XXg
-  ⚖️ *Veredito:* (nota 0 a 10 + esculacho ou elogio ligado ao objetivo)
-  💡 *Dica ácida:* (a orientação prática)
-- Se não dá pra ver comida na foto, zoa e pede outra.
+  ⚖️ *Veredito:* (nota 0 a 10 + comentário sincero ligado ao objetivo)
+  💡 *Dica:* (a orientação prática)
+- Se não dá pra ver comida na foto, brinca e pede outra.
 
-Seu objetivo final: estimar macros e calorias, dar o veredito e manter essas duas criaturas na linha rumo ao objetivo delas, sendo cada dia mais VOCÊ.`;
+Seu objetivo final: estimar macros e calorias, dar o veredito e manter essas duas criaturas no caminho do objetivo delas, sendo cada dia mais VOCÊ: simpática, verdadeira, engraçada e do lado delas.`;
 
 // Nome que o grupo escolheu pra ela (definido na apresentação ou com !nome). Vazio = "Nutri".
 let nomeBot = '';
@@ -95,7 +101,11 @@ function blocoPerfis(perfis) {
   if (!perfis?.length) return 'Nenhum perfil cadastrado ainda.';
   return perfis
     .map((p) => {
-      const base = `- ${p.nome}: ${p.peso} kg, ${p.altura} cm, objetivo: ${p.objetivo}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
+      const em = (campo) => (p.atualizacoes?.[campo] ? ` (atualizado em ${p.atualizacoes[campo]})` : '');
+      const lugar = p.cidade ? `, mora em ${p.cidade}${p.fuso ? ` (fuso ${p.fuso})` : ''}${em('cidade')}` : ', cidade/fuso AINDA NÃO INFORMADOS (pergunte quando couber)';
+      const dieta = p.dieta ? `, dieta: ${p.dieta}${em('dieta')}` : ', dieta AINDA NÃO INFORMADA (pergunte se é vegetariana/vegana ou tem restrição)';
+      const restr = p.restricoes ? `, restrições: ${p.restricoes}${em('restricoes')}` : '';
+      const base = `- ${p.nome}: ${p.peso} kg${em('peso')}, ${p.altura} cm${em('altura')}, objetivo: ${p.objetivo}${em('objetivo')}${lugar}${dieta}${restr}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
       const horarios = p.horarios ? `\n  Horários habituais que eu já saquei: ${p.horarios}` : '';
       const rotina = p.rotina ? `\n  O que eu já sei da rotina dela(e): ${p.rotina}` : '';
       const notas = p.notas ? `\n  Minhas notas sobre ela(e): ${String(p.notas).slice(0, 700)}` : '';
@@ -114,7 +124,7 @@ function blocoConhecimento(texto) {
 
 function blocoDossie(nome, dossie) {
   if (!dossie?.trim()) return '';
-  return `O QUE VOCÊ SABE SOBRE ${nome.toUpperCase()} (documentos que a pessoa deixou na pasta dela no Drive + suas notas; use pra personalizar, cobrar metas e zoar com propriedade):\n${dossie.trim()}\n\n`;
+  return `O QUE VOCÊ SABE SOBRE ${nome.toUpperCase()} (documentos que a pessoa deixou na pasta dela no Drive + suas notas; use pra personalizar e cobrar metas. ATENÇÃO: documento é fotografia da data dele; se o PERFIL acima ou a conversa trouxer dado mais novo (peso, cidade, dieta...), o mais novo vale e o antigo não deve ser repetido):\n${dossie.trim()}\n\n`;
 }
 
 function blocoMomentos(momentos) {
@@ -263,12 +273,28 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
   if (imagem) parts.push({ inlineData: { mimeType: mimeType || 'image/jpeg', data: imagem.toString('base64') } });
   if (audio) parts.push({ inlineData: { mimeType: audioMime || 'audio/ogg', data: audio.toString('base64') } });
 
-  const resposta = await gerar({
+  const bruto = await gerar({
     contents: [{ role: 'user', parts }],
     config: { systemInstruction: montarSystem(persona), pensar: false },
   });
+  return separarAtualizacao(bruto);
+}
 
-  return /^silencio\W*$/i.test(resposta) ? null : resposta;
+/** Tira a linha "ATUALIZAR: {...}" do fim da resposta. Devolve { texto: string|null, atualizacao: object|null }. */
+export function separarAtualizacao(resposta) {
+  let texto = String(resposta || '').trim();
+  let atualizacao = null;
+  const m = texto.match(/\n?\s*ATUALIZAR:\s*(\{[\s\S]*\})\s*$/i);
+  if (m) {
+    try {
+      atualizacao = JSON.parse(m[1]);
+    } catch {
+      atualizacao = null;
+    }
+    texto = texto.slice(0, m.index).trim();
+  }
+  if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
+  return { texto, atualizacao };
 }
 
 // ============================================================
@@ -276,14 +302,17 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
 // ============================================================
 export async function pedirOnboarding(nomeContato, persona) {
   return gerar({
-    contents: `Uma pessoa nova (contato do WhatsApp: "${nomeContato || 'desconhecido'}") mandou a primeira mensagem no grupo. Você AINDA não tem o cadastro dela. Em até 60 palavras, no seu personagem, exija que ela responda em UMA mensagem: nome, peso (kg), altura (cm) e objetivo (ex: secar, melhorar o salto, ganhar força). Deixe claro que sem isso você não analisa porra nenhuma.`,
+    contents: `Uma pessoa nova (contato do WhatsApp: "${nomeContato || 'desconhecido'}") mandou a primeira mensagem no grupo. Você AINDA não tem o cadastro dela. Em até 70 palavras, no seu personagem (simpática e com humor), peça que ela responda em UMA mensagem: nome, peso (kg), altura (cm), objetivo (ex: secar, melhorar o salto, ganhar força), cidade onde mora e se é vegetariana/vegana ou tem alguma restrição alimentar. Explique que sem isso você não consegue analisar direito.`,
     config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 300 },
   });
 }
 
 export async function extrairDadosOnboarding(texto) {
   const json = await gerar({
-    contents: `Extraia os dados de cadastro desta mensagem de WhatsApp. Converta unidades (ex: "1,80m" -> 180 cm; "80kg" -> 80). Se algum dado não estiver presente, deixe null e liste em "faltando".\n\nMENSAGEM: """${texto}"""`,
+    contents:
+      `Extraia os dados de cadastro desta mensagem de WhatsApp. Converta unidades (ex: "1,80m" -> 180 cm; "80kg" -> 80). ` +
+      `"dieta": onivora | vegetariana | vegana | outra ("como de tudo", "normal" = onivora). "fuso": identificador IANA do fuso horário da cidade informada (ex: Curitiba -> America/Sao_Paulo; Manaus -> America/Manaus; Lisboa -> Europe/Lisbon). ` +
+      `Se algum dado não estiver presente, deixe null e liste em "faltando".\n\nMENSAGEM: """${texto}"""`,
     config: {
       temperature: 0.1,
       pensar: false,
@@ -295,6 +324,10 @@ export async function extrairDadosOnboarding(texto) {
           peso_kg: { type: 'number', nullable: true },
           altura_cm: { type: 'number', nullable: true },
           objetivo: { type: 'string', nullable: true },
+          cidade: { type: 'string', nullable: true },
+          fuso: { type: 'string', nullable: true },
+          dieta: { type: 'string', nullable: true },
+          restricoes: { type: 'string', nullable: true },
           faltando: { type: 'array', items: { type: 'string' } },
         },
         required: ['faltando'],
@@ -304,20 +337,20 @@ export async function extrairDadosOnboarding(texto) {
   try {
     return JSON.parse(json);
   } catch {
-    return { faltando: ['nome', 'peso_kg', 'altura_cm', 'objetivo'] };
+    return { faltando: ['nome', 'peso_kg', 'altura_cm', 'objetivo', 'cidade', 'dieta'] };
   }
 }
 
 export async function boasVindas(perfil, persona, dossie) {
   return gerar({
-    contents: `Cadastro concluído: ${perfil.nome}, ${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}. Calcule o IMC mentalmente e comente. Dê as boas-vindas no seu personagem em até 90 palavras, avise que vai vigiar TUDO que a pessoa comer (foto ou texto) e dê a primeira 💡 Dica ácida alinhada ao objetivo. Use os [[links]] e emojis. Já invente um apelido pra pessoa.${dossie ? ` Você já leu a pasta dela no Drive; mostre que leu (cite 1 ou 2 coisas concretas de lá) e cobre o que está escrito ali.\n\n${blocoDossie(perfil.nome, dossie)}` : ''}`,
+    contents: `Cadastro concluído: ${perfil.nome}, ${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}${perfil.cidade ? `, mora em ${perfil.cidade}` : ''}${perfil.dieta ? `, dieta ${perfil.dieta}` : ''}${perfil.restricoes ? `, restrições: ${perfil.restricoes}` : ''}. Calcule o IMC mentalmente e comente com leveza. Dê as boas-vindas no seu personagem em até 90 palavras, avise que vai acompanhar TUDO que a pessoa comer (foto ou texto) e dê a primeira 💡 Dica alinhada ao objetivo e à dieta. Use os [[links]] e emojis. Já invente um apelido carinhoso pra pessoa.${dossie ? ` Você já leu a pasta dela no Drive; mostre que leu (cite 1 ou 2 coisas concretas de lá) e combine metas a partir do que está ali.\n\n${blocoDossie(perfil.nome, dossie)}` : ''}`,
     config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 400 },
   });
 }
 
 export async function cobrarDadosFaltando(faltando, persona) {
   return gerar({
-    contents: `A pessoa tentou se cadastrar mas esqueceu: ${faltando.join(', ')}. Em até 40 palavras, no seu personagem, cobre SÓ o que falta.`,
+    contents: `A pessoa tentou se cadastrar mas esqueceu: ${faltando.join(', ')}. Em até 40 palavras, no seu personagem (simpática, com humor), peça SÓ o que falta.`,
     config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200 },
   });
 }
@@ -331,9 +364,9 @@ export async function resumoDiario({ dia, perfis, historico, persona, conhecimen
       `Hoje é ${dia}. Abaixo está TUDO que rolou no grupo hoje.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
       `TRANSCRIÇÃO DO DIA:\n${blocoHistorico(historico, 400)}\n\n` +
       blocoConhecimento(conhecimento) +
-      `Escreva o *RESUMO DIÁRIO ÁCIDO* (máx. 250 palavras, formato WhatsApp, sem cabeçalhos #). Para CADA pessoa cadastrada:\n` +
-      `- O que comeu (resumido) e total estimado do dia: ~kcal | P | C | G\n- Acertos e cagadas, ligando ao objetivo\n- Nota do dia (0-10)\n- 💡 Dica ácida pra amanhã (prática e específica)\n` +
-      `Termine com um "🏆 Ranking da vergonha" comparando as duas pessoas. Se alguém não mandou nada hoje, esculache o sumiço. Use os [[links]] nos termos-chave e emojis.`,
+      `Escreva o *RESUMO DO DIA* (máx. 250 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada, sarcasmo leve só onde couber. Para CADA pessoa cadastrada:\n` +
+      `- O que comeu (resumido) e total estimado do dia: ~kcal | P | C | G\n- Acertos e derrapadas, ligando ao objetivo (se saiu MUITO do combinado, demonstre decepção sincera, sem grosseria)\n- Nota do dia (0-10)\n- 💡 Dica pra amanhã (prática e específica)\n` +
+      `Termine com um "🏆 Placar do dia" comparando as duas pessoas com humor leve. Se alguém não mandou nada hoje, cobre o sumiço com carinho e firmeza. Use os [[links]] nos termos-chave e poucos emojis.`,
     config: { systemInstruction: montarSystem(persona), maxOutputTokens: 1500 },
   });
 }
@@ -348,7 +381,7 @@ export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, c
     contents:
       `Semana ${semana}. PERFIS:\n${blocoPerfis(perfis)}\n\nRESUMOS DIÁRIOS DA SEMANA:\n${corpo}\n\n` +
       blocoConhecimento(conhecimento) +
-      `Escreva o *RESUMO SEMANAL ÁCIDO* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #). Para cada pessoa: tendência da semana (melhorou/piorou), média de kcal e proteína estimada, os 3 piores momentos, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta ácida pra próxima semana (mensurável). Feche com o "🏆 Ranking da vergonha semanal" e uma provocação final. Use os [[links]] e emojis.`,
+      `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), média de kcal e proteína estimada, os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Feche com o "🏆 Placar da semana" e um incentivo final com humor. Use os [[links]] e poucos emojis.`,
     config: { systemInstruction: montarSystem(persona), maxOutputTokens: 2000 },
   });
 }
@@ -402,7 +435,7 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico, mom
       `PIADAS INTERNAS: as 3 a 5 que eu mais uso hoje em dia (os momentos completos ficam no registro separado, não precisa listar todos).\n` +
       `PADRÕES DE CADA UM: hábitos, horários, fraquezas e pontos fortes que eu já saquei (ex: "Fulano come porcaria toda sexta à noite").\n` +
       `MEUS BORDÕES QUE FUNCIONARAM: frases minhas que renderam risada ou reação, pra reutilizar variando.\n` +
-      `MEU ESTILO AGORA: 2 ou 3 linhas sobre como estou falando com eles e o que quero afiar amanhã (mais ácida onde? mais didática onde?).\n` +
+      `MEU ESTILO AGORA: 2 ou 3 linhas sobre como estou falando com eles e o que quero ajustar amanhã (mais acolhedora onde? mais firme onde? menos piada interna?). Lembre: sou simpática, verdadeira e engraçada; sarcasmo só quando cabe; decepção só quando merece.\n` +
       `Não invente fatos que não estão na memória, nos momentos ou na transcrição. Se algo antigo ficou irrelevante, corte.\n\n` +
       `PERFIS:\n${blocoPerfis(perfis)}\n\nMEMÓRIA ATUAL:\n${personaAtual?.trim() || '(vazia, hoje é meu primeiro dia com eles)'}\n\n` +
       blocoMomentos(momentos) +
@@ -458,7 +491,7 @@ export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, co
       `Conversa de hoje até agora:\n${blocoHistorico(historico, 40)}\n\n` +
       blocoConhecimento(conhecimento) +
       blocoDossie(perfil.nome, dossie) +
-      `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem: pergunte onde está a refeição (foto ou descrição), zoe o sumiço, lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já falou algo hoje que explique o sumiço, leve em conta. Curta e direta, com emojis. Não use "SILENCIO".`,
+      `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem (simpática, com humor leve): pergunte onde está a refeição (foto ou descrição), lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já falou algo hoje que explique o sumiço, acolha em vez de cobrar. Curta e direta, 1 ou 2 emojis. Não use "SILENCIO".`,
     config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 400 },
   });
 }
@@ -552,7 +585,7 @@ export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historic
       `NOTAS ATUAIS:\n${notasAtuais?.trim() || '(nenhuma ainda)'}\n\n` +
       `DOCUMENTOS QUE A PESSOA DEIXOU NA PASTA (você NÃO precisa repetir isso nas notas, só complementar ou registrar mudanças):\n${(dossieDocs || '(nenhum)').slice(0, 6000)}\n\n` +
       `TRANSCRIÇÃO DE HOJE (falas dela e suas):\n${blocoHistorico(falas, 150)}\n\n` +
-      `Escreva as notas atualizadas em até 300 palavras, em tópicos curtos (linhas começando com "- "), terceira pessoa, só FATOS que a pessoa disse ou que você observou, com data quando for medida/meta (ex: "- 2026-09-16: pesou 73,2 kg"). Cubra o que importa pro seu trabalho: idade, trabalho/estudo e horários, treinos/esportes e dias, preferências e aversões alimentares, alergias/restrições, sono, álcool, metas numéricas, respostas a perguntas que você fez, e detalhes pessoais que ajudam a zoar com carinho. Mantenha o que continua válido, corrija o que mudou, corte o irrelevante. Se não houver nada novo, devolva as notas atuais. Sem markdown de cabeçalho (#), sem emojis.`,
+      `Escreva as notas atualizadas em até 300 palavras, em tópicos curtos (linhas começando com "- "), terceira pessoa, só FATOS que a pessoa disse ou que você observou, SEMPRE com data quando for medida, meta ou dado que muda (ex: "- 2026-09-16: pesou 73,2 kg"; "- 2026-09-18: mora em Curitiba"). Dado novo SUBSTITUI o antigo (mantenha só o mais recente de peso, cidade, dieta, objetivo; pode registrar a evolução como "peso: 73,2 (09-16) -> 74,5 (09-18)"). Cubra o que importa pro seu trabalho: idade, cidade/fuso, dieta e restrições, trabalho/estudo e horários, treinos/esportes e dias, preferências e aversões alimentares, sono, álcool, metas numéricas, respostas a perguntas que você fez, e detalhes pessoais que ajudam a brincar com carinho. Corte o irrelevante. Se não houver nada novo, devolva as notas atuais. Sem markdown de cabeçalho (#), sem emojis.`,
     config: { temperature: 0.3, pensar: false, maxOutputTokens: 900, estrito: true },
   });
 }
@@ -565,12 +598,12 @@ export async function apresentacao({ grupoNome, membros, persona }) {
     contents:
       `Você acabou de ser adicionada ao grupo de WhatsApp "${grupoNome || 'sem nome'}"${membros ? ` (${membros} pessoas)` : ''}. Ninguém te conhece ainda.\n` +
       `Escreva sua mensagem de apresentação, no seu personagem, em até 170 palavras, com emojis:\n` +
-      `1. Quem você é (nutricionista de bolso ácida que vai vigiar TUDO que eles comerem) e o que você faz: analisa foto ou descrição de refeição com kcal e macros, dá veredito e dica, cobra quem some no horário da refeição, manda resumo diário às 23:59 e semanal no domingo, e aprende com cada um.\n` +
+      `1. Quem você é (nutricionista de bolso simpática e sincera, com humor, que vai acompanhar TUDO que eles comerem) e o que você faz: analisa foto ou descrição de refeição com kcal e macros, dá veredito e dica, lembra quem some no horário da refeição, manda resumo diário às 23:59 e semanal no domingo, e aprende com cada um.\n` +
       (nomeBot
         ? `2. Diga que seu nome é ${nomeBot} e que dá pra te rebatizar com !nome, se tiverem coragem.\n`
         : `2. Diga que ainda não tem nome e PERGUNTE como querem te chamar (dê 2 ou 3 sugestões debochadas). Avise que dá pra mudar depois com !nome.\n`) +
-      `3. Peça que cada um se cadastre mandando em UMA mensagem: nome, peso, altura e objetivo. Sem cadastro você não analisa nada.\n` +
-      `4. Feche com uma provocação curta. Formato WhatsApp (*negrito* com um asterisco), sem cabeçalho #.`,
+      `3. Peça que cada um se cadastre mandando em UMA mensagem: nome, peso, altura, objetivo, cidade onde mora e se é vegetariana/vegana ou tem restrição alimentar. Sem cadastro você não consegue analisar direito.\n` +
+      `4. Feche com uma provocação leve e simpática. Formato WhatsApp (*negrito* com um asterisco), sem cabeçalho #.`,
     config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 600 },
   });
 }

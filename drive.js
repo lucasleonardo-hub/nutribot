@@ -221,8 +221,10 @@ export function mdMomento(m) {
 
 export function mdPerfil(p) {
   return (
-    frontmatter({ tipo: 'perfil', nome: p.nome, peso_kg: p.peso, altura_cm: p.altura, objetivo: `"${p.objetivo}"`, tags: ['nutribot', 'perfil'] }) +
-    `\n# ${p.nome}\n\n- Peso: ${p.peso} kg\n- Altura: ${p.altura} cm\n- Objetivo: [[${p.objetivo}]]\n` +
+    frontmatter({ tipo: 'perfil', nome: p.nome, peso_kg: p.peso, altura_cm: p.altura, objetivo: `"${p.objetivo}"`, cidade: p.cidade ? `"${p.cidade}"` : '', fuso: p.fuso || '', dieta: p.dieta || '', tags: ['nutribot', 'perfil'] }) +
+    `\n# ${p.nome}\n\n- Peso: ${p.peso} kg${p.atualizacoes?.peso ? ` (atualizado em ${p.atualizacoes.peso})` : ''}\n- Altura: ${p.altura} cm\n- Objetivo: [[${p.objetivo}]]${p.atualizacoes?.objetivo ? ` (atualizado em ${p.atualizacoes.objetivo})` : ''}\n` +
+    (p.cidade ? `- Mora em: ${p.cidade}${p.fuso ? ` (fuso ${p.fuso})` : ''}${p.atualizacoes?.cidade ? ` (atualizado em ${p.atualizacoes.cidade})` : ''}\n` : '') +
+    (p.dieta ? `- Dieta: [[${p.dieta}]]${p.restricoes ? ` · restrições: ${p.restricoes}` : ''}\n` : '') +
     `- Gírias aprendidas: ${(p.girias || []).map((g) => `[[${g}]]`).join(', ') || 'nenhuma ainda'}\n` +
     (p.horarios ? `- Horários habituais: ${p.horarios}\n` : '') +
     (p.rotina ? `\n## Rotina observada\n${p.rotina}\n` : '') +
