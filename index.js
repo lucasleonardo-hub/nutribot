@@ -120,7 +120,9 @@ const SLOTS = [
   { id: 'ceia', nome: 'ceia', ini: 22 * 60 + 30, fim: 29 * 60, padrao: 23 * 60, cobrar: false }, // até 5h
 ];
 const ATRASO_COBRANCA_MIN = Number(process.env.ATRASO_COBRANCA_MIN) || 75; // minutos depois do horário habitual
+const JANELA_COBRANCA_MIN = Number(process.env.JANELA_COBRANCA_MIN) || 120; // depois disso não cobra mais (fica pro resumo do dia)
 const DIAS_ROTINA = 21; // janela pra aprender horários
+const PAPO_INTERVALO_MIN = Number(process.env.PAPO_INTERVALO_MIN) || 10; // papo aleatório: ela entra no máximo 1x a cada N min
 
 const minutosDe = (hhmm) => {
   const [h, m] = hhmm.split(':').map(Number);
@@ -484,8 +486,26 @@ async function batizar(nome, quem, jidGrupo, msg) {
 }
 
 // ============================================================
-// Lógica principal
+// Quando ela responde: sempre a foto, áudio, comando, pergunta, menção/resposta a ela e assunto dela (comida, treino,
+// sono, peso). Papo aleatório entre eles: no máximo uma vez a cada PAPO_INTERVALO_MIN, e nesse intervalo nem chama a IA.
 // ============================================================
+const ASSUNTO_DELA =
+  /(?<![\p{L}\p{N}])(comi|comer|comendo|comida|almo[cç]\p{L}*|jant\p{L}*|caf[eé]|lanch\p{L}*|ceia|marmita|prato|refei[cç][aã]o|bebi|beber|[aá]gua|treino|treinei|treinar|academia|corrid\p{L}*|v[oô]lei|dormi\p{L}*|sono|acordei|peso|pesei|balan[cç]a|dieta|fome|pizza|hamb[uú]rguer|refri\p{L}*|cerveja|doce\p{L}*|chocolate|bolo|sorvete|p[aã]o|p[aã]es|massa|macarr[aã]o|ifood|delivery|whey|creatina|prote[ií]na|kcal|caloria\p{L}*|macro\p{L}*|carbo\p{L}*|gordura|salada|frango|ovo\p{L}*|arroz|feij[aã]o|fruta\p{L}*|suplemento|jejum|nutri)(?![\p{L}\p{N}])/iu;
+let ultimoPapoEm = 0;
+
+function prioridade({ texto, temImagem, temAudio, conteudo, msg }) {
+  if (temImagem || temAudio) return 'midia';
+  if (/\?/.test(texto)) return 'pergunta';
+  const nome = ia.nomeDaBot().toLowerCase();
+  if (texto.toLowerCase().includes(nome) || /\bnutri\b/i.test(texto)) return 'mencao';
+  const ctx = conteudo.extendedTextMessage?.contextInfo;
+  if (ctx?.stanzaId && enviadosPeloBot.has(ctx.stanzaId)) return 'resposta-a-ela';
+  if (ctx?.participant && meusJids().includes(jidNormalizedUser(ctx.participant))) return 'resposta-a-ela';
+  if ((ctx?.mentionedJid || []).some((j) => meusJids().includes(jidNormalizedUser(j)))) return 'mencao';
+  if (ASSUNTO_DELA.test(texto)) return 'assunto';
+  return null; // papo aleatório
+}
+
 async function processar(msg) {
   if (!msg.message) return;
   if (msg.key.fromMe && enviadosPeloBot.has(msg.key.id)) return; // resposta do próprio bot
@@ -646,6 +666,14 @@ async function processar(msg) {
     }
   }
 
+  const motivo = prioridade({ texto, temImagem, temAudio, conteudo, msg });
+  const papoLiberado = Date.now() - ultimoPapoEm >= PAPO_INTERVALO_MIN * 60_000;
+  if (!motivo && !papoLiberado) {
+    // Papo entre eles dentro do intervalo: só guarda no histórico (ela "ouviu"), sem gastar IA nem responder
+    await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
+    return;
+  }
+
   const perfis = await enriquecerPerfis(await listarPerfis(), dia);
   const eu = perfis.find((p) => p.jids?.some((j) => jids.includes(j))) || perfil;
   const slot = slotDaHora(hora);
@@ -697,13 +725,17 @@ async function processar(msg) {
     }
   }
 
+  // Foi refeição? (foto, ou a Nutri analisou comida) -> registra pra aprender a rotina e não cobrar depois
+  const foiRefeicao = temImagem || /O que eu vi|Estimativa:/i.test(resposta || '');
+
+  // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
+  if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
+
   if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
   }
 
-  // Foi refeição? (foto, ou a Nutri analisou comida) -> registra pra aprender a rotina e não cobrar depois
-  const foiRefeicao = temImagem || /O que eu vi|Estimativa:/i.test(resposta || '');
   const resumoRefeicao = texto || (temImagem ? '[foto]' : temAudio ? '[áudio]' : '');
   if (foiRefeicao) {
     registrarRefeicao({
@@ -764,9 +796,12 @@ async function verificarCobrancas() {
   for (const p of perfis) {
     // pega só a refeição atrasada mais recente (se o bot ficou fora, não dispara 3 cobranças de uma vez)
     const pendentes = SLOTS.filter((s) => s.cobrar).filter((s) => {
-      const limite = p._hab[s.id].minutos + ATRASO_COBRANCA_MIN;
+      const h = p._hab[s.id];
+      if (!h.aprendido) return false; // só cobra horário que ela JÁ aprendeu (3+ refeições registradas nesse slot)
+      const limite = h.minutos + ATRASO_COBRANCA_MIN;
+      if (agoraMin < limite || agoraMin > limite + JANELA_COBRANCA_MIN) return false; // passou da janela: fica pro resumo do dia
       const jaMandou = hoje.some((r) => r.slot === s.id && p.jids.includes(r.jid));
-      return agoraMin >= limite && !jaMandou && !memoria.cobrancas[`${p.nome}:${s.id}`];
+      return !jaMandou && !memoria.cobrancas[`${p.nome}:${s.id}`];
     });
     if (!pendentes.length) continue;
     const slot = pendentes[pendentes.length - 1];
