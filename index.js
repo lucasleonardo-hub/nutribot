@@ -16,6 +16,7 @@ import makeWASocket, {
   extractMessageContent,
   getContentType,
   jidNormalizedUser,
+  WAMessageStubType,
 } from '@whiskeysockets/baileys';
 
 import {
@@ -381,6 +382,7 @@ async function conectarWhatsApp() {
     }
     if (connection === 'close') {
       const codigo = lastDisconnect?.error?.output?.statusCode;
+      const aguardavaQR = statusConexao === 'aguardando QR' || statusConexao === 'gerando QR novo';
       ultimoQR = null; // QR antigo não vale mais; /qr mostra "gerando" até vir outro
       statusConexao = codigo === DisconnectReason.timedOut ? 'gerando QR novo' : `desconectado (${codigo})`;
       if (encerrando) return;
@@ -389,6 +391,11 @@ async function conectarWhatsApp() {
         console.log('[wa] sessão deslogada. Limpando sessão no Mongo e gerando novo QR...');
         await limparSessao();
         quedasSeguidas = 0;
+      } else if (codigo === DisconnectReason.restartRequired || (codigo === DisconnectReason.timedOut && aguardavaQR)) {
+        // 515 = reinício normal logo depois de parear; 408 esperando QR = o QR expirou. Nada de backoff aqui.
+        espera = 1500;
+        quedasSeguidas = 0;
+        console.log(codigo === DisconnectReason.restartRequired ? '[wa] reinício pedido pelo WhatsApp (pós-pareamento), reconectando...' : '[wa] QR expirou, gerando outro...');
       } else {
         espera = Math.min(3000 * 2 ** quedasSeguidas, 120_000);
         quedasSeguidas++;
@@ -398,25 +405,48 @@ async function conectarWhatsApp() {
     }
   });
 
-  // Entrou num grupo? Se apresenta.
+  // Entrou num grupo? Se apresenta. Nesta versão do Baileys a adição chega como mensagem de sistema (stub) no
+  // messages.upsert, sem conteúdo; group-participants.update e groups.upsert ficam como caminhos alternativos.
   sock.ev.on('group-participants.update', ({ id, participants, action }) => {
     if (action !== 'add') return;
-    const meus = meusJids();
-    const euEntrei = (participants || []).some((p) => meus.includes(jidNormalizedUser(typeof p === 'string' ? p : p?.id || '')));
-    if (!euEntrei) return;
-    if (GRUPO_PERMITIDO && id !== GRUPO_PERMITIDO) return;
-    fila = fila.then(() => apresentar(id, 'adicionada ao grupo')).catch((e) => console.error('[apresentacao]', e.message));
+    if ((participants || []).some(souEu)) apresentarNaFila(id, 'adicionada ao grupo');
+  });
+  sock.ev.on('groups.upsert', (grupos) => {
+    for (const g of grupos || []) if (g?.id?.endsWith('@g.us')) apresentarNaFila(g.id, 'grupo criado comigo dentro');
   });
 
   sock.ev.on('messages.upsert', ({ messages, type }) => {
     for (const msg of messages) {
-      console.log(`[msg] tipo=${type} chat=${msg.key.remoteJid} fromMe=${msg.key.fromMe} conteudo=${getContentType(msg.message) || 'vazio'}`);
+      console.log(`[msg] tipo=${type} chat=${msg.key.remoteJid} fromMe=${msg.key.fromMe} conteudo=${getContentType(msg.message) || (msg.messageStubType ? `stub:${WAMessageStubType[msg.messageStubType]}` : 'vazio')}`);
     }
     for (const msg of messages) {
+      if (!msg.message && msg.messageStubType === WAMessageStubType.GROUP_PARTICIPANT_ADD && msg.key.remoteJid?.endsWith('@g.us')) {
+        const adicionados = (msg.messageStubParameters || []).map((p) => {
+          try {
+            return JSON.parse(p);
+          } catch {
+            return { id: p };
+          }
+        });
+        if (adicionados.some(souEu)) apresentarNaFila(msg.key.remoteJid, 'adicionada ao grupo');
+        continue;
+      }
       // 'notify' = mensagem nova de outra pessoa; 'append' + fromMe = digitada no celular do próprio bot
       if (type === 'notify' || (msg.key.fromMe && !enviadosPeloBot.has(msg.key.id))) enfileirar(msg);
     }
   });
+}
+
+// Um participante (string ou objeto {id, phoneNumber, lid}) é o próprio bot?
+function souEu(p) {
+  const meus = meusJids();
+  const ids = typeof p === 'string' ? [p] : [p?.id, p?.phoneNumber, p?.lid];
+  return ids.filter(Boolean).some((j) => meus.includes(jidNormalizedUser(j)));
+}
+
+function apresentarNaFila(jidGrupo, motivo) {
+  if (GRUPO_PERMITIDO && jidGrupo !== GRUPO_PERMITIDO) return;
+  fila = fila.then(() => apresentar(jidGrupo, motivo)).catch((e) => console.error('[apresentacao]', e.message));
 }
 
 // Processa uma mensagem por vez pra não embaralhar o contexto do dia
