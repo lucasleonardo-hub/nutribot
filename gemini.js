@@ -3,7 +3,7 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { gerarReserva, reservasDisponiveis } from './reservas.js';
 
-const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+const MODELO = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 let ai;
 
 function cliente() {
@@ -153,7 +153,8 @@ function blocoHistorico(mensagens, limite = 60) {
 }
 
 // Modelos reserva quando o principal está em "alta demanda" (503) ou sem cota (429)
-const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.5-flash,gemini-3.7-flash')
+// No nível gratuito a cota diária (RPD) é POR MODELO. Espalhar em vários modelos multiplica os pedidos por dia.
+const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite')
   .split(',')
   .map((m) => m.trim())
   .filter((m) => m && m !== MODELO);
@@ -162,6 +163,18 @@ const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.5-flash
 // 429 de cota DIÁRIA: 15 min. 429 por minuto: o que a API pedir (retryDelay) ou 60 s. 503 "alta demanda": 90 s. 404 (modelo não existe): 30 min.
 const castigoAte = new Map();
 const emCastigo = (model) => (castigoAte.get(model) || 0) > Date.now();
+
+/** Milissegundos até a próxima meia-noite no horário do Pacífico, quando a cota diária (RPD) do Gemini zera. */
+function msAteResetDiario() {
+  const partes = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      .formatToParts(new Date())
+      .map((x) => [x.type, x.value])
+  );
+  const segundos = (Number(partes.hour) % 24) * 3600 + Number(partes.minute) * 60 + Number(partes.second);
+  return (86400 - segundos) * 1000 + 60_000; // +1 min de folga
+}
+
 function castigar(model, e) {
   const msg = String(e?.message || '');
   const status = e?.status || e?.code;
@@ -170,10 +183,11 @@ function castigar(model, e) {
   else if (status === 402 || status === 403 || /credits are depleted|prepayment|PERMISSION_DENIED|billing/i.test(msg)) ms = 15 * 60_000; // cobrança/permissão: não muda em segundos
   else if (status === 429 || /quota|RESOURCE_EXHAUSTED/i.test(msg)) {
     const pedido = msg.match(/retry(?:Delay|\s+in)\D*(\d+(?:\.\d+)?)\s*s/i)?.[1];
-    ms = /per\s*day|daily|PerDay/i.test(msg) ? 15 * 60_000 : pedido ? Math.ceil(Number(pedido) * 1000) + 1000 : 60_000;
+    // Cota DIÁRIA (RPD) estourada: só volta à meia-noite no Pacífico. Cota por minuto: o que a API pedir, ou 60 s.
+    ms = /per\s*day|daily|PerDay/i.test(msg) ? msAteResetDiario() : pedido ? Math.ceil(Number(pedido) * 1000) + 1000 : 60_000;
   }
   castigoAte.set(model, Date.now() + ms);
-  console.warn(`[gemini] ${model} fora por ${Math.round(ms / 1000)}s`);
+  console.warn(`[gemini] ${model} fora por ${ms > 3600_000 ? `${(ms / 3600_000).toFixed(1)}h (cota diária; volta no reset das 4h-5h de Brasília)` : `${Math.round(ms / 1000)}s`}`);
 }
 
 // Consumo de tokens: uma linha por chamada e um acumulado do dia (zera na virada, no fuso do processo).
