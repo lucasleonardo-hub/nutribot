@@ -2,6 +2,7 @@
 
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { gerarReserva, reservasDisponiveis } from './reservas.js';
+export const reservasExternas = reservasDisponiveis;
 
 const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 let ai;
@@ -214,6 +215,17 @@ function contabilizar(model, u) {
   console.log(`[tokens] ${model}: ${k(entrada)} entrada (${k(cache)} em cache) + ${k(saida)} saída | hoje: ${uso.chamadas} chamadas, ${k(uso.entrada)} entrada, ${k(uso.saida)} saída`);
 }
 export const usoDeHoje = () => ({ ...uso });
+
+/** Situação de cada modelo agora: livre ou de castigo (e até quando). Pra !status e /status. */
+export function situacaoModelos() {
+  const agora = Date.now();
+  const linha = (m, papel) => {
+    const ate = castigoAte.get(m) || 0;
+    const restante = ate - agora;
+    return { modelo: m, papel, livre: restante <= 0, voltaEm: restante > 0 ? (restante > 3600_000 ? `${(restante / 3600_000).toFixed(1)}h` : `${Math.ceil(restante / 60_000)}min`) : null };
+  };
+  return [linha(MODELO, 'principal'), ...MODELOS_RESERVA.map((m) => linha(m, 'reserva')), ...MODELOS_LEVES.map((m) => linha(m, 'leve'))];
+}
 
 // Créditos do Gemini acabaram (402): avisa no log uma vez por hora, em destaque, pra não passar despercebido
 let ultimoAvisoCreditos = 0;

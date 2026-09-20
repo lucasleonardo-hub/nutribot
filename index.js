@@ -268,6 +268,7 @@ app.get('/status', (req, res) => {
     keepalive: KEEPALIVE_URL ? `${KEEPALIVE_URL}/ping a cada ${KEEPALIVE_MIN} min` : 'desligado',
     uptimeMin: Math.round(process.uptime() / 60),
     tokensGeminiHoje: ia.usoDeHoje(),
+    modelos: ia.situacaoModelos(),
   });
 });
 // Troca de número sem redeploy: desvincula o aparelho atual e gera um QR novo em /qr
@@ -637,7 +638,23 @@ async function processar(msg) {
     if (cmd === '!persona') {
       return enviar(jidGrupo, persona ? `🧠 *Minha memória de personalidade:*\n\n${persona}` : 'Ainda tô te conhecendo, criatura. Volta depois do primeiro resumo do dia. 🙄', msg);
     }
-    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !reset, !resumo (fecha o dia agora), !ajuda', msg);
+    if (cmd === '!status' || cmd === '!cota') {
+      const u = ia.usoDeHoje();
+      const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+      const modelos = ia.situacaoModelos();
+      const fora = modelos.filter((m) => !m.livre);
+      const linhas = [
+        `🩺 *Status da ${ia.nomeDaBot()}*`,
+        `WhatsApp: ${statusConexao} · no ar há ${Math.round(process.uptime() / 60)} min`,
+        `Hoje (${memoria.dia}): ${memoria.mensagens.length} mensagens na memória`,
+        `Gemini hoje: ${u.chamadas} chamadas · ${k(u.entrada)} tokens de entrada (${k(u.cache)} em cache) · ${k(u.saida)} de saída`,
+        `Modelos: ${modelos.length} na fila (${modelos.filter((m) => m.papel !== 'leve').length} Flash, ${modelos.filter((m) => m.papel === 'leve').length} Lite)`,
+        fora.length ? `De castigo: ${fora.map((m) => `${m.modelo} (volta em ${m.voltaEm})`).join(', ')}` : 'De castigo: nenhum ✅',
+        `Reservas externas: ${ia.reservasExternas().join(', ') || 'nenhuma'}`,
+      ];
+      return enviar(jidGrupo, linhas.join('\n'), msg, { rapido: true });
+    }
+    if (cmd === '!ajuda') return enviar(jidGrupo, 'Comandos: !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda', msg);
   }
 
   // ---------- Onboarding ----------
