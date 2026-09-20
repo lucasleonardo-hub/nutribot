@@ -3,7 +3,7 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { gerarReserva, reservasDisponiveis } from './reservas.js';
 
-const MODELO = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 let ai;
 
 function cliente() {
@@ -154,7 +154,7 @@ function blocoHistorico(mensagens, limite = 60) {
 
 // Modelos reserva quando o principal está em "alta demanda" (503) ou sem cota (429)
 // No nível gratuito a cota diária (RPD) é POR MODELO. Espalhar em vários modelos multiplica os pedidos por dia.
-const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.6-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite')
+const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite')
   .split(',')
   .map((m) => m.trim())
   .filter((m) => m && m !== MODELO);
@@ -218,11 +218,27 @@ function avisarCreditos(e) {
 }
 export const creditosEsgotados = () => Date.now() - ultimoAvisoCreditos < 60 * 60_000;
 
-// Série Gemini 3 controla raciocínio por thinkingLevel (MINIMAL só no Flash); a 2.5 usa thinkingBudget (0 = desligado).
+// Série Gemini 3 controla raciocínio por thinkingLevel; a 2.5 usa thinkingBudget (0 = desligado).
+// Nem todo modelo aceita MINIMAL (o 3.8 Flash responde 400): quando isso acontece, o modelo entra em `semMinimal`
+// e passa a receber LOW; se nem LOW servir, vai sem thinkingConfig (padrão do modelo).
+const nivelPensar = new Map(); // model -> 'MINIMAL' | 'LOW' | 'PADRAO'
 function configPensar(model, pensar) {
   if (pensar !== false) return {};
-  if (/gemini-3/i.test(model)) return { thinkingConfig: { thinkingLevel: /flash|lite/i.test(model) ? 'MINIMAL' : 'LOW' } };
+  if (/gemini-3/i.test(model)) {
+    const nivel = nivelPensar.get(model) || (/flash|lite/i.test(model) ? 'MINIMAL' : 'LOW');
+    return nivel === 'PADRAO' ? {} : { thinkingConfig: { thinkingLevel: nivel } };
+  }
   return { thinkingConfig: { thinkingBudget: 0 } };
+}
+/** Erro 400 de thinking level: rebaixa o nível desse modelo e devolve true pra tentar de novo na hora. */
+function rebaixarPensar(model, e) {
+  if (!/thinking\s*level|thinking_level|thinkingLevel/i.test(String(e?.message || ''))) return false;
+  const atual = nivelPensar.get(model) || 'MINIMAL';
+  const proximo = atual === 'MINIMAL' ? 'LOW' : atual === 'LOW' ? 'PADRAO' : null;
+  if (!proximo) return false;
+  nivelPensar.set(model, proximo);
+  console.warn(`[gemini] ${model} não aceita thinkingLevel ${atual}; usando ${proximo} daqui pra frente`);
+  return true;
 }
 
 /**
@@ -243,10 +259,19 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         const res = await cliente().models.generateContent({
           model,
           contents,
-          config: { safetySettings: SAFETY, temperature: 0.95, maxOutputTokens: 1024, ...configPensar(model, pensar), ...configApi },
+          config: { safetySettings: SAFETY, temperature: 0.95, maxOutputTokens: 1024, ...configPensar(model, pensar), ...configApi, _dobrado: undefined },
         });
         const texto = res.text?.trim();
         const fim = res.candidates?.[0]?.finishReason;
+        if (!texto && fim === 'MAX_TOKENS' && !configApi._dobrado) {
+          // Modelos que não desligam o raciocínio (3.8 Flash) gastam a saída pensando: repete com o dobro do limite
+          const atual = configApi.maxOutputTokens || 1024;
+          configApi.maxOutputTokens = Math.min(atual * 2, 8192);
+          configApi._dobrado = true;
+          console.warn(`[gemini] ${model} devolveu vazio por MAX_TOKENS; repetindo com maxOutputTokens=${configApi.maxOutputTokens}`);
+          i--;
+          continue;
+        }
         if (!texto) throw new Error(`Gemini respondeu vazio (finishReason: ${fim})`);
         if (fim === 'MAX_TOKENS') {
           if (estrito) throw Object.assign(new Error(`resposta cortada por maxOutputTokens (${configApi.maxOutputTokens || 1024})`), { cortada: true, parcial: texto });
@@ -259,6 +284,10 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         erro = e;
         if (e.cortada) throw e; // insistir não resolve e trocar de modelo também não
         const status = e?.status || e?.code;
+        if (status === 400 && pensar === false && rebaixarPensar(model, e)) {
+          i--; // mesma rodada, agora com o nível que o modelo aceita
+          continue;
+        }
         const transitorio =
           status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
         console.warn(`[gemini] ${model} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
