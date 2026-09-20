@@ -139,7 +139,7 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 
 - `npm test` roda os testes das funções puras (compilação de refeições, estimativas, datas, fusos, formatação pro WhatsApp). Leva 1 segundo.
 - A cada push na `main` o GitHub roda `npm test` e a checagem de sintaxe de todos os módulos ANTES de disparar o deploy no Render. Se algo quebrar, o deploy não acontece e o bot continua na versão anterior.
-- `util.js` concentra as funções puras (data/hora, slots de refeição, formatação); `resumo.js` compila refeições e semana em código. É por aí que a refatoração do `index.js` continua.
+- Módulos: `index.js` é só o boot (servidor HTTP, crons, desligamento). `mensagens.js` é o fluxo de cada mensagem; `comandos.js` os `!comandos`; `dia.js` memória do dia, daily note, fechamento do dia/semana e revisão mensal; `cobranca.js` a cobrança de refeição; `whatsapp.js` conexão e envio; `perfis.js` perfis com horários e atualização de dados; `estado.js` o estado compartilhado e a fila única; `util.js` funções puras; `resumo.js` compilação de refeições e semana em código.
 
 ## Comandos no grupo
 

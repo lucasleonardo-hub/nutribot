@@ -1,0 +1,326 @@
+// mensagens.js - O fluxo de cada mensagem do grupo: apresentação e nome, comandos, cadastro, decisão de responder ou não,
+// resposta da IA (com pesquisa quando ela não sabe), atualização de perfil e registro de refeição.
+
+import { extractMessageContent, jidNormalizedUser } from '@whiskeysockets/baileys';
+
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes } from './mongo.js';
+import { mdPerfil } from './drive.js';
+import * as ia from './gemini.js';
+import { docsPara, salvarPesquisa } from './conhecimento.js';
+import { pesquisar, formatarFontes } from './pesquisa.js';
+import { dossieDe, salvarFicha } from './pessoas.js';
+import { lerEstimativa, descricaoDaAnalise } from './resumo.js';
+import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome } from './util.js';
+import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
+import { enviar, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
+import { lembrar, garantirDiaAtual } from './dia.js';
+import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
+import { tratarComando } from './comandos.js';
+
+const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood após o bot voltar do sleep)
+const PAPO_INTERVALO_MIN = Number(process.env.PAPO_INTERVALO_MIN) || 10; // papo aleatório: ela entra no máximo 1x a cada N min
+
+const gruposIgnoradosLogados = new Set();
+
+// ============================================================
+// Entrada: o que o whatsapp.js chama
+// ============================================================
+export function enfileirarMensagem(msg) {
+  naFila('bot', () => processar(msg));
+}
+
+export function apresentarNaFila(jidGrupo, motivo) {
+  if (GRUPO_PERMITIDO && jidGrupo !== GRUPO_PERMITIDO) return;
+  naFila('apresentacao', () => apresentar(jidGrupo, motivo));
+}
+
+// ============================================================
+// Apresentação e nome
+// ============================================================
+// Chave do grupo dentro de config.apresentadoEm (JID tem ponto em "@g.us" e o Mongo não aceita ponto em nome de campo)
+export const chaveGrupo = (jid) => jid.replace(/\./g, '_');
+const jaApresentada = (jidGrupo) => Boolean(estado.config.apresentadoEm?.[chaveGrupo(jidGrupo)]);
+
+async function apresentar(jidGrupo, motivo) {
+  if (jaApresentada(jidGrupo)) return;
+  const meta = await estado.sock.groupMetadata(jidGrupo).catch(() => null);
+  console.log(`[apresentacao] ${motivo} em "${meta?.subject || jidGrupo}"`);
+  if (!estado.memoria.grupo) estado.memoria.grupo = jidGrupo;
+  const texto = await ia.apresentacao({ grupoNome: meta?.subject, membros: meta?.participants?.length, persona: estado.persona });
+  await enviar(jidGrupo, texto);
+  // Só marca como apresentada DEPOIS que a mensagem saiu: se a IA ou o envio falhar, tenta de novo na próxima
+  estado.config = await salvarConfig({ [`apresentadoEm.${chaveGrupo(jidGrupo)}`]: new Date().toISOString(), aguardandoNomeDesde: estado.config.nomeBot ? null : new Date().toISOString() });
+  await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto, tipo: 'bot' });
+}
+
+async function batizar(nome, quem, jidGrupo, msg) {
+  estado.config = await salvarConfig({ nomeBot: nome, aguardandoNomeDesde: null });
+  ia.definirNomeBot(nome);
+  console.log(`[apresentacao] batizada de "${nome}" por ${quem}`);
+  const reacao = await ia.reagirAoNome({ nome, quem, persona: estado.persona });
+  await enviar(jidGrupo, reacao, msg);
+  await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: reacao, tipo: 'bot' });
+}
+
+// ============================================================
+// Quando ela responde: sempre a foto, áudio, comando, pergunta, menção/resposta a ela e assunto dela (comida, treino,
+// sono, peso). Papo aleatório entre eles: no máximo uma vez a cada PAPO_INTERVALO_MIN, e nesse intervalo nem chama a IA.
+// ============================================================
+const ASSUNTO_DELA =
+  /(?<![\p{L}\p{N}])(comi|comer|comendo|comida|almo[cç]\p{L}*|jant\p{L}*|caf[eé]|lanch\p{L}*|ceia|marmita|prato|refei[cç][aã]o|bebi|beber|[aá]gua|treino|treinei|treinar|academia|corrid\p{L}*|v[oô]lei|dormi\p{L}*|sono|acordei|peso|pesei|balan[cç]a|dieta|fome|pizza|hamb[uú]rguer|refri\p{L}*|cerveja|doce\p{L}*|chocolate|bolo|sorvete|p[aã]o|p[aã]es|massa|macarr[aã]o|ifood|delivery|whey|creatina|prote[ií]na|kcal|caloria\p{L}*|macro\p{L}*|carbo\p{L}*|gordura|salada|frango|ovo\p{L}*|arroz|feij[aã]o|fruta\p{L}*|suplemento|jejum|nutri)(?![\p{L}\p{N}])/iu;
+let ultimoPapoEm = 0;
+
+export function prioridade({ texto, temImagem, temAudio, conteudo }) {
+  if (temImagem || temAudio) return 'midia';
+  if (/\?/.test(texto)) return 'pergunta';
+  if (mencionaNome(texto, ia.nomeDaBot()) || /\bnutri\b/i.test(texto)) return 'mencao';
+  const ctx = conteudo.extendedTextMessage?.contextInfo;
+  if (ctx?.stanzaId && enviadosPeloBot.has(ctx.stanzaId)) return 'resposta-a-ela';
+  if (ctx?.participant && meusJids().includes(jidNormalizedUser(ctx.participant))) return 'resposta-a-ela';
+  if ((ctx?.mentionedJid || []).some((j) => meusJids().includes(jidNormalizedUser(j)))) return 'mencao';
+  if (ASSUNTO_DELA.test(texto)) return 'assunto';
+  return null; // papo aleatório
+}
+
+// ============================================================
+// Lógica principal
+// ============================================================
+export async function processar(msg) {
+  if (!msg.message) return;
+  if (msg.key.fromMe && enviadosPeloBot.has(msg.key.id)) return; // resposta do próprio bot
+  const jidGrupo = msg.key.remoteJid;
+  if (!jidGrupo?.endsWith('@g.us')) return; // só grupos
+
+  if (GRUPO_PERMITIDO && jidGrupo !== GRUPO_PERMITIDO) {
+    if (!gruposIgnoradosLogados.has(jidGrupo)) {
+      gruposIgnoradosLogados.add(jidGrupo);
+      console.log(`[bot] ignorando grupo ${jidGrupo} (ALLOWED_GROUP_ID=${GRUPO_PERMITIDO})`);
+    }
+    return;
+  }
+
+  const ts = Number(msg.messageTimestamp) || 0;
+  if (ts && Date.now() / 1000 - ts > IDADE_MAX_MSG_S) return;
+
+  const conteudo = extractMessageContent(msg.message);
+  if (!conteudo) return;
+  const texto = (conteudo.conversation || conteudo.extendedTextMessage?.text || conteudo.imageMessage?.caption || '').trim();
+  const temImagem = Boolean(conteudo.imageMessage);
+  const temAudio = Boolean(conteudo.audioMessage);
+  if (!texto && !temImagem && !temAudio) return; // sticker, vídeo, documento etc.
+
+  await garantirDiaAtual();
+  if (!GRUPO_PERMITIDO && estado.memoria.grupo !== jidGrupo) {
+    estado.memoria.grupo = jidGrupo;
+    console.log(`[bot] respondendo no grupo ${jidGrupo}. Dica: coloque ALLOWED_GROUP_ID=${jidGrupo} no .env`);
+  }
+
+  const jids = jidsDoRemetente(msg.key);
+  if (!jids.length) return;
+  const nomeContato = msg.pushName || jids[0].split('@')[0];
+  const { dia, hora } = agora();
+  const { config } = estado;
+
+  // Primeira vez que ela vê esse grupo (ex.: entrou enquanto o bot estava offline): se apresenta antes de tudo
+  if (!jaApresentada(jidGrupo)) await apresentar(jidGrupo, 'primeira mensagem vista no grupo').catch((e) => console.error('[apresentacao]', e.message));
+
+  // Escolha do nome dela (nas 48h após a apresentação). Só mensagens curtas e SEM número: "Lucas, 80kg, 1,80m, secar" é cadastro,
+  // não batismo, e não pode gastar uma chamada de IA nem virar nome da bot.
+  if (!config.nomeBot && config.aguardandoNomeDesde && texto && !texto.startsWith('!') && texto.length <= 40 && !/\d/.test(texto)) {
+    const horas = (Date.now() - new Date(config.aguardandoNomeDesde).getTime()) / 36e5;
+    if (horas <= 48) {
+      const nome = await ia.extrairNomeBot(texto).catch(() => null);
+      if (nome) {
+        await batizar(nome, nomeContato, jidGrupo, msg);
+        return;
+      }
+    }
+  }
+
+  // ---------- Comandos utilitários ----------
+  if (await tratarComando({ texto, jids, jidGrupo, msg, dia, nomeContato, batizar })) return;
+
+  // ---------- Onboarding ----------
+  let perfil = await buscarPerfil(jids);
+
+  if (!perfil) {
+    await salvarPerfil({ jids, nome: nomeContato, onboarded: false, girias: [], criadoEm: new Date() });
+    const pedido = await ia.pedirOnboarding(nomeContato, estado.persona);
+    await enviar(jidGrupo, pedido, msg);
+    return;
+  }
+
+  if (!perfil.onboarded) {
+    if (!texto) return enviar(jidGrupo, 'Foto e áudio não valem como cadastro 😅 Manda em TEXTO: nome, peso, altura, objetivo, cidade onde mora e se é vegetariana(o) ou tem restrição.', msg);
+    const d = await ia.extrairDadosOnboarding(texto);
+    const parcial = { jids, atualizacoes: { ...(perfil.atualizacoes || {}) } };
+    const marcar = (campo, valor) => {
+      parcial[campo] = valor;
+      parcial.atualizacoes[campo] = dia;
+    };
+    if (d.nome) marcar('nome', d.nome);
+    if (d.peso_kg) marcar('peso', d.peso_kg);
+    if (d.altura_cm) marcar('altura', d.altura_cm);
+    if (d.objetivo) marcar('objetivo', d.objetivo);
+    if (d.cidade) marcar('cidade', d.cidade);
+    if (fusoValido(d.fuso)) marcar('fuso', d.fuso);
+    if (d.dieta) marcar('dieta', d.dieta);
+    if (d.restricoes) marcar('restricoes', d.restricoes);
+    perfil = await salvarPerfil(parcial);
+
+    const faltando = [];
+    if (!perfil.nome) faltando.push('nome');
+    if (!perfil.peso) faltando.push('peso');
+    if (!perfil.altura) faltando.push('altura');
+    if (!perfil.objetivo) faltando.push('objetivo');
+    if (!perfil.cidade) faltando.push('cidade onde mora');
+    if (!perfil.dieta) faltando.push('se é vegetariana(o)/vegana(o) ou come de tudo');
+    if (faltando.length) return enviar(jidGrupo, await ia.cobrarDadosFaltando(faltando, estado.persona), msg);
+
+    perfil = await salvarPerfil({ jids, onboarded: true });
+    const dossieNovo = await dossieDe(perfil).catch((e) => (console.error('[pessoas]', e.message), ''));
+    const bemVindo = await ia.boasVindas(perfil, estado.persona, dossieNovo);
+    await enviar(jidGrupo, bemVindo);
+    await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: bemVindo, tipo: 'bot' });
+    salvarFicha(perfil, mdPerfil(perfil)).catch((e) => console.error('[drive]', e.message));
+    return;
+  }
+
+  // ---------- Fluxo normal: texto e/ou foto ----------
+  let imagem = null;
+  let mimeType = null;
+  if (temImagem) {
+    // aviso imediato: a análise da foto demora alguns segundos
+    enviar(jidGrupo, acaso(ACKS_FOTO), msg, { rapido: true }).catch(() => {});
+    try {
+      imagem = await baixarMidia(msg);
+      mimeType = conteudo.imageMessage.mimetype || 'image/jpeg';
+    } catch (e) {
+      console.error('[wa] falha ao baixar imagem:', e.message);
+      return enviar(jidGrupo, 'Tua foto não chegou inteira aqui. Manda de novo? 🙏', msg);
+    }
+  }
+
+  let audio = null;
+  let audioMime = null;
+  if (temAudio) {
+    try {
+      audio = await baixarMidia(msg);
+      audioMime = (conteudo.audioMessage.mimetype || 'audio/ogg').split(';')[0];
+    } catch (e) {
+      console.error('[wa] falha ao baixar áudio:', e.message);
+      return enviar(jidGrupo, 'Teu áudio não baixou. Manda de novo ou digita pra mim? 🙏', msg);
+    }
+  }
+
+  const motivo = prioridade({ texto, temImagem, temAudio, conteudo });
+  const papoLiberado = Date.now() - ultimoPapoEm >= PAPO_INTERVALO_MIN * 60_000;
+  if (!motivo && !papoLiberado) {
+    // Papo entre eles dentro do intervalo: só guarda no histórico (ela "ouviu"), sem gastar IA nem responder
+    await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
+    return;
+  }
+
+  const perfis = await enriquecerPerfis(await listarPerfis(), dia);
+  const eu = perfis.find((p) => p.jids?.some((j) => jids.includes(j))) || perfil;
+  // Hora no fuso da pessoa (cidade informada no cadastro/conversa); sem cidade, usa o fuso do grupo
+  const horaLocal = agora(fusoDe(eu)).hora;
+  const slot = slotDaHora(horaLocal);
+  const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
+  const contextoHorario =
+    `hora local de ${perfil.nome}: ${horaLocal}${eu.cidade ? ` em ${eu.cidade}` : ' (cidade/fuso ainda não informados, pode estar errada)'}; ` +
+    `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}`;
+  // Papo aleatório não leva dossiê nem base de conhecimento (só persona, perfis e histórico): metade dos tokens
+  const dossie = motivo ? await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), '')) : '';
+  const conhecimento = motivo ? docsPara(eu, { texto }) : '';
+  const momentos = await momentosRecentes(12).catch(() => []);
+  const entradaTexto = temImagem ? `📷 [foto de comida]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto;
+  const historico = [...estado.memoria.mensagens];
+  await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : temAudio ? 'audio' : 'texto' });
+
+  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos };
+  let resposta;
+  let atualizacao = null;
+  try {
+    // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
+    ({ texto: resposta, atualizacao } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
+  } catch (e) {
+    // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
+    console.error('[ia] falha total:', e.message);
+    estado.memoria.mensagens.pop(); // não deixa a mensagem sem resposta no histórico como se tivesse sido ignorada
+    persistirMemoria(estado.memoria).catch(() => {});
+    return enviar(
+      jidGrupo,
+      acaso([
+        'Meu cérebro travou agora (a IA tá fora do ar). Me manda isso de novo daqui a 1 min? 🤯',
+        'Minha conexão com a IA caiu. Repete em um minutinho que eu respondo. 🔌',
+        'Tô offline da cabeça por uns segundos, o servidor engasgou. Manda de novo já já. 😵‍💫',
+      ]),
+      msg,
+      { rapido: true }
+    );
+  }
+
+  // A Nutri não sabia: pesquisa (PubMed/Wikipedia), responde de novo e guarda a nota de estudo no Drive
+  const pedido = resposta?.match(/^\s*PESQUISAR:\s*(.+?)\s*$/im);
+  if (pedido) {
+    const consulta = pedido[1].replace(/["*]/g, '').trim();
+    console.log(`[pesquisa] Nutri pediu pra pesquisar: ${consulta}`);
+    enviar(jidGrupo, acaso(['Boa pergunta. Deixa eu conferir isso direito antes de falar besteira. 📚', 'Isso eu não vou chutar. Pesquisando... 🔎', 'Segura que eu vou ler sobre isso rapidinho. 🤓']), msg, { rapido: true }).catch(() => {});
+    const fontes = await pesquisar({ en: consulta, pt: texto }).catch((e) => (console.error('[pesquisa]', e.message), []));
+    const fontesTxt = formatarFontes(fontes, 8);
+    const r2 = await ia.responder({
+      ...base,
+      jaPesquisou: true,
+      conhecimento: `${docsPara(eu, { texto })}\n\n### Pesquisa que você acabou de fazer sobre "${consulta}"\n${fontesTxt}`,
+    });
+    resposta = r2.texto;
+    atualizacao = r2.atualizacao || atualizacao;
+    if (fontes.length) {
+      ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
+        .then((nota) => salvarPesquisa({ consulta, nota, fontes, dia }))
+        .then((d) => console.log(`[pesquisa] nota salva: ${d.id}`))
+        .catch((e) => console.error('[pesquisa] falha ao salvar nota:', e.message));
+    }
+  }
+
+  // Foi refeição? (foto, ou a Nutri analisou comida) -> registra pra aprender a rotina e não cobrar depois
+  const foiRefeicao = temImagem || /O que eu vi|Estimativa[^:\n]*:/i.test(resposta || ''); // inclui "Estimativa corrigida:"
+
+  // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
+  if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
+
+  // A pessoa contou um dado novo (peso, cidade, dieta...): sobrescreve o perfil agora, com a data, e a ficha no Drive
+  if (atualizacao && typeof atualizacao === 'object') {
+    const novo = aplicarAtualizacao(perfil, atualizacao, dia);
+    if (novo) {
+      perfil = await salvarPerfil(novo).catch((e) => (console.error('[perfil] falha ao atualizar:', e.message), perfil));
+      console.log(`[perfil] ${perfil.nome} atualizado: ${Object.keys(novo).filter((k) => !['jids', 'atualizacoes'].includes(k)).join(', ')}`);
+      salvarFicha(perfil, mdPerfil(perfil)).catch(() => {});
+    }
+  }
+
+  if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
+    await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
+    await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
+  }
+
+  const resumoRefeicao = texto || (temImagem ? '[foto]' : temAudio ? '[áudio]' : '');
+  if (foiRefeicao) {
+    registrarRefeicao({
+      jid: jids[0],
+      nome: perfil.nome,
+      dia,
+      hora,
+      minutos: minutosDe(horaLocal), // no fuso da pessoa: é assim que ela aprende o horário habitual
+      slot: slot.id,
+      resumo: resumoRefeicao.slice(0, 120),
+      descricao: descricaoDaAnalise(resposta, resumoRefeicao),
+      estimativa: lerEstimativa(resposta), // kcal e macros da análise, gravados agora: o resumo semanal soma daqui
+    }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
+    const mensagens = estado.memoria.mensagens;
+    const ultima = mensagens[mensagens.length - (resposta ? 2 : 1)];
+    if (ultima) ultima.refeicao = slot.id;
+  }
+  // A daily note do Drive é regerada a partir da memória (agendarDiario, chamado por lembrar)
+}
