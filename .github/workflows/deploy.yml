@@ -1,11 +1,28 @@
-# Dispara o deploy no Render a cada push na main (o repo não está conectado via GitHub App, então não há webhook automático).
+# Roda os testes e, se passarem, dispara o deploy no Render a cada push na main
+# (o repo não está conectado via GitHub App, então não há webhook automático).
 name: deploy-render
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: sintaxe de todos os módulos
+        run: for f in *.js; do node --check "$f"; done
   deploy:
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:

@@ -2,7 +2,8 @@
 
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { gerarReserva, reservasDisponiveis } from './reservas.js';
-export const reservasExternas = reservasDisponiveis;
+import { agora, dataExtenso, formatarDuracao, formatarTokens } from './util.js';
+export { dataExtenso };
 
 const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 let ai;
@@ -101,15 +102,6 @@ export function montarSystem(persona) {
 // Helpers
 // ============================================================
 
-/** "domingo, 20/09/2026" a partir de "2026-09-20". O dia da semana vem do código: modelo de linguagem erra isso com frequência. */
-export function dataExtenso(dia) {
-  try {
-    return new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${dia}T12:00:00Z`));
-  } catch {
-    return dia;
-  }
-}
-
 function blocoPerfis(perfis) {
   if (!perfis?.length) return 'Nenhum perfil cadastrado ainda.';
   return perfis
@@ -145,11 +137,21 @@ function blocoMomentos(momentos) {
   return `MOMENTOS MEMORÁVEIS (sua memória de longo prazo; puxe quando couber, com data):\n${momentos.map((m) => `- ${m.dia} · ${m.pessoa}: ${m.texto}`).join('\n')}\n\n`;
 }
 
+// Respostas longas da bot entram resumidas no histórico (primeiros caracteres + a linha de estimativa, se houver):
+// o que importa pra continuidade é o que foi dito, não a análise inteira de novo. Corta ~40% dos tokens por mensagem.
+const HISTORICO_MAX_CHARS_BOT = Number(process.env.HISTORICO_MAX_CHARS_BOT) || 350;
+function encurtarFala(m) {
+  const t = String(m.texto || '');
+  if (m.tipo !== 'bot' || t.length <= HISTORICO_MAX_CHARS_BOT) return t;
+  const estimativa = t.match(/🔥\s*\*?Estimativa[^\n]*/)?.[0];
+  const cabeca = t.slice(0, HISTORICO_MAX_CHARS_BOT).replace(/\s+\S*$/, '');
+  return `${cabeca} […]${estimativa && !cabeca.includes(estimativa) ? `\n${estimativa}` : ''}`;
+}
 function blocoHistorico(mensagens, limite = 60) {
   if (!mensagens?.length) return '(nenhuma mensagem ainda hoje)';
   return mensagens
     .slice(-limite)
-    .map((m) => `[${m.hora}] ${m.nome}: ${m.texto}`)
+    .map((m) => `[${m.hora}] ${m.nome}: ${encurtarFala(m)}`)
     .join('\n');
 }
 
@@ -167,7 +169,8 @@ const MODELOS_LEVES = (process.env.GEMINI_MODELOS_LEVES || 'gemini-3.5-flash-lit
   .filter((m) => m && m !== MODELO && !MODELOS_RESERVA.includes(m));
 
 // Modelo que acabou de falhar fica "de castigo" por um tempo, pra não gastar tentativas (e segundos) nele a cada mensagem.
-// 429 de cota DIÁRIA: 15 min. 429 por minuto: o que a API pedir (retryDelay) ou 60 s. 503 "alta demanda": 90 s. 404 (modelo não existe): 30 min.
+// 429 de cota DIÁRIA: até o reset (meia-noite no Pacífico). 429 por minuto: o que a API pedir (retryDelay) ou 60 s.
+// 503 "alta demanda": 90 s. 404 (modelo não existe): 30 min. 402/403 (crédito/permissão): 15 min.
 const castigoAte = new Map();
 const emCastigo = (model) => (castigoAte.get(model) || 0) > Date.now();
 
@@ -194,16 +197,19 @@ function castigar(model, e) {
     ms = /per\s*day|daily|PerDay/i.test(msg) ? msAteResetDiario() : pedido ? Math.ceil(Number(pedido) * 1000) + 1000 : 60_000;
   }
   castigoAte.set(model, Date.now() + ms);
-  console.warn(`[gemini] ${model} fora por ${ms > 3600_000 ? `${(ms / 3600_000).toFixed(1)}h (cota diária; volta no reset das 4h-5h de Brasília)` : `${Math.round(ms / 1000)}s`}`);
+  console.warn(`[gemini] ${model} fora por ${formatarDuracao(ms)}${ms > 3600_000 ? ' (cota diária; volta no reset das 4h-5h de Brasília)' : ''}`);
 }
 
-// Consumo de tokens: uma linha por chamada e um acumulado do dia (zera na virada, no fuso do processo).
-// Serve pra comparar com a cota do plano (por minuto e por dia) sem chutar.
+// Consumo de tokens: uma linha por chamada e um acumulado do dia (dia no fuso do grupo, igual ao resto do bot;
+// zera na virada tanto ao gravar quanto ao ler). Serve pra comparar com a cota do plano sem chutar.
 const uso = { dia: '', chamadas: 0, entrada: 0, saida: 0, cache: 0 };
+function zerarSeVirouDia() {
+  const hoje = agora().dia;
+  if (uso.dia !== hoje) Object.assign(uso, { dia: hoje, chamadas: 0, entrada: 0, saida: 0, cache: 0 });
+}
 function contabilizar(model, u) {
   if (!u) return;
-  const hoje = new Date().toISOString().slice(0, 10);
-  if (uso.dia !== hoje) Object.assign(uso, { dia: hoje, chamadas: 0, entrada: 0, saida: 0, cache: 0 });
+  zerarSeVirouDia();
   const entrada = u.promptTokenCount || 0;
   const saida = (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0);
   const cache = u.cachedContentTokenCount || 0;
@@ -211,10 +217,13 @@ function contabilizar(model, u) {
   uso.entrada += entrada;
   uso.saida += saida;
   uso.cache += cache;
-  const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const k = formatarTokens;
   console.log(`[tokens] ${model}: ${k(entrada)} entrada (${k(cache)} em cache) + ${k(saida)} saída | hoje: ${uso.chamadas} chamadas, ${k(uso.entrada)} entrada, ${k(uso.saida)} saída`);
 }
-export const usoDeHoje = () => ({ ...uso });
+export function usoDeHoje() {
+  zerarSeVirouDia();
+  return { ...uso };
+}
 
 /** Situação de cada modelo agora: livre ou de castigo (e até quando). Pra !status e /status. */
 export function situacaoModelos() {
@@ -222,7 +231,7 @@ export function situacaoModelos() {
   const linha = (m, papel) => {
     const ate = castigoAte.get(m) || 0;
     const restante = ate - agora;
-    return { modelo: m, papel, livre: restante <= 0, voltaEm: restante > 0 ? (restante > 3600_000 ? `${(restante / 3600_000).toFixed(1)}h` : `${Math.ceil(restante / 60_000)}min`) : null };
+    return { modelo: m, papel, livre: restante <= 0, voltaEmMs: restante > 0 ? restante : 0, voltaEm: restante > 0 ? formatarDuracao(restante) : null };
   };
   return [linha(MODELO, 'principal'), ...MODELOS_RESERVA.map((m) => linha(m, 'reserva')), ...MODELOS_LEVES.map((m) => linha(m, 'leve'))];
 }
@@ -371,7 +380,7 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
     `PERFIS DO GRUPO:\n${blocoPerfis(perfis)}\n\n` +
     blocoDossie(perfil.nome, dossie) +
     blocoMomentos(momentos) +
-    `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico)}\n\n` +
+    `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico, 50)}\n\n` +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
     `DATA E HORA: ${dataExtenso(dia)}, ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
     `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada - analise a comida da imagem)' : ''}${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
@@ -486,22 +495,26 @@ export async function resumoDiario({ dia, perfis, historico, persona, refeicoes 
       `💡 Dica pra amanhã (prática e específica).\n` +
       `Se a pessoa não registrou nada, diga isso e cobre o sumiço com carinho e firmeza. Termine com um "🏆 Placar do dia" comparando as duas com humor leve. ` +
       `REGRAS DE FORMATO: nutrientes sempre por extenso (Proteína, Carboidratos, Gorduras), nunca P/C/G; use [[links]] nos termos-chave; poucos emojis; não repita o bloco "O que eu vi / Veredito" das análises, isso é resumo, não análise.`,
-    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 1800 },
+    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 3600 },
   });
 }
 
 // ============================================================
 // 4) Resumo Semanal (domingo)
 // ============================================================
-export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, conhecimento }) {
+/**
+ * @param {string} p.tabela  totais por dia e média, compilados em código (resumo.js compilarSemana). A IA não soma nada.
+ */
+export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, tabela }) {
   const corpo =
-    resumosDiarios.map((r) => `### ${r.dia}\n${r.conteudo}`).join('\n\n') || '(nenhum resumo diário encontrado)';
+    resumosDiarios.map((r) => `### ${r.dia}\n${r.conteudo.slice(0, 1500)}`).join('\n\n') || '(nenhum resumo diário encontrado)';
   return gerar({
     contents:
-      `Semana ${semana}. PERFIS:\n${blocoPerfis(perfis)}\n\nRESUMOS DIÁRIOS DA SEMANA:\n${corpo}\n\n` +
-      blocoConhecimento(conhecimento) +
-      `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), média diária estimada escrita por extenso ("~X kcal · Proteína X g · Carboidratos X g · Gorduras X g"), os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Feche com o "🏆 Placar da semana" e um incentivo final com humor. Nutrientes sempre por extenso, nunca P/C/G. Use os [[links]] e poucos emojis.`,
-    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 2000 },
+      `Semana ${semana}. PERFIS:\n${blocoPerfis(perfis)}\n\n` +
+      `NÚMEROS DA SEMANA, POR PESSOA (compilados pelo sistema; use ESTES valores, sem recalcular):\n${tabela}\n\n` +
+      `RESUMOS DIÁRIOS DA SEMANA (contexto de acertos, derrapadas e momentos):\n${corpo}\n\n` +
+      `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), a média diária do bloco de números escrita por extenso ("~X kcal · Proteína X g · Carboidratos X g · Gorduras X g") e se bate a meta de proteína, os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Dias sem registro contam como sumiço: cobre com carinho. Feche com o "🏆 Placar da semana" e um incentivo final com humor. Nutrientes sempre por extenso, nunca P/C/G. Use os [[links]] e poucos emojis.`,
+    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 4000 },
   });
 }
 
@@ -560,7 +573,7 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico, mom
       `PERFIS:\n${blocoPerfis(perfis)}\n\nMEMÓRIA ATUAL:\n${personaAtual?.trim() || '(vazia, hoje é meu primeiro dia com eles)'}\n\n` +
       blocoMomentos(momentos) +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 400)}`,
-    config: { systemInstruction: montarSystem(''), temperature: 0.7, maxOutputTokens: 1200, estrito: true },
+    config: { systemInstruction: montarSystem(''), temperature: 0.7, maxOutputTokens: 2400, estrito: true },
   });
 }
 
@@ -648,7 +661,7 @@ export async function revisarConhecimento({ doc, fontes, dia }) {
       `3. Não mude o título principal (#).\n\n` +
       `DOCUMENTO ATUAL (${doc.titulo}, v${doc.versao}, atualizado ${doc.atualizado}):\n${doc.corpo}\n\n` +
       `FONTES NOVAS:\n${fontes}`,
-    config: { temperature: 0.2, maxOutputTokens: 6000, estrito: true },
+    config: { temperature: 0.2, maxOutputTokens: 12000, estrito: true },
   });
 }
 

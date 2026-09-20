@@ -120,24 +120,36 @@ function focosDe(objetivo) {
   return achados.length ? achados : ['saude'];
 }
 
+const ASSUNTO_ROTINA = /marmita|hor[aá]rio|pr[eé].?treino|p[oó]s.?treino|antes do treino|depois do treino|jejum|timing|janela|refei[cç][aã]o pulada|pular refei|ceia|caf[eé] da manh/i;
+
 /**
  * Texto de conhecimento pra entrar no prompt: Base + documentos dos focos das pessoas.
- * Aceita um perfil ou uma lista de perfis. Sempre inclui "rotina" (horários/marmita).
+ * Aceita um perfil ou uma lista de perfis.
+ * @param {object} [op]
+ * @param {string} [op.texto]   mensagem atual (pode ser '' numa foto sem legenda). Sem `texto` (resumos, revisão) vai a base
+ *                              completa; com texto, o documento de rotina/marmita só entra se a mensagem falar disso.
+ * @param {boolean} [op.soBase] só o documento base (cobrança de refeição, que não precisa da base inteira).
  */
-export function docsPara(perfilOuLista) {
+export function docsPara(perfilOuLista, { texto, soBase = false } = {}) {
   const perfis = Array.isArray(perfilOuLista) ? perfilOuLista : [perfilOuLista];
-  const focos = new Set(['base', 'rotina']);
-  for (const p of perfis) {
-    for (const f of focosDe(p?.objetivo)) focos.add(f);
-    if (/vegetar|vegan/i.test(p?.dieta || '') || /vegetar|vegan/i.test(p?.restricoes || '')) focos.add('vegetariana');
+  const completo = texto === undefined && !soBase;
+  const focos = new Set(['base']);
+  if (!soBase) {
+    if (completo || ASSUNTO_ROTINA.test(texto || '')) focos.add('rotina');
+    for (const p of perfis) {
+      for (const f of focosDe(p?.objetivo)) focos.add(f);
+      if (/vegetar|vegan/i.test(p?.dieta || '') || /vegetar|vegan/i.test(p?.restricoes || '')) focos.add('vegetariana');
+    }
   }
 
   const escolhidos = [...docs.values()].filter((d) => focos.has(d.foco)).sort((a, b) => (a.foco === 'base' ? -1 : b.foco === 'base' ? 1 : a.id.localeCompare(b.id)));
-  // pesquisas recentes que ela mesma fez no meio da conversa (as 4 mais novas, resumidas)
-  const pesquisas = [...docs.values()]
-    .filter((d) => d.foco === 'pesquisa')
-    .sort((a, b) => String(b.atualizado).localeCompare(String(a.atualizado)))
-    .slice(0, 4);
+  // pesquisas recentes que ela mesma fez no meio da conversa (as 2 mais novas, resumidas)
+  const pesquisas = soBase
+    ? []
+    : [...docs.values()]
+        .filter((d) => d.foco === 'pesquisa')
+        .sort((a, b) => String(b.atualizado).localeCompare(String(a.atualizado)))
+        .slice(0, 2);
   if (!escolhidos.length && !pesquisas.length) return '';
   const cortar = (t, n) => (t.length > n ? t.slice(0, n) + '\n[...]' : t);
   return [

@@ -45,15 +45,34 @@ import * as ia from './gemini.js';
 import { carregarConhecimento, docsPara, atualizarConhecimento, listarDocs, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha, listarDocumentosDe } from './pessoas.js';
-import { compilarRefeicoes } from './resumo.js';
+import { compilarRefeicoes, compilarSemana, lerEstimativa, descricaoDaAnalise } from './resumo.js';
+import { reservasDisponiveis } from './reservas.js';
+import {
+  TZ,
+  fusoDe,
+  fusoValido,
+  agora,
+  semanaISO,
+  diaSeguinte,
+  diasAnteriores,
+  ehDomingo,
+  formatarTokens,
+  SLOTS,
+  minutosDe,
+  hhmmDe,
+  slotDaHora,
+  horariosHabituais,
+  descreverHorarios,
+  paraWhatsApp,
+  semLinhaAtualizar,
+  mencionaNome,
+} from './util.js';
 
 // ============================================================
 // Configuração
 // ============================================================
-const TZ = process.env.TZ || 'America/Sao_Paulo';
 const PORT = Number(process.env.PORT) || 3000;
 const GRUPO_PERMITIDO = (process.env.ALLOWED_GROUP_ID || '').trim(); // vazio = responde em qualquer grupo
-const MANTER_COLCHETES = process.env.MANTER_COLCHETES_NO_ZAP === 'true';
 const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood após o bot voltar do sleep)
 const ADMIN_TOKEN = (process.env.ADMIN_TOKEN || '').trim(); // protege /logout e /status
 // URL pública do serviço. O Render preenche RENDER_EXTERNAL_URL sozinho; KEEPALIVE_URL serve pra outros hosts.
@@ -63,111 +82,13 @@ const KEEPALIVE_MIN = Number(process.env.KEEPALIVE_MINUTES) || 10; // Render fre
 const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
 // ============================================================
-// Data / hora no fuso certo
+// Refeições e horários (helpers puros em util.js)
 // ============================================================
-function fusoValido(tz) {
-  if (!tz || typeof tz !== 'string') return false;
-  try {
-    new Intl.DateTimeFormat('sv-SE', { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
-}
-const fusoDe = (perfil) => (fusoValido(perfil?.fuso) ? perfil.fuso : TZ);
-
-function agora(tz = TZ) {
-  const partes = new Intl.DateTimeFormat('sv-SE', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-    weekday: 'short',
-  }).formatToParts(new Date());
-  const g = (t) => partes.find((p) => p.type === t)?.value;
-  return {
-    dia: `${g('year')}-${g('month')}-${g('day')}`,
-    hora: `${g('hour')}:${g('minute')}`,
-    horaArquivo: `${g('hour')}-${g('minute')}-${g('second')}`,
-    domingo: g('weekday')?.toLowerCase().startsWith('sun') || g('weekday')?.toLowerCase().startsWith('dom'),
-  };
-}
-
-function semanaISO(diaStr) {
-  const d = new Date(`${diaStr}T12:00:00Z`);
-  const diaSemana = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() + 4 - diaSemana);
-  const inicioAno = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  const semana = Math.ceil(((d - inicioAno) / 86400000 + 1) / 7);
-  return `${d.getUTCFullYear()}-W${String(semana).padStart(2, '0')}`;
-}
-
-function diaSeguinte(diaStr) {
-  const d = new Date(`${diaStr}T12:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
-}
-
-function diasAnteriores(diaStr, n) {
-  const base = new Date(`${diaStr}T12:00:00Z`);
-  return Array.from({ length: n }, (_, i) => {
-    const d = new Date(base);
-    d.setUTCDate(d.getUTCDate() - (n - 1 - i));
-    return d.toISOString().slice(0, 10);
-  });
-}
-
-// ============================================================
-// Refeições e horários
-// ============================================================
-const SLOTS = [
-  { id: 'cafe', nome: 'café da manhã', ini: 5 * 60, fim: 10 * 60 + 30, padrao: 8 * 60 + 30, cobrar: true },
-  { id: 'almoco', nome: 'almoço', ini: 10 * 60 + 30, fim: 14 * 60 + 30, padrao: 12 * 60 + 30, cobrar: true },
-  { id: 'lanche', nome: 'lanche da tarde', ini: 14 * 60 + 30, fim: 18 * 60, padrao: 16 * 60, cobrar: false },
-  { id: 'jantar', nome: 'jantar', ini: 18 * 60, fim: 22 * 60 + 30, padrao: 20 * 60, cobrar: true },
-  { id: 'ceia', nome: 'ceia', ini: 22 * 60 + 30, fim: 29 * 60, padrao: 23 * 60, cobrar: false }, // até 5h
-];
 const ATRASO_COBRANCA_MIN = Number(process.env.ATRASO_COBRANCA_MIN) || 75; // minutos depois do horário habitual
 const JANELA_COBRANCA_MIN = Number(process.env.JANELA_COBRANCA_MIN) || 120; // depois disso não cobra mais (fica pro resumo do dia)
 const DIAS_ROTINA = 21; // janela pra aprender horários
 const PAPO_INTERVALO_MIN = Number(process.env.PAPO_INTERVALO_MIN) || 10; // papo aleatório: ela entra no máximo 1x a cada N min
-
-const minutosDe = (hhmm) => {
-  const [h, m] = hhmm.split(':').map(Number);
-  return h * 60 + m;
-};
-const hhmmDe = (min) => `${String(Math.floor((min % 1440) / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
-
-function slotDaHora(hhmm) {
-  let min = minutosDe(hhmm);
-  if (min < 5 * 60) min += 24 * 60; // madrugada conta como ceia do dia anterior
-  return SLOTS.find((s) => min >= s.ini && min < s.fim) || SLOTS[SLOTS.length - 1];
-}
-
-const mediana = (xs) => {
-  const a = [...xs].sort((x, y) => x - y);
-  return a.length ? a[Math.floor(a.length / 2)] : null;
-};
-
-/** Horário habitual de cada refeição pra uma pessoa, a partir do que ela já mandou (mediana; precisa de 3+ registros). */
-function horariosHabituais(refeicoes) {
-  const out = {};
-  for (const s of SLOTS) {
-    const mins = refeicoes.filter((r) => r.slot === s.id).map((r) => r.minutos);
-    out[s.id] = { minutos: mins.length >= 3 ? mediana(mins) : s.padrao, aprendido: mins.length >= 3, amostras: mins.length };
-  }
-  return out;
-}
-
-function descreverHorarios(hab) {
-  return SLOTS.filter((s) => s.cobrar || hab[s.id].aprendido)
-    .map((s) => `${s.nome} ~${hhmmDe(hab[s.id].minutos)}${hab[s.id].aprendido ? '' : ' (chute, ainda aprendendo)'}`)
-    .join(', ');
-}
+const ALERTA_DESCONEXAO_MIN = Number(process.env.ALERTA_DESCONEXAO_MIN) || 10; // sem WhatsApp por mais que isso = alerta no log e no /status
 
 async function enriquecerPerfis(perfis, dia) {
   const desde = diasAnteriores(dia, DIAS_ROTINA)[0];
@@ -267,8 +188,10 @@ app.get('/status', (req, res) => {
     grupo: memoria.grupo,
     keepalive: KEEPALIVE_URL ? `${KEEPALIVE_URL}/ping a cada ${KEEPALIVE_MIN} min` : 'desligado',
     uptimeMin: Math.round(process.uptime() / 60),
+    desconectadoHaMin: desconectadoDesde ? Math.round((Date.now() - desconectadoDesde) / 60_000) : 0,
     tokensGeminiHoje: ia.usoDeHoje(),
     modelos: ia.situacaoModelos(),
+    reservasExternas: reservasDisponiveis(),
   });
 });
 // Troca de número sem redeploy: desvincula o aparelho atual e gera um QR novo em /qr
@@ -303,22 +226,6 @@ if (KEEPALIVE_URL) {
 let sock;
 let gruposIgnoradosLogados = new Set();
 
-// Converte o markdown que o Gemini insiste em mandar pro formato do WhatsApp
-// (negrito é UM asterisco de cada lado; **dois** aparecem literalmente no zap).
-export function paraWhatsApp(texto) {
-  let t = String(texto || '');
-  if (!MANTER_COLCHETES) t = t.replace(/\[\[([^\]]+)\]\]/g, '*$1*');
-  return t
-    .replace(/^#{1,6}\s*/gm, '') // cabeçalhos markdown
-    .replace(/\*\*\*(.+?)\*\*\*/g, '*$1*') // ***x*** -> *x*
-    .replace(/\*\*(.+?)\*\*/g, '*$1*') // **x** -> *x*
-    .replace(/__(.+?)__/g, '_$1_') // __x__ -> _x_
-    .replace(/^\s*[-*•]\s+/gm, '• ') // bullets -> •
-    .replace(/\*{2,}/g, '*') // sobras de asterisco
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
 // IDs das mensagens que o próprio bot enviou (pra não responder a si mesmo quando roda no número de um dos usuários)
 const enviadosPeloBot = new Set();
 
@@ -345,8 +252,7 @@ async function enviar(jid, texto, quoted, { rapido = false } = {}) {
   await sock.sendPresenceUpdate('composing', jid).catch(() => {});
   if (!rapido) await new Promise((r) => setTimeout(r, pausaHumana(texto)));
   await sock.sendPresenceUpdate('paused', jid).catch(() => {});
-  const limpo = String(texto || '').replace(/\n?\s*ATUALIZAR:\s*\{[\s\S]*\}\s*$/i, '').trim();
-  const r = await sock.sendMessage(jid, { text: paraWhatsApp(limpo) }, quoted ? { quoted } : undefined);
+  const r = await sock.sendMessage(jid, { text: paraWhatsApp(semLinhaAtualizar(texto)) }, quoted ? { quoted } : undefined);
   if (r?.key?.id) {
     enviadosPeloBot.add(r.key.id);
     if (enviadosPeloBot.size > 500) enviadosPeloBot.delete(enviadosPeloBot.values().next().value);
@@ -365,6 +271,17 @@ function jidsDoRemetente(key) {
 
 let quedasSeguidas = 0; // pra reconectar com espera crescente (3 s, 6 s, 12 s... até 2 min) em vez de martelar o WhatsApp
 let encerrando = false;
+let desconectadoDesde = Date.now(); // quando o WhatsApp caiu (ou o processo subiu) e ainda não conectou
+let ultimoAlertaDesconexao = 0;
+// Alerta de desconexão: a cada minuto, se está fora há mais de ALERTA_DESCONEXAO_MIN, grita no log (a cada 30 min) e aparece no /status
+setInterval(() => {
+  if (statusConexao === 'conectado' || !desconectadoDesde) return;
+  const min = Math.round((Date.now() - desconectadoDesde) / 60_000);
+  if (min >= ALERTA_DESCONEXAO_MIN && Date.now() - ultimoAlertaDesconexao > 30 * 60_000) {
+    ultimoAlertaDesconexao = Date.now();
+    console.error(`[alerta] ⚠️ WhatsApp desconectado há ${min} min (estado: ${statusConexao}). Abra ${KEEPALIVE_URL || 'o serviço'}/qr se precisar escanear de novo.`);
+  }
+}, 60_000).unref();
 
 async function conectarWhatsApp() {
   const { state, saveCreds, limparSessao } = await useMongoAuthState();
@@ -393,6 +310,10 @@ async function conectarWhatsApp() {
     if (connection === 'open') {
       ultimoQR = null;
       quedasSeguidas = 0;
+      if (desconectadoDesde && Date.now() - desconectadoDesde > ALERTA_DESCONEXAO_MIN * 60_000) {
+        console.warn(`[alerta] WhatsApp voltou depois de ${Math.round((Date.now() - desconectadoDesde) / 60_000)} min fora`);
+      }
+      desconectadoDesde = null;
       statusConexao = 'conectado';
       console.log('[wa] conectado como', sock.user?.id, sock.user?.name ? `(${sock.user.name})` : '');
       garantirDiaAtual().catch((e) => console.error('[bot] erro na virada de dia:', e.message));
@@ -400,6 +321,7 @@ async function conectarWhatsApp() {
     if (connection === 'close') {
       const codigo = lastDisconnect?.error?.output?.statusCode;
       const aguardavaQR = statusConexao === 'aguardando QR' || statusConexao === 'gerando QR novo';
+      desconectadoDesde ||= Date.now();
       ultimoQR = null; // QR antigo não vale mais; /qr mostra "gerando" até vir outro
       statusConexao = codigo === DisconnectReason.timedOut ? 'gerando QR novo' : `desconectado (${codigo})`;
       if (encerrando) return;
@@ -511,8 +433,7 @@ let ultimoPapoEm = 0;
 function prioridade({ texto, temImagem, temAudio, conteudo, msg }) {
   if (temImagem || temAudio) return 'midia';
   if (/\?/.test(texto)) return 'pergunta';
-  const nome = ia.nomeDaBot().toLowerCase();
-  if (texto.toLowerCase().includes(nome) || /\bnutri\b/i.test(texto)) return 'mencao';
+  if (mencionaNome(texto, ia.nomeDaBot()) || /\bnutri\b/i.test(texto)) return 'mencao';
   const ctx = conteudo.extendedTextMessage?.contextInfo;
   if (ctx?.stanzaId && enviadosPeloBot.has(ctx.stanzaId)) return 'resposta-a-ela';
   if (ctx?.participant && meusJids().includes(jidNormalizedUser(ctx.participant))) return 'resposta-a-ela';
@@ -640,17 +561,16 @@ async function processar(msg) {
     }
     if (cmd === '!status' || cmd === '!cota') {
       const u = ia.usoDeHoje();
-      const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
       const modelos = ia.situacaoModelos();
       const fora = modelos.filter((m) => !m.livre);
+      const lite = modelos.filter((m) => m.papel === 'leve').length;
       const linhas = [
         `🩺 *Status da ${ia.nomeDaBot()}*`,
-        `WhatsApp: ${statusConexao} · no ar há ${Math.round(process.uptime() / 60)} min`,
-        `Hoje (${memoria.dia}): ${memoria.mensagens.length} mensagens na memória`,
-        `Gemini hoje: ${u.chamadas} chamadas · ${k(u.entrada)} tokens de entrada (${k(u.cache)} em cache) · ${k(u.saida)} de saída`,
-        `Modelos: ${modelos.length} na fila (${modelos.filter((m) => m.papel !== 'leve').length} Flash, ${modelos.filter((m) => m.papel === 'leve').length} Lite)`,
+        `No ar há ${Math.round(process.uptime() / 60)} min · hoje (${memoria.dia}): ${memoria.mensagens.length} mensagens na memória`,
+        `Gemini hoje: ${u.chamadas} chamadas · ${formatarTokens(u.entrada)} tokens de entrada (${formatarTokens(u.cache)} em cache) · ${formatarTokens(u.saida)} de saída`,
+        `Modelos: ${modelos.length} na fila (${modelos.length - lite} Flash, ${lite} Lite)`,
         fora.length ? `De castigo: ${fora.map((m) => `${m.modelo} (volta em ${m.voltaEm})`).join(', ')}` : 'De castigo: nenhum ✅',
-        `Reservas externas: ${ia.reservasExternas().join(', ') || 'nenhuma'}`,
+        `Reservas externas: ${reservasDisponiveis().join(', ') || 'nenhuma'}`,
       ];
       return enviar(jidGrupo, linhas.join('\n'), msg, { rapido: true });
     }
@@ -747,7 +667,9 @@ async function processar(msg) {
   const contextoHorario =
     `hora local de ${perfil.nome}: ${horaLocal}${eu.cidade ? ` em ${eu.cidade}` : ' (cidade/fuso ainda não informados, pode estar errada)'}; ` +
     `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}`;
-  const dossie = await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), ''));
+  // Papo aleatório não leva dossiê nem base de conhecimento (só persona, perfis e histórico): metade dos tokens
+  const dossie = motivo ? await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), '')) : '';
+  const conhecimento = motivo ? docsPara(eu, { texto }) : '';
   const momentos = await momentosRecentes(12).catch(() => []);
   const entradaTexto = temImagem ? `📷 [foto de comida]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto;
   const historico = [...memoria.mensagens];
@@ -757,7 +679,7 @@ async function processar(msg) {
   let atualizacao = null;
   try {
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
-    ({ texto: resposta, atualizacao } = await ia.responder({ texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie, momentos, leve: !motivo }));
+    ({ texto: resposta, atualizacao } = await ia.responder({ texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, leve: !motivo }));
   } catch (e) {
     // Gemini (todos) e Groq fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -785,7 +707,7 @@ async function processar(msg) {
     const fontesTxt = formatarFontes(fontes, 8);
     const r2 = await ia.responder({
       texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, dossie, momentos, jaPesquisou: true,
-      conhecimento: `${docsPara(eu)}\n\n### Pesquisa que você acabou de fazer sobre "${consulta}"\n${fontesTxt}`,
+      conhecimento: `${docsPara(eu, { texto })}\n\n### Pesquisa que você acabou de fazer sobre "${consulta}"\n${fontesTxt}`,
     });
     resposta = r2.texto;
     atualizacao = r2.atualizacao || atualizacao;
@@ -798,7 +720,7 @@ async function processar(msg) {
   }
 
   // Foi refeição? (foto, ou a Nutri analisou comida) -> registra pra aprender a rotina e não cobrar depois
-  const foiRefeicao = temImagem || /O que eu vi|Estimativa:/i.test(resposta || '');
+  const foiRefeicao = temImagem || /O que eu vi|Estimativa[^:\n]*:/i.test(resposta || ''); // inclui "Estimativa corrigida:"
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
   if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
@@ -828,6 +750,8 @@ async function processar(msg) {
       minutos: minutosDe(horaLocal), // no fuso da pessoa: é assim que ela aprende o horário habitual
       slot: slot.id,
       resumo: resumoRefeicao.slice(0, 120),
+      descricao: descricaoDaAnalise(resposta, resumoRefeicao),
+      estimativa: lerEstimativa(resposta), // kcal e macros da análise, gravados agora: o resumo semanal soma daqui
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
     const ultima = memoria.mensagens[memoria.mensagens.length - (resposta ? 2 : 1)];
     if (ultima) ultima.refeicao = slot.id;
@@ -908,7 +832,7 @@ async function verificarCobrancas() {
         costume,
         persona,
         historico: memoria.mensagens,
-        conhecimento: docsPara(p),
+        conhecimento: docsPara(p, { soBase: true }), // só o documento base: cobrança não precisa da base inteira
         dossie: await dossieDe(p).catch(() => ''),
       });
       if (msg && !/^silencio\W*$/i.test(msg)) {
@@ -1023,8 +947,8 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
         console.error('[persona] falha ao evoluir:', e.message);
       }
 
-      const dataAlvo = new Date(`${dia}T12:00:00Z`);
-      if (dataAlvo.getUTCDay() === 0 || (forcado && process.env.FORCAR_SEMANAL === 'true')) {
+      // Semanal só no fechamento automático de domingo (um !resumo no domingo não pode disparar dois semanais)
+      if ((!forcado && ehDomingo(dia)) || (forcado && process.env.FORCAR_SEMANAL === 'true')) {
         await fecharSemana({ dia, perfis, grupo });
       }
     } else {
@@ -1054,12 +978,18 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
 
 async function fecharSemana({ dia, perfis, grupo }) {
   const semana = semanaISO(dia);
+  const dias = diasAnteriores(dia, 7);
   const resumosDiarios = [];
-  for (const d of diasAnteriores(dia, 7)) {
+  for (const d of dias) {
     const conteudo = await lerMarkdown('Resumos', `${d}.md`).catch(() => null);
     if (conteudo) resumosDiarios.push({ dia: d, conteudo: conteudo.replace(/^---[\s\S]*?---\n/, '') });
   }
-  const resumo = await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona, conhecimento: docsPara(perfis) });
+  // Números da semana vêm dos registros (estimativa gravada na hora de cada refeição), não da releitura dos textos
+  const todasJids = perfis.flatMap((p) => p.jids || []);
+  const registros = await refeicoesDesde(todasJids, dias[0]).catch(() => []);
+  const tabela = compilarSemana(registros, perfis, dias);
+  console.log(`[semana] tabela:\n${tabela}`);
+  const resumo = ia.separarAtualizacao(await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona, tabela })).texto || '(sem resumo)';
   await enviar(grupo, `📆 *RESUMO DA SEMANA ${semana}*\n\n${resumo}`);
   await salvarMarkdown(
     'Resumos',
@@ -1121,6 +1051,7 @@ async function fecharSemana({ dia, perfis, grupo }) {
     console.log(`[cron] cobrança de refeições a cada 10 min (atraso tolerado: ${ATRASO_COBRANCA_MIN} min)`);
 
     // Dia 1 de cada mês, 4h: a Nutri estuda o que saiu de novo e revisa a base de conhecimento
+    // Fora da fila de propósito: demora minutos, tem a própria guarda (estudando) e não mexe na memória do dia
     cron.schedule('0 4 1 * *', () => estudar({ dia: agora().dia, motivo: 'revisão mensal' }).catch((e) => console.error('[conhecimento]', e.message)), { timezone: TZ });
     console.log('[cron] revisão mensal da base de conhecimento (dia 1, 04:00)');
   } catch (e) {

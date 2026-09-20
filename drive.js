@@ -96,22 +96,38 @@ async function acharArquivo(nome, parentId) {
   return data.files?.[0]?.id || null;
 }
 
-/** Salva (ou sobrescreve) um arquivo texto dentro de uma pasta pelo ID dela. */
-export async function salvarEmPasta(pastaId, nomeArquivo, conteudo, mimeType = 'text/markdown') {
-  iniciarDrive();
-  const existente = await acharArquivo(nomeArquivo, pastaId);
-  const media = { mimeType, body: Readable.from([conteudo]) };
-  if (existente) {
-    await drive.files.update({ fileId: existente, media, supportsAllDrives: true });
-    return existente;
-  }
-  const res = await drive.files.create({
-    requestBody: { name: nomeArquivo, mimeType, parents: [pastaId] },
-    media,
-    fields: 'id',
-    supportsAllDrives: true,
+// Uma fila por arquivo: duas escritas no mesmo arquivo (ler-alterar-gravar do log, diário e resumo ao mesmo tempo)
+// acontecem em ordem, em vez de uma sobrescrever a outra ou criar o arquivo em dobro.
+const filasPorArquivo = new Map();
+export function naFilaDoArquivo(chave, fn) {
+  const anterior = filasPorArquivo.get(chave) || Promise.resolve();
+  const atual = anterior.then(fn, fn);
+  const guardado = atual.catch(() => {});
+  filasPorArquivo.set(chave, guardado);
+  guardado.then(() => {
+    if (filasPorArquivo.get(chave) === guardado) filasPorArquivo.delete(chave);
   });
-  return res.data.id;
+  return atual;
+}
+
+/** Salva (ou sobrescreve) um arquivo texto dentro de uma pasta pelo ID dela. */
+export function salvarEmPasta(pastaId, nomeArquivo, conteudo, mimeType = 'text/markdown') {
+  return naFilaDoArquivo(`${pastaId}/${nomeArquivo}`, async () => {
+    iniciarDrive();
+    const existente = await acharArquivo(nomeArquivo, pastaId);
+    const media = { mimeType, body: Readable.from([conteudo]) };
+    if (existente) {
+      await drive.files.update({ fileId: existente, media, supportsAllDrives: true });
+      return existente;
+    }
+    const res = await drive.files.create({
+      requestBody: { name: nomeArquivo, mimeType, parents: [pastaId] },
+      media,
+      fields: 'id',
+      supportsAllDrives: true,
+    });
+    return res.data.id;
+  });
 }
 
 /**
@@ -181,13 +197,16 @@ export async function lerMarkdown(caminhoPasta, nomeArquivo) {
 }
 
 /** Acrescenta uma linha ao log técnico do dia (Logs/YYYY-MM-DD.md). */
-export async function registrarLog(dia, linha) {
-  try {
-    const atual = (await lerMarkdown('Logs', `${dia}.md`)) || `---\ntipo: log\ndata: ${dia}\ntags: [nutribot, log]\n---\n`;
-    await salvarMarkdown('Logs', `${dia}.md`, `${atual}\n- ${linha}`);
-  } catch (e) {
-    console.error('[drive] falha ao registrar log:', e.message);
-  }
+export function registrarLog(dia, linha) {
+  // ler-alterar-gravar dentro da fila do arquivo: duas linhas ao mesmo tempo não se perdem
+  return naFilaDoArquivo(`log:${dia}`, async () => {
+    try {
+      const atual = (await lerMarkdown('Logs', `${dia}.md`)) || `---\ntipo: log\ndata: ${dia}\ntags: [nutribot, log]\n---\n`;
+      await salvarMarkdown('Logs', `${dia}.md`, `${atual}\n- ${linha}`);
+    } catch (e) {
+      console.error('[drive] falha ao registrar log:', e.message);
+    }
+  });
 }
 
 // ---------- Helpers de formatação Obsidian ----------

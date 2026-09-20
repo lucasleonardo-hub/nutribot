@@ -135,6 +135,12 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 
 ---
 
+## 6) Desenvolvimento: testes antes do deploy
+
+- `npm test` roda os testes das funções puras (compilação de refeições, estimativas, datas, fusos, formatação pro WhatsApp). Leva 1 segundo.
+- A cada push na `main` o GitHub roda `npm test` e a checagem de sintaxe de todos os módulos ANTES de disparar o deploy no Render. Se algo quebrar, o deploy não acontece e o bot continua na versão anterior.
+- `util.js` concentra as funções puras (data/hora, slots de refeição, formatação); `resumo.js` compila refeições e semana em código. É por aí que a refatoração do `index.js` continua.
+
 ## Comandos no grupo
 
 | Comando   | O que faz                                   |
@@ -154,8 +160,9 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 
 - **Base de conhecimento** (`conhecimento/*.md` no código → Mongo → Drive `Conhecimento/`): Base, Hipertrofia, Emagrecimento, Saúde-Índices, Performance-Salto e Rotina. Os documentos do foco de cada pessoa entram em toda resposta. Todo dia 1 às 4h ela pesquisa no PubMed e reescreve o que mudou; `!estudar` força isso.
 - **Pesquisa sob demanda**: quando a base não basta, ela pesquisa (PubMed/Wikipedia), responde e salva uma nota de estudo em `Conhecimento/Pesquisas/` pra não pesquisar de novo.
-- **Pasta de cada pessoa no Drive** (raiz, com o nome da pessoa): tudo que a pessoa colocar lá (PDF, Google Docs, .md, .txt, imagem de exame) a Nutri lê e usa como memória sobre ela (PDF e imagem são transcritos pelo Gemini uma vez e ficam em cache). O que ela aprende conversando vai pra `Nutri-Notas.md` na mesma pasta, reescrito toda noite; a ficha (peso, altura, horários, rotina) fica em `Nutri-Ficha.md`. Ela faz perguntas quando falta algo (no máximo uma por mensagem). A pasta é achada pelo primeiro nome; se não existir, ela cria.
+- **Pasta de cada pessoa no Drive** (raiz, com o nome da pessoa): tudo que a pessoa colocar lá (PDF, Google Docs, .md, .txt, imagem de exame) a Nutri lê e usa como memória sobre ela (PDF e imagem são transcritos pelo Gemini uma vez e ficam em cache). O que ela aprende conversando vai pra `Nutri-Notas.md` na mesma pasta, reescrito toda noite; a ficha (peso, altura, horários, rotina) fica em `Nutri-Ficha.md`. Ela faz perguntas quando falta algo (no máximo uma por mensagem). A pasta é achada pelo nome (primeiro nome mais uma parte do sobrenome, ou uma pasta só com o primeiro nome) e o ID fica gravado no perfil dali em diante; se não existir, ela cria.
 - **Rotina de cada pessoa**: cada refeição analisada é registrada com horário. Com 3+ registros ela aprende o horário habitual de café, almoço e jantar; no fechamento do dia reescreve a ficha de rotina (`<Nome da pessoa>/Nutri-Ficha.md`).
+- **Modelos e cota**: a cota gratuita do Gemini é por modelo (Flash: 20 pedidos/dia; Flash Lite: 500/dia). Foto, comida, pergunta, menção, resumos e persona usam a fila Flash (3.6 -> 3.8 -> 3.7 -> 3.5 -> 3 -> 2.5); papo, cadastro, notas, rotina, cobrança e extrações usam a fila Lite. `!status` no grupo mostra o consumo do dia e quem está de castigo.
 - **Cobrança**: a cada 10 min ela checa quem passou 75 min do horário habitual sem mandar a refeição e cobra no grupo (uma vez por refeição por dia, só entre 7h e 23h). Ela só cobra depois de APRENDER o horário da pessoa (3+ refeições registradas naquele slot) e só até 2 h depois do limite; antes disso, nada de cobrança. `ATRASO_COBRANCA_MIN` e `JANELA_COBRANCA_MIN` ajustam.
 - **Cadastro**: nome, peso, altura, objetivo, cidade onde mora (define o fuso horário da pessoa: horários de refeição e cobrança são no fuso dela) e dieta (vegetariana/vegana/onívora, restrições). Dado novo dito no grupo ("pesei 74,5", "me mudei pra Curitiba", "virei vegetariano") sobrescreve o perfil na hora, com data, e vale mais que documento antigo da pasta.
 - **Quando ela fala**: sempre em foto, áudio, comando, pergunta, menção/resposta a ela e assunto dela (comida, treino, sono, peso). Papo aleatório entre vocês: ela entra no máximo uma vez a cada 10 min (`PAPO_INTERVALO_MIN`) e, nesse intervalo, nem gasta chamada de IA, só guarda no histórico.

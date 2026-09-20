@@ -5,11 +5,9 @@
 const NOME_SLOT = { cafe: '☕ Café da manhã', almoco: '🍽️ Almoço', lanche: '🥪 Lanche', jantar: '🌙 Jantar', ceia: '🌃 Ceia' };
 const JANELA_COMPLEMENTO_MIN = 20; // "a vitamina tem whey" 1 min depois da foto = mesma refeição, não outra
 
+import { minutosDe } from './util.js';
+
 const num = (t) => Number(String(t).replace(/\./g, '').replace(',', '.')) || 0;
-const minutosDe = (hhmm) => {
-  const [h, m] = String(hhmm || '0:0').split(':').map(Number);
-  return (h || 0) * 60 + (m || 0);
-};
 
 /** Lê "~620 kcal · Proteína 32 g · Carboidratos 82 g · Gorduras 16 g" (ou o formato antigo "P: 32g | C: 82g | G: 16g"). */
 export function lerEstimativa(texto) {
@@ -78,4 +76,56 @@ export function compilarRefeicoes(historico, perfis) {
     );
   }
   return { texto: blocos.join('\n\n'), totais, porPessoa };
+}
+
+// ============================================================
+// Semana: totais por dia a partir dos registros de refeição (com estimativa gravada na hora da resposta)
+// ============================================================
+const DIA_SEMANA_CURTO = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+const soma = (a, e) => ({ kcal: a.kcal + e.kcal, p: a.p + e.p, c: a.c + e.c, g: a.g + e.g });
+
+/**
+ * Para cada pessoa: uma linha por dia (quantas refeições, quais, total estimado) e a média dos dias com estimativa.
+ * @param {Array} refeicoes registros da collection refeicoes (com `estimativa` {kcal,p,c,g} quando houver)
+ * @param {Array} perfis
+ * @param {string[]} dias  YYYY-MM-DD em ordem
+ */
+export function compilarSemana(refeicoes, perfis, dias) {
+  const blocos = [];
+  for (const p of perfis) {
+    const minhas = refeicoes.filter((r) => (p.jids || []).includes(r.jid) || r.nome === p.nome);
+    const linhas = [];
+    let diasComEstimativa = 0;
+    let acumulado = { kcal: 0, p: 0, c: 0, g: 0 };
+    let totalRefeicoes = 0;
+    for (const d of dias) {
+      const doDia = minhas.filter((r) => r.dia === d);
+      const rotulo = `${d} (${DIA_SEMANA_CURTO[new Date(`${d}T12:00:00Z`).getUTCDay()]})`;
+      if (!doDia.length) {
+        linhas.push(`  - ${rotulo}: nenhuma refeição registrada`);
+        continue;
+      }
+      totalRefeicoes += doDia.length;
+      const slots = doDia.map((r) => (NOME_SLOT[r.slot] || r.slot).replace(/^\S+\s/, '')).join(', ');
+      const comEst = doDia.filter((r) => r.estimativa?.kcal);
+      const plural = doDia.length === 1 ? 'refeição' : 'refeições';
+      if (!comEst.length) {
+        linhas.push(`  - ${rotulo}: ${doDia.length} ${plural} (${slots}) -> (sem estimativa registrada)`);
+        continue;
+      }
+      const tot = comEst.reduce((a, r) => soma(a, r.estimativa), { kcal: 0, p: 0, c: 0, g: 0 });
+      diasComEstimativa++;
+      acumulado = soma(acumulado, tot);
+      linhas.push(`  - ${rotulo}: ${doDia.length} ${plural} (${slots}) -> ${formatarEstimativa(tot)}`);
+    }
+    const media = diasComEstimativa
+      ? formatarEstimativa({ kcal: acumulado.kcal / diasComEstimativa, p: acumulado.p / diasComEstimativa, c: acumulado.c / diasComEstimativa, g: acumulado.g / diasComEstimativa })
+      : null;
+    const metaP = p.peso ? ` (meta de proteína: ~${Math.round(p.peso * 1.6)} a ${Math.round(p.peso * 2.2)} g/dia)` : '';
+    blocos.push(
+      `${p.nome}: ${totalRefeicoes} refeição(ões) na semana\n${linhas.join('\n')}\n  ` +
+        (media ? `MÉDIA nos ${diasComEstimativa} dia(s) com estimativa: ${media}${metaP}` : `MÉDIA: sem estimativas registradas${metaP}`)
+    );
+  }
+  return blocos.join('\n\n');
 }

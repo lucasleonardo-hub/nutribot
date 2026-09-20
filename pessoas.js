@@ -39,16 +39,27 @@ export async function pastaDe(perfil) {
 
   const pastas = (await listarPastasRaiz()).filter((p) => !PASTAS_SISTEMA.has(normalizar(p.name).join(' ')));
   const alvo = normalizar(perfil.nome);
+  // Precisa bater o primeiro nome E (se o nome tiver sobrenome) pelo menos mais uma parte; empate = não escolhe (cria nova).
+  // Evita duas pessoas com o mesmo primeiro nome caírem na mesma pasta. O ID da pasta fica gravado no perfil e vale dali em diante.
+  const minimo = Math.min(2, alvo.length);
   let melhor = null;
   let melhorPontos = 0;
+  let empate = false;
   for (const p of pastas) {
     const tokens = normalizar(p.name);
     if (!alvo.length || tokens[0] !== alvo[0]) continue; // primeiro nome tem que bater
     const pontos = alvo.filter((t) => tokens.includes(t)).length;
+    const pastaInteiraBate = tokens.every((t) => alvo.includes(t)); // pasta "Heitor" pra "Heitor Almeida": vale
+    if (pontos < minimo && !pastaInteiraBate) continue;
     if (pontos > melhorPontos) {
       melhor = p;
       melhorPontos = pontos;
-    }
+      empate = false;
+    } else if (pontos === melhorPontos) empate = true;
+  }
+  if (empate) {
+    console.warn(`[pessoas] mais de uma pasta parecida com "${perfil.nome}"; criando uma própria pra não misturar`);
+    melhor = null;
   }
   if (!melhor) {
     const id = await pastaNaRaiz(perfil.nome);

@@ -2,8 +2,8 @@
 // Todos falam o formato OpenAI (chat/completions). Ordem = prioridade. Cada um tem uma chave opcional no .env;
 // sem a chave, o provedor é simplesmente pulado.
 //
-//   TEXTO : Groq (qwen/qwen3.8-27b, rápido e com persona boa) -> Hugging Face (Qwen2.5-72B) -> Cohere (command-a)
-//   FOTO  : Hugging Face (gemma-3-27b-it, mais preciso) -> Hugging Face (Qwen3-VL-30B, rápido) -> Cohere (command-a-vision)
+//   TEXTO : Cohere (command-a, o mais estável) -> Groq (qwen/qwen3.8-27b, rápido) -> Hugging Face (Qwen2.5-72B)
+//   FOTO  : Cohere (command-a-vision) -> Hugging Face (gemma-3-27b-it) -> Hugging Face (Qwen3-VL-30B)
 //   ÁUDIO / PDF: só o Gemini faz. Sem reserva.
 //
 // Limites gratuitos (set/2026): Groq ~6-30k tokens/min; Hugging Face crédito mensal pequeno (402 quando acaba);
@@ -13,6 +13,16 @@ const MAX_CHARS_ENTRADA = Number(process.env.RESERVA_MAX_CHARS) || 24000; // ~6-
 const MAX_CHARS_GROQ = Number(process.env.RESERVA_MAX_CHARS_GROQ) || 12000; // Groq on_demand devolve 413 acima de ~6k tokens por pedido
 
 const PROVEDORES = [
+  // Ordem = o que respondeu de fato nos logs: Cohere estável; Groq rápido mas recusa prompt grande (413) e estoura por minuto;
+  // Hugging Face lento (timeouts de 60 s) e com crédito curto.
+  {
+    id: 'cohere',
+    url: 'https://api.cohere.com/v2/chat',
+    chave: () => process.env.COHERE_API_KEY,
+    texto: process.env.COHERE_MODEL || 'command-a-03-2025',
+    visao: process.env.COHERE_MODEL_VISAO || 'command-a-vision-07-2025',
+    timeoutMs: 60_000,
+  },
   {
     id: 'groq',
     url: 'https://api.groq.com/openai/v1/chat/completions',
@@ -20,6 +30,7 @@ const PROVEDORES = [
     texto: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
     visao: null,
     maxChars: MAX_CHARS_GROQ,
+    timeoutMs: 45_000,
   },
   {
     id: 'huggingface',
@@ -27,6 +38,7 @@ const PROVEDORES = [
     chave: () => process.env.HF_API_KEY,
     texto: process.env.HF_MODEL || 'Qwen/Qwen2.5-72B-Instruct',
     visao: process.env.HF_MODEL_VISAO || 'google/gemma-3-27b-it',
+    timeoutMs: 40_000,
   },
   {
     id: 'huggingface-2',
@@ -34,13 +46,7 @@ const PROVEDORES = [
     chave: () => process.env.HF_API_KEY,
     texto: null,
     visao: process.env.HF_MODEL_VISAO_2 || 'Qwen/Qwen3-VL-30B-A3B-Instruct',
-  },
-  {
-    id: 'cohere',
-    url: 'https://api.cohere.com/v2/chat',
-    chave: () => process.env.COHERE_API_KEY,
-    texto: process.env.COHERE_MODEL || 'command-a-03-2025',
-    visao: process.env.COHERE_MODEL_VISAO || 'command-a-vision-07-2025',
+    timeoutMs: 40_000,
   },
 ];
 
@@ -98,7 +104,7 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
         method: 'POST',
         headers: { Authorization: `Bearer ${prov.chave()}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(precisaVisao ? 90_000 : 60_000),
+        signal: AbortSignal.timeout(precisaVisao ? Math.max(prov.timeoutMs || 60_000, 90_000) : prov.timeoutMs || 60_000),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${data?.error?.message || data?.message || JSON.stringify(data).slice(0, 160)}`);

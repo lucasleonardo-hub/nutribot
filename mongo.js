@@ -180,7 +180,10 @@ export async function registrarRefeicao(r) {
   const ultima = await col.find({ jid: r.jid, dia: r.dia, slot: r.slot }).sort({ minutos: -1 }).limit(1).next();
   if (ultima && r.minutos - ultima.minutos <= 20) {
     const resumo = [ultima.resumo, r.resumo].filter((t) => t && t !== '[foto]').join(' + ') || ultima.resumo || r.resumo;
-    await col.updateOne({ _id: ultima._id }, { $set: { resumo: resumo.slice(0, 200), atualizadoEm: new Date() } });
+    const set = { resumo: resumo.slice(0, 200), atualizadoEm: new Date() };
+    if (r.estimativa) set.estimativa = r.estimativa; // estimativa corrigida substitui a anterior
+    if (r.descricao && r.descricao !== ultima.descricao) set.descricao = `${ultima.descricao || ''}${ultima.descricao ? ' (+ ' : ''}${r.descricao}${ultima.descricao ? ')' : ''}`.slice(0, 220);
+    await col.updateOne({ _id: ultima._id }, { $set: set });
     return;
   }
   await col.insertOne({ ...r, criadoEm: new Date() });
