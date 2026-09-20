@@ -71,9 +71,11 @@ FORMATO (WhatsApp):
 - Negrito do WhatsApp é UM asterisco de cada lado: *assim*. NUNCA use dois asteriscos (**assim**) nem sublinhado duplo.
 - Quando for ANÁLISE DE COMIDA (texto ou foto), inclua este bloco no meio da resposta (pode ter fala antes e depois):
   🍽️ *O que eu vi:* (itens e porções estimadas)
-  🔥 *Estimativa:* ~XXX kcal | P: XXg | C: XXg | G: XXg
+  🔥 *Estimativa:* ~XXX kcal · Proteína XX g · Carboidratos XX g · Gorduras XX g
   ⚖️ *Veredito:* (nota 0 a 10 + comentário sincero ligado ao objetivo)
   💡 *Dica:* (a orientação prática)
+- Nutrientes SEMPRE por extenso (Proteína, Carboidratos, Gorduras). Nunca abrevie como P/C/G.
+- Se a pessoa COMPLEMENTA ou CORRIGE a refeição que acabou de mandar (mesma refeição, poucos minutos depois: "a vitamina tem whey", "eram 2 pães"), NÃO refaça a análise inteira: responda curto, agradeça o detalhe e ajuste só a linha "🔥 *Estimativa corrigida:* ~XXX kcal · Proteína XX g · Carboidratos XX g · Gorduras XX g" quando mudar algo relevante.
 - Se não dá pra ver comida na foto, brinca e pede outra.
 
 Seu objetivo final: estimar macros e calorias, dar o veredito e manter essas duas criaturas no caminho do objetivo delas, sendo cada dia mais VOCÊ: simpática, verdadeira, engraçada e do lado delas.`;
@@ -155,6 +157,7 @@ function castigar(model, e) {
   const status = e?.status || e?.code;
   let ms = 90_000;
   if (status === 404 || /NOT_FOUND|not found/i.test(msg)) ms = 30 * 60_000;
+  else if (status === 402 || status === 403 || /credits are depleted|prepayment|PERMISSION_DENIED|billing/i.test(msg)) ms = 15 * 60_000; // cobrança/permissão: não muda em segundos
   else if (status === 429 || /quota|RESOURCE_EXHAUSTED/i.test(msg)) {
     const pedido = msg.match(/retry(?:Delay|\s+in)\D*(\d+(?:\.\d+)?)\s*s/i)?.[1];
     ms = /per\s*day|daily|PerDay/i.test(msg) ? 15 * 60_000 : pedido ? Math.ceil(Number(pedido) * 1000) + 1000 : 60_000;
@@ -162,6 +165,15 @@ function castigar(model, e) {
   castigoAte.set(model, Date.now() + ms);
   console.warn(`[gemini] ${model} fora por ${Math.round(ms / 1000)}s`);
 }
+
+// Créditos do Gemini acabaram (402): avisa no log uma vez por hora, em destaque, pra não passar despercebido
+let ultimoAvisoCreditos = 0;
+function avisarCreditos(e) {
+  if (Date.now() - ultimoAvisoCreditos < 60 * 60_000) return;
+  ultimoAvisoCreditos = Date.now();
+  console.error(`[gemini] ⚠️ CRÉDITOS DO GEMINI ESGOTADOS (402). O bot está rodando só nas reservas (Groq/HF/Cohere), com qualidade menor. Recarregue em https://aistudio.google.com ou troque a GEMINI_API_KEY. Detalhe: ${String(e?.message || '').slice(0, 200)}`);
+}
+export const creditosEsgotados = () => Date.now() - ultimoAvisoCreditos < 60 * 60_000;
 
 // Série Gemini 3 controla raciocínio por thinkingLevel (MINIMAL só no Flash); a 2.5 usa thinkingBudget (0 = desligado).
 function configPensar(model, pensar) {
@@ -207,9 +219,12 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
           status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
         console.warn(`[gemini] ${model} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
         if (!transitorio) {
-          // 404 = nome de modelo errado: castigo longo e segue pro próximo. Outros (400 etc.): não insiste neste modelo,
-          // mas ainda tenta os demais e as reservas antes de desistir.
-          if (status === 404 || /NOT_FOUND|not found/i.test(e.message || '')) castigar(model, e);
+          // 404 = nome de modelo errado; 402/403 = crédito/permissão: castigo longo e segue pro próximo.
+          // Outros (400 etc.): não insiste neste modelo, mas ainda tenta os demais e as reservas antes de desistir.
+          if (status === 404 || status === 402 || status === 403 || /NOT_FOUND|not found|credits are depleted|prepayment|PERMISSION_DENIED/i.test(e.message || '')) {
+            castigar(model, e);
+            if (status === 402 || /credits are depleted|prepayment/i.test(e.message || '')) avisarCreditos(e);
+          }
           break;
         }
         if (i === rodadas - 1) castigar(model, e);
@@ -358,16 +373,27 @@ export async function cobrarDadosFaltando(faltando, persona) {
 // ============================================================
 // 3) Resumo Diário Ácido
 // ============================================================
-export async function resumoDiario({ dia, perfis, historico, persona, conhecimento }) {
+/**
+ * @param {object} p
+ * @param {string} p.refeicoes  bloco já compilado pelo código (index.js compilarRefeicoes): refeições por pessoa com horário,
+ *                              descrição e estimativa, mais os TOTAIS somados. A IA não soma nada; só escreve.
+ */
+export async function resumoDiario({ dia, perfis, historico, persona, refeicoes }) {
   return gerar({
     contents:
-      `Hoje é ${dia}. Abaixo está TUDO que rolou no grupo hoje.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
-      `TRANSCRIÇÃO DO DIA:\n${blocoHistorico(historico, 400)}\n\n` +
-      blocoConhecimento(conhecimento) +
-      `Escreva o *RESUMO DO DIA* (máx. 250 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada, sarcasmo leve só onde couber. Para CADA pessoa cadastrada:\n` +
-      `- O que comeu (resumido) e total estimado do dia: ~kcal | P | C | G\n- Acertos e derrapadas, ligando ao objetivo (se saiu MUITO do combinado, demonstre decepção sincera, sem grosseria)\n- Nota do dia (0-10)\n- 💡 Dica pra amanhã (prática e específica)\n` +
-      `Termine com um "🏆 Placar do dia" comparando as duas pessoas com humor leve. Se alguém não mandou nada hoje, cobre o sumiço com carinho e firmeza. Use os [[links]] nos termos-chave e poucos emojis.`,
-    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 1500 },
+      `Hoje é ${dia}.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
+      `TRANSCRIÇÃO DO DIA (só pra contexto de tom, acertos e conversas; os números oficiais estão no bloco seguinte):\n${blocoHistorico(historico, 400)}\n\n` +
+      `REFEIÇÕES REGISTRADAS HOJE, POR PESSOA (compiladas pelo sistema a partir das suas próprias análises; use ESTES números e ESTA lista, sem omitir nenhuma refeição e sem recalcular):\n${refeicoes}\n\n` +
+      `Escreva o *RESUMO DO DIA* (formato WhatsApp, sem cabeçalhos #, até 320 palavras), no seu personagem: simpática, sincera, engraçada, sarcasmo leve só onde couber. Para CADA pessoa cadastrada, nesta ordem:\n` +
+      `*Nome* (apelido se tiver)\n` +
+      `uma linha por refeição registrada, com emoji, nome da refeição, horário e descrição curta (ex: "🍽️ Almoço (12:49): macarrão com molho de carne moída"). TODAS as refeições do bloco, na ordem.\n` +
+      `📊 *Total do dia:* ~X kcal · Proteína X g · Carboidratos X g · Gorduras X g (copie do bloco) e, em seguida, se bateu ou não a meta de proteína da pessoa (~1,6 a 2,2 g por kg de peso) em uma frase simples.\n` +
+      `✅ Acertos e ⚠️ derrapadas, ligando ao objetivo (se saiu MUITO do combinado, demonstre decepção sincera, sem grosseria).\n` +
+      `⭐ Nota do dia (0-10).\n` +
+      `💡 Dica pra amanhã (prática e específica).\n` +
+      `Se a pessoa não registrou nada, diga isso e cobre o sumiço com carinho e firmeza. Termine com um "🏆 Placar do dia" comparando as duas com humor leve. ` +
+      `REGRAS DE FORMATO: nutrientes sempre por extenso (Proteína, Carboidratos, Gorduras), nunca P/C/G; use [[links]] nos termos-chave; poucos emojis; não repita o bloco "O que eu vi / Veredito" das análises, isso é resumo, não análise.`,
+    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 1800 },
   });
 }
 
@@ -381,7 +407,7 @@ export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, c
     contents:
       `Semana ${semana}. PERFIS:\n${blocoPerfis(perfis)}\n\nRESUMOS DIÁRIOS DA SEMANA:\n${corpo}\n\n` +
       blocoConhecimento(conhecimento) +
-      `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), média de kcal e proteína estimada, os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Feche com o "🏆 Placar da semana" e um incentivo final com humor. Use os [[links]] e poucos emojis.`,
+      `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), média diária estimada escrita por extenso ("~X kcal · Proteína X g · Carboidratos X g · Gorduras X g"), os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Feche com o "🏆 Placar da semana" e um incentivo final com humor. Nutrientes sempre por extenso, nunca P/C/G. Use os [[links]] e poucos emojis.`,
     config: { systemInstruction: montarSystem(persona), maxOutputTokens: 2000 },
   });
 }

@@ -1,0 +1,81 @@
+// resumo.js - Refeições do dia compiladas em código, a partir das análises que a própria Nutri escreveu no grupo.
+// A IA só redige o resumo; quem lista as refeições e soma calorias e macros é o sistema. Assim nenhuma refeição
+// some do resumo (o que acontecia quando o modelo reserva cortava o meio do prompt) e os números batem com o dia.
+
+const NOME_SLOT = { cafe: '☕ Café da manhã', almoco: '🍽️ Almoço', lanche: '🥪 Lanche', jantar: '🌙 Jantar', ceia: '🌃 Ceia' };
+const JANELA_COMPLEMENTO_MIN = 20; // "a vitamina tem whey" 1 min depois da foto = mesma refeição, não outra
+
+const num = (t) => Number(String(t).replace(/\./g, '').replace(',', '.')) || 0;
+const minutosDe = (hhmm) => {
+  const [h, m] = String(hhmm || '0:0').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+};
+
+/** Lê "~620 kcal · Proteína 32 g · Carboidratos 82 g · Gorduras 16 g" (ou o formato antigo "P: 32g | C: 82g | G: 16g"). */
+export function lerEstimativa(texto) {
+  const m = String(texto || '').match(
+    /Estimativa[^:\n]*:\*?\s*~?\s*([\d.,]+)\s*kcal[\s\S]{0,40}?(?:P:|Prote[ií]nas?:?)\s*~?([\d.,]+)\s*g[\s\S]{0,40}?(?:C:|Carbo\w*:?)\s*~?([\d.,]+)\s*g[\s\S]{0,40}?(?:G:|Gorduras?:?)\s*~?([\d.,]+)\s*g/i
+  );
+  return m ? { kcal: num(m[1]), p: num(m[2]), c: num(m[3]), g: num(m[4]) } : null;
+}
+
+/** Descrição curta da refeição: o bloco "O que eu vi" da análise; sem ele, o texto da própria pessoa. */
+export function descricaoDaAnalise(textoBot, fallback) {
+  const m = String(textoBot || '').match(/O que eu vi:\*?\s*([\s\S]*?)(?:\n\s*\n|🔥|\*?Estimativa)/i);
+  const d = (m ? m[1] : '')
+    .replace(/^\s*[-•*]\s*/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (d || String(fallback || '').replace(/^📷\s*\[foto de comida\]\s*/, '') || '').slice(0, 160);
+}
+
+export const formatarEstimativa = (e) =>
+  `~${Math.round(e.kcal)} kcal · Proteína ${Math.round(e.p)} g · Carboidratos ${Math.round(e.c)} g · Gorduras ${Math.round(e.g)} g`;
+
+/**
+ * Para cada pessoa: lista de refeições do dia (horário, slot, descrição, estimativa) e totais somados.
+ * Fonte: memória do dia (mensagem da pessoa marcada com `refeicao` + a análise da Nutri logo depois).
+ * Complemento da mesma refeição em até 20 min substitui a estimativa anterior em vez de contar duas vezes.
+ * @returns {{ texto: string, totais: Record<string, {refeicoes:number,kcal:number,p:number,c:number,g:number}>, porPessoa: Map }}
+ */
+export function compilarRefeicoes(historico, perfis) {
+  const porPessoa = new Map(perfis.map((p) => [p.nome, []]));
+  for (let i = 0; i < historico.length; i++) {
+    const m = historico[i];
+    if (m.tipo === 'bot' || !m.refeicao) continue;
+    if (!porPessoa.has(m.nome)) porPessoa.set(m.nome, []);
+    const bot = historico[i + 1]?.tipo === 'bot' ? historico[i + 1] : null;
+    const est = lerEstimativa(bot?.texto);
+    const item = { hora: m.hora, slot: m.refeicao, descricao: descricaoDaAnalise(bot?.texto, m.texto), est };
+    const lista = porPessoa.get(m.nome);
+    const ant = lista[lista.length - 1];
+    if (ant && ant.slot === item.slot && minutosDe(item.hora) - minutosDe(ant.hora) <= JANELA_COMPLEMENTO_MIN) {
+      // mesma refeição complementada: mantém o horário original e fica com a estimativa mais nova (se houver)
+      if (item.est) ant.est = item.est;
+      const extra = String(m.texto || '').replace(/^📷\s*\[foto de comida\]\s*/, '').trim();
+      if (extra && !ant.descricao.includes(extra)) ant.descricao = `${ant.descricao} (+ ${extra})`.slice(0, 220);
+      continue;
+    }
+    lista.push(item);
+  }
+
+  const blocos = [];
+  const totais = {};
+  for (const p of perfis) {
+    const lista = porPessoa.get(p.nome) || [];
+    const tot = lista.reduce(
+      (a, r) => (r.est ? { kcal: a.kcal + r.est.kcal, p: a.p + r.est.p, c: a.c + r.est.c, g: a.g + r.est.g } : a),
+      { kcal: 0, p: 0, c: 0, g: 0 }
+    );
+    totais[p.nome] = { refeicoes: lista.length, ...tot };
+    const metaP = p.peso ? ` (meta de proteína de ${p.nome.split(' ')[0]}: ~${Math.round(p.peso * 1.6)} a ${Math.round(p.peso * 2.2)} g)` : '';
+    blocos.push(
+      `${p.nome}: ${lista.length} refeição(ões) registrada(s)\n` +
+        (lista
+          .map((r) => `  - ${NOME_SLOT[r.slot] || r.slot} (${r.hora}): ${r.descricao || '(sem descrição)'}${r.est ? ` -> ${formatarEstimativa(r.est)}` : ' -> (sem estimativa)'}`)
+          .join('\n') || '  (nenhuma refeição registrada hoje)') +
+        (lista.length ? `\n  TOTAL DO DIA: ${formatarEstimativa(tot)}${metaP}` : '')
+    );
+  }
+  return { texto: blocos.join('\n\n'), totais, porPessoa };
+}

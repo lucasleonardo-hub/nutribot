@@ -9,7 +9,8 @@
 // Limites gratuitos (set/2026): Groq ~6-30k tokens/min; Hugging Face crédito mensal pequeno (402 quando acaba);
 // Cohere trial ~1.000 chamadas/mês, 20/min. Por isso o prompt é encurtado e cada provedor tenta uma vez.
 
-const MAX_CHARS_ENTRADA = Number(process.env.RESERVA_MAX_CHARS) || 24000; // ~6-7k tokens
+const MAX_CHARS_ENTRADA = Number(process.env.RESERVA_MAX_CHARS) || 24000; // ~6-7k tokens (HF, Cohere)
+const MAX_CHARS_GROQ = Number(process.env.RESERVA_MAX_CHARS_GROQ) || 12000; // Groq on_demand devolve 413 acima de ~6k tokens por pedido
 
 const PROVEDORES = [
   {
@@ -18,6 +19,7 @@ const PROVEDORES = [
     chave: () => process.env.GROQ_API_KEY,
     texto: process.env.GROQ_MODEL || 'qwen/qwen3.8-27b',
     visao: null,
+    maxChars: MAX_CHARS_GROQ,
   },
   {
     id: 'huggingface',
@@ -72,14 +74,15 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
   const candidatos = PROVEDORES.filter((p) => p.chave() && (precisaVisao ? p.visao : p.texto));
   if (!candidatos.length) throw new Error(`nenhum provedor reserva disponível para ${precisaVisao ? 'imagem' : 'texto'}`);
 
-  const conteudoUsuario = precisaVisao
-    ? [{ type: 'text', text: encurtar(usuario) }, ...imagens.map((im) => ({ type: 'image_url', image_url: { url: `data:${im.mimeType};base64,${im.data}` } }))]
-    : encurtar(usuario);
   const systemFinal = `${system || ''}\n\nFORMATO: WhatsApp. Negrito com UM asterisco (*assim*), nunca dois. Sem cabeçalhos markdown (#). Sem tabelas.${json ? ' Responda SOMENTE com JSON válido.' : ''}`;
 
   let ultimoErro;
   for (const prov of candidatos) {
     const model = precisaVisao ? prov.visao : prov.texto;
+    const texto = encurtar(usuario, prov.maxChars || MAX_CHARS_ENTRADA);
+    const conteudoUsuario = precisaVisao
+      ? [{ type: 'text', text: texto }, ...imagens.map((im) => ({ type: 'image_url', image_url: { url: `data:${im.mimeType};base64,${im.data}` } }))]
+      : texto;
     const body = {
       model,
       messages: [

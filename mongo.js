@@ -175,7 +175,15 @@ export async function momentosRecentes(limite = 30, pessoa) {
 
 export async function registrarRefeicao(r) {
   // r = { jid, nome, dia, hora, minutos, slot, resumo }
-  await colecao('refeicoes').insertOne({ ...r, criadoEm: new Date() });
+  // Complemento/correção da mesma refeição poucos minutos depois ("a vitamina tem whey") atualiza o registro em vez de criar outro
+  const col = colecao('refeicoes');
+  const ultima = await col.find({ jid: r.jid, dia: r.dia, slot: r.slot }).sort({ minutos: -1 }).limit(1).next();
+  if (ultima && r.minutos - ultima.minutos <= 20) {
+    const resumo = [ultima.resumo, r.resumo].filter((t) => t && t !== '[foto]').join(' + ') || ultima.resumo || r.resumo;
+    await col.updateOne({ _id: ultima._id }, { $set: { resumo: resumo.slice(0, 200), atualizadoEm: new Date() } });
+    return;
+  }
+  await col.insertOne({ ...r, criadoEm: new Date() });
 }
 
 export async function refeicoesDesde(jids, diaInicial) {

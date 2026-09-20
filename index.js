@@ -45,6 +45,7 @@ import * as ia from './gemini.js';
 import { carregarConhecimento, docsPara, atualizarConhecimento, listarDocs, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha, listarDocumentosDe } from './pessoas.js';
+import { compilarRefeicoes } from './resumo.js';
 
 // ============================================================
 // Configuração
@@ -342,7 +343,8 @@ async function enviar(jid, texto, quoted, { rapido = false } = {}) {
   await sock.sendPresenceUpdate('composing', jid).catch(() => {});
   if (!rapido) await new Promise((r) => setTimeout(r, pausaHumana(texto)));
   await sock.sendPresenceUpdate('paused', jid).catch(() => {});
-  const r = await sock.sendMessage(jid, { text: paraWhatsApp(texto) }, quoted ? { quoted } : undefined);
+  const limpo = String(texto || '').replace(/\n?\s*ATUALIZAR:\s*\{[\s\S]*\}\s*$/i, '').trim();
+  const r = await sock.sendMessage(jid, { text: paraWhatsApp(limpo) }, quoted ? { quoted } : undefined);
   if (r?.key?.id) {
     enviadosPeloBot.add(r.key.id);
     if (enviadosPeloBot.size > 500) enviadosPeloBot.delete(enviadosPeloBot.values().next().value);
@@ -921,7 +923,9 @@ async function fecharDia({ forcado = false, diaAlvo } = {}) {
     const historico = [...memoria.mensagens];
 
     if (grupo && (perfis.length || forcado)) {
-      const resumo = await ia.resumoDiario({ dia, perfis, historico, persona, conhecimento: docsPara(perfis) });
+      const compilado = compilarRefeicoes(historico, perfis);
+      console.log(`[resumo] refeições compiladas:\n${compilado.texto}`);
+      const resumo = ia.separarAtualizacao(await ia.resumoDiario({ dia, perfis, historico, persona, refeicoes: compilado.texto })).texto || '(sem resumo)';
       await enviar(grupo, `📋 *RESUMO DO DIA ${dia}*\n\n${resumo}`);
       await salvarMarkdown(
         'Resumos',
