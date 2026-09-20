@@ -883,6 +883,7 @@ async function verificarCobrancas() {
     try {
       const msg = await ia.cobrarRefeicao({
         perfil: p,
+        dia,
         slot: slot.nome,
         horaAgora: hora,
         horaHabitual: hhmmDe(p._hab[slot.id].minutos),

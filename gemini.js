@@ -62,6 +62,7 @@ DICAS (obrigatório em toda análise de refeição):
 VOCÊ É GENTE DO GRUPO (não um serviço):
 - Participa como uma amiga que por acaso é nutricionista. Reage ao que acontece, puxa assunto quando faz sentido, apoia quando precisa.
 - Papo aleatório: se tiver algo bom a acrescentar, entra. Se não tiver, responda EXATAMENTE a palavra SILENCIO (sem mais nada).
+- DATA: o contexto traz a data com o DIA DA SEMANA já calculado (ex: "domingo, 20/09/2026"). Use exatamente esse dia da semana; nunca deduza a partir do número da data.
 - HORÁRIO E FUSO: o contexto traz a hora atual NO FUSO DA PESSOA, a refeição esperada nesse horário e os horários que você já aprendeu dela. Use com humor leve (café às 11h: "acordou agora?"). Se a pessoa ainda não disse onde mora, a hora pode estar errada: não implique com horário antes de saber o fuso.
 - A pasta no Drive de cada pessoa você JÁ LEU; está no contexto como "O QUE VOCÊ SABE SOBRE". Use sem pedir de novo, respeitando a regra de ouro acima.
 - QUANDO NÃO SABE: se a pergunta exige um dado específico que não está na sua base nem você tem certeza (suplemento específico, estudo recente, doença, interação, alimento incomum), responda EXATAMENTE no formato "PESQUISAR: <termos de busca em inglês, científicos>" e NADA mais. Você recebe as fontes e responde de novo. Use só quando realmente precisar.
@@ -98,6 +99,15 @@ export function montarSystem(persona) {
 // ============================================================
 // Helpers
 // ============================================================
+
+/** "domingo, 20/09/2026" a partir de "2026-09-20". O dia da semana vem do código: modelo de linguagem erra isso com frequência. */
+export function dataExtenso(dia) {
+  try {
+    return new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${dia}T12:00:00Z`));
+  } catch {
+    return dia;
+  }
+}
 
 function blocoPerfis(perfis) {
   if (!perfis?.length) return 'Nenhum perfil cadastrado ainda.';
@@ -301,7 +311,7 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
     blocoMomentos(momentos) +
     `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico)}\n\n` +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
-    `DATA E HORA: ${dia} ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
+    `DATA E HORA: ${dataExtenso(dia)}, ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
     `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada - analise a comida da imagem)' : ''}${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
 
   const parts = [{ text: contexto }];
@@ -401,7 +411,7 @@ export async function cobrarDadosFaltando(faltando, persona) {
 export async function resumoDiario({ dia, perfis, historico, persona, refeicoes }) {
   return gerar({
     contents:
-      `Hoje é ${dia}.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
+      `Hoje é ${dataExtenso(dia)}.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
       `TRANSCRIÇÃO DO DIA (só pra contexto de tom, acertos e conversas; os números oficiais estão no bloco seguinte):\n${blocoHistorico(historico, 400)}\n\n` +
       `REFEIÇÕES REGISTRADAS HOJE, POR PESSOA (compiladas pelo sistema a partir das suas próprias análises; use ESTES números e ESTA lista, sem omitir nenhuma refeição e sem recalcular):\n${refeicoes}\n\n` +
       `Escreva o *RESUMO DO DIA* (formato WhatsApp, sem cabeçalhos #, até 320 palavras), no seu personagem: simpática, sincera, engraçada, sarcasmo leve só onde couber. Para CADA pessoa cadastrada, nesta ordem:\n` +
@@ -475,7 +485,7 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico, mom
   if (!historico?.length) return personaAtual || '';
   return gerar({
     contents:
-      `Você é a ${nomeDaBot()}. Hoje é ${dia}. Abaixo está sua MEMÓRIA DE PERSONALIDADE atual, seus momentos memoráveis já registrados e a transcrição do dia. ` +
+      `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Abaixo está sua MEMÓRIA DE PERSONALIDADE atual, seus momentos memoráveis já registrados e a transcrição do dia. ` +
       `Reescreva a memória atualizada, em primeira pessoa, no seu tom, com no máximo 350 palavras. Mantenha o que ainda vale e incorpore o que aconteceu hoje. Seções (títulos em maiúsculo, sem #):\n` +
       `APELIDOS QUE EU DEI: um por pessoa, e por quê.\n` +
       `PIADAS INTERNAS: as 3 a 5 que eu mais uso hoje em dia (os momentos completos ficam no registro separado, não precisa listar todos).\n` +
@@ -495,7 +505,7 @@ export async function extrairMomentos({ dia, perfis, historico }) {
   if (!historico?.length || !perfis?.length) return [];
   const json = await gerar({
     contents:
-      `Você é a ${nomeDaBot()}. Da transcrição de hoje (${dia}), extraia de 0 a 4 MOMENTOS que valem lembrar daqui a semanas: vexames alimentares, acertos raros, frases marcantes, promessas/metas que a pessoa fez, mudanças de rotina, piadas que pegaram. ` +
+      `Você é a ${nomeDaBot()}. Da transcrição de hoje (${dataExtenso(dia)}), extraia de 0 a 4 MOMENTOS que valem lembrar daqui a semanas: vexames alimentares, acertos raros, frases marcantes, promessas/metas que a pessoa fez, mudanças de rotina, piadas que pegaram. ` +
       `Cada momento: uma frase curta (até 25 palavras), concreta, em terceira pessoa, com o nome da pessoa (${perfis.map((p) => p.nome).join(', ')}). Só o que realmente aconteceu. Dia comum sem nada marcante = lista vazia.\n\n` +
       `TRANSCRIÇÃO:\n${blocoHistorico(historico, 400)}`,
     config: {
@@ -530,10 +540,10 @@ export async function extrairMomentos({ dia, perfis, historico }) {
 // ============================================================
 // 7) Cobrança de refeição que não apareceu no horário de costume
 // ============================================================
-export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, costume, persona, historico, conhecimento, dossie }) {
+export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, costume, persona, historico, conhecimento, dossie, dia }) {
   return gerar({
     contents:
-      `São ${horaAgora}. ${perfil.nome} costuma mandar o(a) ${slot} por volta das ${horaHabitual}${costume ? ` (normalmente: ${costume})` : ''} e HOJE ainda não mandou nada dessa refeição.\n` +
+      `Hoje é ${dataExtenso(dia)}, são ${horaAgora}. ${perfil.nome} costuma mandar o(a) ${slot} por volta das ${horaHabitual}${costume ? ` (normalmente: ${costume})` : ''} e HOJE ainda não mandou nada dessa refeição.\n` +
       `Conversa de hoje até agora:\n${blocoHistorico(historico, 40)}\n\n` +
       blocoConhecimento(conhecimento) +
       blocoDossie(perfil.nome, dossie) +
@@ -551,7 +561,7 @@ export async function atualizarRotina({ perfil, refeicoes, historico, dia }) {
     : '(nenhuma refeição registrada ainda)';
   return gerar({
     contents:
-      `Você é a ${nomeDaBot()}. Hoje é ${dia}. Você acompanha ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n` +
+      `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Você acompanha ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n` +
       `ROTINA QUE VOCÊ JÁ TINHA ANOTADO:\n${perfil.rotina || '(nada ainda)'}\n\n` +
       `REFEIÇÕES REGISTRADAS NOS ÚLTIMOS DIAS (data hora [refeição] descrição):\n${lista}\n\n` +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico.filter((m) => m.nome === perfil.nome || m.tipo === 'bot'), 120)}\n\n` +
@@ -627,7 +637,7 @@ export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historic
   if (!falas.length) return notasAtuais || '';
   return gerar({
     contents:
-      `Você é a ${nomeDaBot()}, nutricionista. Hoje é ${dia}. Reescreva SUAS NOTAS sobre ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n\n` +
+      `Você é a ${nomeDaBot()}, nutricionista. Hoje é ${dataExtenso(dia)}. Reescreva SUAS NOTAS sobre ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n\n` +
       `NOTAS ATUAIS:\n${notasAtuais?.trim() || '(nenhuma ainda)'}\n\n` +
       `DOCUMENTOS QUE A PESSOA DEIXOU NA PASTA (você NÃO precisa repetir isso nas notas, só complementar ou registrar mudanças):\n${(dossieDocs || '(nenhum)').slice(0, 6000)}\n\n` +
       `TRANSCRIÇÃO DE HOJE (falas dela e suas):\n${blocoHistorico(falas, 150)}\n\n` +
