@@ -739,7 +739,8 @@ async function processar(msg) {
   let resposta;
   let atualizacao = null;
   try {
-    ({ texto: resposta, atualizacao } = await ia.responder({ texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie, momentos }));
+    // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
+    ({ texto: resposta, atualizacao } = await ia.responder({ texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona, conhecimento: docsPara(eu), dossie, momentos, leve: !motivo }));
   } catch (e) {
     // Gemini (todos) e Groq fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);

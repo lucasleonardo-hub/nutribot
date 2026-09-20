@@ -154,10 +154,16 @@ function blocoHistorico(mensagens, limite = 60) {
 
 // Modelos reserva quando o principal está em "alta demanda" (503) ou sem cota (429)
 // No nível gratuito a cota diária (RPD) é POR MODELO. Espalhar em vários modelos multiplica os pedidos por dia.
-const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite')
+const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-flash')
   .split(',')
   .map((m) => m.trim())
   .filter((m) => m && m !== MODELO);
+// Modelos "leves" (Flash Lite): no nível gratuito têm 500 pedidos/dia cada, contra 20 dos Flash. Tarefas que não
+// precisam do melhor modelo (papo, extração de dados, notas, rotina, cobrança) começam por eles e poupam a cota dos Flash.
+const MODELOS_LEVES = (process.env.GEMINI_MODELOS_LEVES || 'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite')
+  .split(',')
+  .map((m) => m.trim())
+  .filter((m) => m && m !== MODELO && !MODELOS_RESERVA.includes(m));
 
 // Modelo que acabou de falhar fica "de castigo" por um tempo, pra não gastar tentativas (e segundos) nele a cada mensagem.
 // 429 de cota DIÁRIA: 15 min. 429 por minuto: o que a API pedir (retryDelay) ou 60 s. 503 "alta demanda": 90 s. 404 (modelo não existe): 30 min.
@@ -247,9 +253,10 @@ function rebaixarPensar(model, e) {
  * config.estrito=true faz resposta cortada por maxOutputTokens virar erro (documentos que serão gravados).
  */
 async function gerar({ contents, config = {}, tentativas = 2 }) {
-  const { pensar, estrito, ...configApi } = config;
+  const { pensar, estrito, leve, ...configApi } = config;
   let erro;
-  const modelos = [MODELO, ...MODELOS_RESERVA];
+  // leve=true: Flash Lite primeiro (cota diária 25x maior), Flash só se os Lite falharem. Senão: Flash primeiro, Lite no fim.
+  const modelos = leve ? [...MODELOS_LEVES, MODELO, ...MODELOS_RESERVA] : [MODELO, ...MODELOS_RESERVA, ...MODELOS_LEVES];
   for (let mi = 0; mi < modelos.length; mi++) {
     const model = modelos[mi];
     if (emCastigo(model)) continue;
@@ -277,7 +284,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
           if (estrito) throw Object.assign(new Error(`resposta cortada por maxOutputTokens (${configApi.maxOutputTokens || 1024})`), { cortada: true, parcial: texto });
           console.warn(`[gemini] ${model}: resposta cortada por maxOutputTokens`);
         }
-        if (mi > 0) console.warn(`[gemini] respondido pelo modelo reserva ${model}`);
+        if (mi > 0 && !(leve && MODELOS_LEVES.includes(model))) console.warn(`[gemini] respondido pelo modelo reserva ${model}`);
         contabilizar(model, res.usageMetadata);
         return texto;
       } catch (e) {
@@ -344,7 +351,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, jaPesquisou = false }) {
+export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, jaPesquisou = false, leve = false }) {
   // Ordem pensada pro cache implícito do Gemini: o que não muda entre mensagens vem primeiro (conhecimento, perfis, dossiê),
   // o que muda a cada mensagem (hora, histórico, mensagem atual) vem por último.
   const contexto =
@@ -363,7 +370,7 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
 
   const bruto = await gerar({
     contents: [{ role: 'user', parts }],
-    config: { systemInstruction: montarSystem(persona), pensar: false },
+    config: { systemInstruction: montarSystem(persona), pensar: false, leve },
   });
   return separarAtualizacao(bruto);
 }
@@ -391,7 +398,7 @@ export function separarAtualizacao(resposta) {
 export async function pedirOnboarding(nomeContato, persona) {
   return gerar({
     contents: `Uma pessoa nova (contato do WhatsApp: "${nomeContato || 'desconhecido'}") mandou a primeira mensagem no grupo. Você AINDA não tem o cadastro dela. Em até 70 palavras, no seu personagem (simpática e com humor), peça que ela responda em UMA mensagem: nome, peso (kg), altura (cm), objetivo (ex: secar, melhorar o salto, ganhar força), cidade onde mora e se é vegetariana/vegana ou tem alguma restrição alimentar. Explique que sem isso você não consegue analisar direito.`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 300 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 300, leve: true },
   });
 }
 
@@ -404,6 +411,7 @@ export async function extrairDadosOnboarding(texto) {
     config: {
       temperature: 0.1,
       pensar: false,
+      leve: true,
       responseMimeType: 'application/json',
       responseSchema: {
         type: 'object',
@@ -439,7 +447,7 @@ export async function boasVindas(perfil, persona, dossie) {
 export async function cobrarDadosFaltando(faltando, persona) {
   return gerar({
     contents: `A pessoa tentou se cadastrar mas esqueceu: ${faltando.join(', ')}. Em até 40 palavras, no seu personagem (simpática, com humor), peça SÓ o que falta.`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200, leve: true },
   });
 }
 
@@ -496,6 +504,7 @@ export async function extrairGirias({ perfis, historico }) {
     config: {
       temperature: 0.2,
       pensar: false,
+      leve: true,
       responseMimeType: 'application/json',
       responseSchema: {
         type: 'object',
@@ -554,6 +563,7 @@ export async function extrairMomentos({ dia, perfis, historico }) {
     config: {
       temperature: 0.3,
       pensar: false,
+      leve: true,
       responseMimeType: 'application/json',
       responseSchema: {
         type: 'object',
@@ -591,7 +601,7 @@ export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, co
       blocoConhecimento(conhecimento) +
       blocoDossie(perfil.nome, dossie) +
       `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem (simpática, com humor leve): pergunte onde está a refeição (foto ou descrição), lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já falou algo hoje que explique o sumiço, acolha em vez de cobrar. Curta e direta, 1 ou 2 emojis. Não use "SILENCIO".`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 400 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 400, leve: true },
   });
 }
 
@@ -609,7 +619,7 @@ export async function atualizarRotina({ perfil, refeicoes, historico, dia }) {
       `REFEIÇÕES REGISTRADAS NOS ÚLTIMOS DIAS (data hora [refeição] descrição):\n${lista}\n\n` +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico.filter((m) => m.nome === perfil.nome || m.tipo === 'bot'), 120)}\n\n` +
       `Reescreva a ficha de rotina dessa pessoa em até 150 palavras, em terceira pessoa, direto e concreto, cobrindo: horários em que costuma comer cada refeição; o que costuma comer em cada uma (recorrências); refeições que costuma pular; dias/horários de fraqueza (ex: sexta à noite); treino/sono se souber; o que melhorou ou piorou recentemente. Só fatos observados, nada inventado. Sem markdown, sem emojis, sem #.`,
-    config: { temperature: 0.3, pensar: false, maxOutputTokens: 500 },
+    config: { temperature: 0.3, pensar: false, maxOutputTokens: 500, leve: true },
   });
 }
 
@@ -638,7 +648,7 @@ export async function notaDeEstudo({ consulta, fontes, dia }) {
     contents:
       `Em ${dia} você pesquisou sobre "${consulta}" porque sua base não tinha a resposta. Fontes encontradas:\n${fontes}\n\n` +
       `Escreva uma NOTA DE ESTUDO em português do Brasil, até 250 palavras, sem markdown de cabeçalho (#), com: o que a evidência diz (números concretos quando houver), o que é consenso e o que ainda é incerto, e como isso vira conselho prático pra alguém que treina. Se as fontes forem fracas ou não responderem, diga isso na nota. Sem emojis, tom direto.`,
-    config: { temperature: 0.3, pensar: false, maxOutputTokens: 700 },
+    config: { temperature: 0.3, pensar: false, maxOutputTokens: 700, leve: true },
   });
 }
 
@@ -671,7 +681,7 @@ export async function descreverImagemDocumento(buffer, mimeType) {
         ],
       },
     ],
-    config: { temperature: 0.1, maxOutputTokens: 2000, estrito: true },
+    config: { temperature: 0.1, maxOutputTokens: 2000, estrito: true, leve: true },
   });
 }
 
@@ -685,7 +695,7 @@ export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historic
       `DOCUMENTOS QUE A PESSOA DEIXOU NA PASTA (você NÃO precisa repetir isso nas notas, só complementar ou registrar mudanças):\n${(dossieDocs || '(nenhum)').slice(0, 6000)}\n\n` +
       `TRANSCRIÇÃO DE HOJE (falas dela e suas):\n${blocoHistorico(falas, 150)}\n\n` +
       `Escreva as notas atualizadas em até 300 palavras, em tópicos curtos (linhas começando com "- "), terceira pessoa, só FATOS que a pessoa disse ou que você observou, SEMPRE com data quando for medida, meta ou dado que muda (ex: "- 2026-09-16: pesou 73,2 kg"; "- 2026-09-18: mora em Curitiba"). Dado novo SUBSTITUI o antigo (mantenha só o mais recente de peso, cidade, dieta, objetivo; pode registrar a evolução como "peso: 73,2 (09-16) -> 74,5 (09-18)"). Cubra o que importa pro seu trabalho: idade, cidade/fuso, dieta e restrições, trabalho/estudo e horários, treinos/esportes e dias, preferências e aversões alimentares, sono, álcool, metas numéricas, respostas a perguntas que você fez, e detalhes pessoais que ajudam a brincar com carinho. Corte o irrelevante. Se não houver nada novo, devolva as notas atuais. Sem markdown de cabeçalho (#), sem emojis.`,
-    config: { temperature: 0.3, pensar: false, maxOutputTokens: 900, estrito: true },
+    config: { temperature: 0.3, pensar: false, maxOutputTokens: 900, estrito: true, leve: true },
   });
 }
 
@@ -719,6 +729,7 @@ export async function extrairNomeBot(texto) {
       responseMimeType: 'application/json',
       responseSchema: { type: 'object', properties: { nome: { type: 'string', nullable: true } }, required: ['nome'] },
       maxOutputTokens: 60,
+      leve: true,
     },
   });
   try {
@@ -732,6 +743,6 @@ export async function extrairNomeBot(texto) {
 export async function reagirAoNome({ nome, quem, persona }) {
   return gerar({
     contents: `${quem} acabou de te batizar de "${nome}". Reaja no seu personagem em até 50 palavras: aceite (ou finja reclamar e aceite), já assine com o nome novo, e lembre quem ainda não se cadastrou de mandar nome, peso, altura e objetivo. Emojis.`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200 },
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200, leve: true },
   });
 }
