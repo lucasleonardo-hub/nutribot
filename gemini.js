@@ -166,6 +166,25 @@ function castigar(model, e) {
   console.warn(`[gemini] ${model} fora por ${Math.round(ms / 1000)}s`);
 }
 
+// Consumo de tokens: uma linha por chamada e um acumulado do dia (zera na virada, no fuso do processo).
+// Serve pra comparar com a cota do plano (por minuto e por dia) sem chutar.
+const uso = { dia: '', chamadas: 0, entrada: 0, saida: 0, cache: 0 };
+function contabilizar(model, u) {
+  if (!u) return;
+  const hoje = new Date().toISOString().slice(0, 10);
+  if (uso.dia !== hoje) Object.assign(uso, { dia: hoje, chamadas: 0, entrada: 0, saida: 0, cache: 0 });
+  const entrada = u.promptTokenCount || 0;
+  const saida = (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0);
+  const cache = u.cachedContentTokenCount || 0;
+  uso.chamadas++;
+  uso.entrada += entrada;
+  uso.saida += saida;
+  uso.cache += cache;
+  const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  console.log(`[tokens] ${model}: ${k(entrada)} entrada (${k(cache)} em cache) + ${k(saida)} saída | hoje: ${uso.chamadas} chamadas, ${k(uso.entrada)} entrada, ${k(uso.saida)} saída`);
+}
+export const usoDeHoje = () => ({ ...uso });
+
 // Créditos do Gemini acabaram (402): avisa no log uma vez por hora, em destaque, pra não passar despercebido
 let ultimoAvisoCreditos = 0;
 function avisarCreditos(e) {
@@ -210,6 +229,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
           console.warn(`[gemini] ${model}: resposta cortada por maxOutputTokens`);
         }
         if (mi > 0) console.warn(`[gemini] respondido pelo modelo reserva ${model}`);
+        contabilizar(model, res.usageMetadata);
         return texto;
       } catch (e) {
         erro = e;

@@ -267,6 +267,7 @@ app.get('/status', (req, res) => {
     grupo: memoria.grupo,
     keepalive: KEEPALIVE_URL ? `${KEEPALIVE_URL}/ping a cada ${KEEPALIVE_MIN} min` : 'desligado',
     uptimeMin: Math.round(process.uptime() / 60),
+    tokensGeminiHoje: ia.usoDeHoje(),
   });
 });
 // Troca de número sem redeploy: desvincula o aparelho atual e gera um QR novo em /qr
