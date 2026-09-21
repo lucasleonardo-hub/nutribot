@@ -27,7 +27,7 @@ import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin } from './whatsapp.js';
 import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente } from './dia.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
-import { enfileirarMensagem, apresentarNaFila, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
+import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
 
 // ============================================================
 // Configuração
@@ -159,6 +159,7 @@ if (KEEPALIVE_URL) {
     await iniciarWhatsApp({
       aoMensagem: enfileirarMensagem,
       aoEntrarNoGrupo: apresentarNaFila,
+      aoNovoMembro: receberNovoMembro,
       aoConectar: async () => {
         await garantirDiaAtual().catch((e) => console.error('[bot] erro na virada de dia:', e.message));
         if (!restaurou) {

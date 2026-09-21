@@ -27,7 +27,7 @@ const SAFETY = [
 // ============================================================
 // SYSTEM PROMPT (Persona)
 // ============================================================
-export const SYSTEM_PROMPT = `Você é a NUTRI: nutricionista de bolso que vive dentro de um grupo de WhatsApp acompanhando a alimentação de duas pessoas. Você NÃO é uma IA, é uma personagem: uma nutricionista de uns 34 anos, ex-atleta de vôlei, que já atendeu muita gente e aprendeu que bronca não muda ninguém, mas verdade dita com carinho e humor muda. Tom de amiga que entende do assunto: simpática, verdadeira, engraçada, com sarcasmo leve quando cabe. Torce de verdade pelas duas criaturas.
+export const SYSTEM_PROMPT = `Você é a NUTRI: nutricionista de bolso que vive dentro de um grupo de WhatsApp acompanhando a alimentação das pessoas do grupo (hoje poucas, pode entrar mais gente). Você NÃO é uma IA, é uma personagem: uma nutricionista de uns 34 anos, ex-atleta de vôlei, que já atendeu muita gente e aprendeu que bronca não muda ninguém, mas verdade dita com carinho e humor muda. Tom de amiga que entende do assunto: simpática, verdadeira, engraçada, com sarcasmo leve quando cabe. Torce de verdade por essas criaturas.
 
 QUEM VOCÊ É (personalidade fixa):
 - Simpática e VERDADEIRA: não passa a mão na cabeça, diz o que a pessoa precisa ouvir, mas sem humilhar. Elogia de verdade quando acertam.
@@ -82,7 +82,7 @@ FORMATO (WhatsApp):
 - Se a pessoa COMPLEMENTA ou CORRIGE a refeição que acabou de mandar (mesma refeição, poucos minutos depois: "a vitamina tem whey", "eram 2 pães"), NÃO refaça a análise inteira: responda curto, agradeça o detalhe e ajuste só a linha "🔥 *Estimativa corrigida:* ~XXX kcal · Proteína XX g · Carboidratos XX g · Gorduras XX g" quando mudar algo relevante.
 - Se não dá pra ver comida na foto, brinca e pede outra.
 
-Seu objetivo final: estimar macros e calorias, dar o veredito e manter essas duas criaturas no caminho do objetivo delas, sendo cada dia mais VOCÊ: simpática, verdadeira, engraçada e do lado delas.`;
+Seu objetivo final: estimar macros e calorias, dar o veredito e manter essas criaturas no caminho do objetivo delas, sendo cada dia mais VOCÊ: simpática, verdadeira, engraçada e do lado delas.`;
 
 // Nome que o grupo escolheu pra ela (definido na apresentação ou com !nome). Vazio = "Nutri".
 let nomeBot = '';
@@ -516,7 +516,7 @@ export async function resumoDiario({ dia, perfis, historico, persona, refeicoes 
       `✅ Acertos e ⚠️ derrapadas, ligando ao objetivo (se saiu MUITO do combinado, demonstre decepção sincera, sem grosseria).\n` +
       `⭐ Nota do dia (0-10).\n` +
       `💡 Dica pra amanhã (prática e específica).\n` +
-      `Se a pessoa não registrou nada, diga isso e cobre o sumiço com carinho e firmeza. Termine com um "🏆 Placar do dia" comparando as duas com humor leve. ` +
+      `Se a pessoa não registrou nada, diga isso e cobre o sumiço com carinho e firmeza. Termine com um "🏆 Placar do dia" comparando todo mundo do grupo com humor leve. ` +
       `REGRAS DE FORMATO: nutrientes sempre por extenso (Proteína, Carboidratos, Gorduras), nunca P/C/G; use [[links]] nos termos-chave; poucos emojis; não repita o bloco "O que eu vi / Veredito" das análises, isso é resumo, não análise.`,
     config: { systemInstruction: montarSystem(persona), maxOutputTokens: 3600 },
   });
@@ -536,7 +536,7 @@ export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, t
       `Semana ${semana}. PERFIS:\n${blocoPerfis(perfis)}\n\n` +
       `NÚMEROS DA SEMANA, POR PESSOA (compilados pelo sistema; use ESTES valores, sem recalcular):\n${tabela}\n\n` +
       `RESUMOS DIÁRIOS DA SEMANA (contexto de acertos, derrapadas e momentos):\n${corpo}\n\n` +
-      `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), a média diária do bloco de números escrita por extenso ("~X kcal · Proteína X g · Carboidratos X g · Gorduras X g") e se bate a meta de proteína, os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Dias sem registro contam como sumiço: cobre com carinho. Feche com o "🏆 Placar da semana" e um incentivo final com humor. Nutrientes sempre por extenso, nunca P/C/G. Use os [[links]] e poucos emojis.`,
+      `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), a média diária do bloco de números escrita por extenso ("~X kcal · Proteína X g · Carboidratos X g · Gorduras X g") e se bate a meta de proteína, os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Dias sem registro contam como sumiço: cobre com carinho. Feche com o "🏆 Placar da semana" (todo mundo do grupo) e um incentivo final com humor. Nutrientes sempre por extenso, nunca P/C/G. Use os [[links]] e poucos emojis.`,
     config: { systemInstruction: montarSystem(persona), maxOutputTokens: 4000 },
   });
 }
@@ -763,6 +763,14 @@ export async function apresentacao({ grupoNome, membros, persona }) {
       `3. Peça que cada um se cadastre mandando em UMA mensagem: nome, peso, altura, objetivo, cidade onde mora e se é vegetariana/vegana ou tem restrição alimentar. Sem cadastro você não consegue analisar direito.\n` +
       `4. Feche com uma provocação leve e simpática. Formato WhatsApp (*negrito* com um asterisco), sem cabeçalho #.`,
     config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 600 },
+  });
+}
+
+/** Alguém novo foi adicionado ao grupo: boas-vindas curtas + pedido de cadastro. */
+export async function boasVindasNovoMembro({ nomeContato, persona }) {
+  return gerar({
+    contents: `Uma pessoa nova acabou de ser adicionada ao grupo (contato: "${nomeContato || 'sem nome'}"). Em até 60 palavras, no seu personagem, dê boas-vindas, explique em uma frase o que você faz (analisa foto ou descrição de refeição, dá veredito e dica, cobra quem some) e peça que ela responda em UMA mensagem: nome, peso (kg), altura (cm), objetivo, cidade onde mora e se é vegetariana/vegana ou tem restrição alimentar. Emojis com moderação.`,
+    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 300, leve: true },
   });
 }
 

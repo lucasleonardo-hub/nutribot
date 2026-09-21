@@ -95,6 +95,25 @@ export function apresentarNaFila(jidGrupo, motivo) {
   naFila('apresentacao', () => apresentar(jidGrupo, motivo));
 }
 
+/** Outra pessoa foi adicionada: se ainda não tem cadastro, dá boas-vindas e já pede os dados (sem esperar ela falar). */
+export function receberNovoMembro(jidGrupo, participantes) {
+  if (GRUPO_PERMITIDO && jidGrupo !== GRUPO_PERMITIDO) return;
+  naFila('novo-membro', async () => {
+    if (!jaApresentada(jidGrupo)) return; // ela mesma ainda vai se apresentar; o pedido de cadastro já vai junto
+    for (const p of participantes || []) {
+      const jids = [...new Set([p.id, p.phoneNumber, p.lid].filter(Boolean).map((j) => jidNormalizedUser(j)))];
+      if (!jids.length) continue;
+      if (await buscarPerfil(jids)) continue; // já conhecida (voltou pro grupo)
+      const nomeContato = jids.find((j) => j.endsWith('@s.whatsapp.net'))?.split('@')[0] || 'novato(a)';
+      await salvarPerfil({ jids, nome: nomeContato, onboarded: false, girias: [], criadoEm: new Date() });
+      const texto = await ia.boasVindasNovoMembro({ nomeContato, persona: estado.persona });
+      await enviar(jidGrupo, texto);
+      await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto, tipo: 'bot' });
+      console.log(`[bot] novo membro ${jids[0]}: boas-vindas e pedido de cadastro enviados`);
+    }
+  });
+}
+
 // ============================================================
 // Apresentação e nome
 // ============================================================

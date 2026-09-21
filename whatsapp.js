@@ -118,9 +118,10 @@ setInterval(() => {
  * Conecta (e reconecta sozinho). Handlers:
  *  - aoMensagem(msg): mensagem nova a processar
  *  - aoEntrarNoGrupo(jidGrupo, motivo): o bot foi adicionado a um grupo
+ *  - aoNovoMembro(jidGrupo, participantes): outra pessoa foi adicionada ao grupo (lista de {id, phoneNumber, lid})
  *  - aoConectar(): conexão aberta
  */
-export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoConectar }) {
+export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoNovoMembro, aoConectar }) {
   const { state, saveCreds, limparSessao } = await useMongoAuthState();
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
 
@@ -178,7 +179,7 @@ export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoConectar 
         quedasSeguidas++;
         console.log(`[wa] conexão caiu (${codigo}), reconectando em ${Math.round(espera / 1000)}s...`);
       }
-      setTimeout(() => iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoConectar }).catch((e) => console.error('[wa] falha ao reconectar:', e.message)), espera);
+      setTimeout(() => iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoNovoMembro, aoConectar }).catch((e) => console.error('[wa] falha ao reconectar:', e.message)), espera);
     }
   });
 
@@ -186,7 +187,9 @@ export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoConectar 
   // messages.upsert, sem conteúdo; group-participants.update e groups.upsert ficam como caminhos alternativos.
   sock.ev.on('group-participants.update', ({ id, participants, action }) => {
     if (action !== 'add') return;
-    if ((participants || []).some(souEu)) aoEntrarNoGrupo(id, 'adicionada ao grupo');
+    const lista = (participants || []).map((p) => (typeof p === 'string' ? { id: p } : p));
+    if (lista.some(souEu)) aoEntrarNoGrupo(id, 'adicionada ao grupo');
+    else aoNovoMembro?.(id, lista);
   });
   sock.ev.on('groups.upsert', (grupos) => {
     for (const g of grupos || []) if (g?.id?.endsWith('@g.us')) aoEntrarNoGrupo(g.id, 'grupo criado comigo dentro');
@@ -206,6 +209,7 @@ export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoConectar 
           }
         });
         if (adicionados.some(souEu)) aoEntrarNoGrupo(msg.key.remoteJid, 'adicionada ao grupo');
+        else aoNovoMembro?.(msg.key.remoteJid, adicionados);
         continue;
       }
       // 'notify' = mensagem nova de outra pessoa; 'append' + fromMe = digitada no celular do próprio bot
