@@ -11,6 +11,7 @@ import { agora, semanaISO, diaSeguinte, diasAnteriores, ehDomingo } from './util
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
 import { enriquecerPerfis } from './perfis.js';
+import { avisarErro } from './avisos.js';
 
 // ============================================================
 // Memória do dia (RAM + backup no Mongo) e daily note
@@ -32,7 +33,10 @@ export function agendarDiario() {
   if (diarioTimer) return;
   diarioTimer = setTimeout(() => {
     diarioTimer = null;
-    gravarDiario().catch((e) => console.error('[drive] falha ao salvar diário:', e.message));
+    gravarDiario().catch((e) => {
+      console.error('[drive] falha ao salvar diário:', e.message);
+      if (estado.memoria.grupo) avisarErro(estado.memoria.grupo, 'drive', e.message);
+    });
   }, DIARIO_DEBOUNCE_MS);
   diarioTimer.unref?.();
 }
@@ -156,7 +160,7 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
     await registrarLog(dia, `${agora().hora} dia fechado (${historico.length} mensagens)`);
   } catch (e) {
     console.error('[bot] erro ao fechar o dia:', e);
-    if (grupo) await enviar(grupo, `Deu problema no meu resumo de hoje (${e.message}). Amanhã eu compenso. 🙏`).catch(() => {});
+    if (grupo) await avisarErro(grupo, 'resumo', e.message);
   } finally {
     if (forcado) {
       // !resumo no meio do dia: fecha o resumo mas NÃO apaga a memória, senão a tarde começa sem contexto

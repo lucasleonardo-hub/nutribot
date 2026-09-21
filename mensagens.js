@@ -16,6 +16,7 @@ import { enviar, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_F
 import { lembrar, garantirDiaAtual } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
+import { avisarErro } from './avisos.js';
 
 const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood após o bot voltar do sleep)
 const PAPO_INTERVALO_MIN = Number(process.env.PAPO_INTERVALO_MIN) || 10; // papo aleatório: ela entra no máximo 1x a cada N min
@@ -46,7 +47,9 @@ async function drenar() {
     try {
       await processar(lote[i], { emLote: !ultima, atrasadas: ultima ? lote.length - 1 : 0 });
     } catch (e) {
-      console.error('[bot] erro ao processar:', e?.message || e);
+      console.error('[bot] erro ao processar:', e);
+      const jid = lote[i]?.key?.remoteJid;
+      if (jid?.endsWith('@g.us')) await avisarErro(jid, 'interno', e?.message);
     } finally {
       processando = null;
     }
@@ -143,8 +146,6 @@ export function prioridade({ texto, temImagem, temAudio, conteudo }) {
 // ============================================================
 // Lógica principal
 // ============================================================
-let ultimoAvisoFalhaIA = 0;
-
 export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   if (!msg.message) return;
   if (msg.key.fromMe && enviadosPeloBot.has(msg.key.id)) return; // resposta do próprio bot
@@ -257,7 +258,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
       mimeType = conteudo.imageMessage.mimetype || 'image/jpeg';
     } catch (e) {
       console.error('[wa] falha ao baixar imagem:', e.message);
-      return enviar(jidGrupo, 'Tua foto não chegou inteira aqui. Manda de novo? 🙏', msg);
+      return avisarErro(jidGrupo, 'midia');
     }
   }
 
@@ -269,7 +270,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
       audioMime = (conteudo.audioMessage.mimetype || 'audio/ogg').split(';')[0];
     } catch (e) {
       console.error('[wa] falha ao baixar áudio:', e.message);
-      return enviar(jidGrupo, 'Teu áudio não baixou. Manda de novo ou digita pra mim? 🙏', msg);
+      return avisarErro(jidGrupo, 'audio');
     }
   }
 
@@ -306,6 +307,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   const historico = [...estado.memoria.mensagens];
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : temAudio ? 'audio' : 'texto' });
 
+  if (atrasadas >= 3) await avisarErro(jidGrupo, 'lenta');
   const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos };
   let resposta;
   let atualizacao = null;
@@ -317,18 +319,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     console.error('[ia] falha total:', e.message);
     estado.memoria.mensagens.pop(); // não deixa a mensagem sem resposta no histórico como se tivesse sido ignorada
     persistirMemoria(estado.memoria).catch(() => {});
-    if (Date.now() - ultimoAvisoFalhaIA < 10 * 60_000) return; // um aviso a cada 10 min, não um por mensagem
-    ultimoAvisoFalhaIA = Date.now();
-    return enviar(
-      jidGrupo,
-      acaso([
-        'Meu cérebro travou agora (a IA tá fora do ar). Me manda isso de novo daqui a 1 min? 🤯',
-        'Minha conexão com a IA caiu. Repete em um minutinho que eu respondo. 🔌',
-        'Tô offline da cabeça por uns segundos, o servidor engasgou. Manda de novo já já. 😵‍💫',
-      ]),
-      msg,
-      { rapido: true }
-    );
+    return avisarErro(jidGrupo, 'ia'); // 1 aviso a cada 10 min, não um por mensagem
   }
 
   // A Nutri não sabia: pesquisa (PubMed/Wikipedia), responde de novo e guarda a nota de estudo no Drive
