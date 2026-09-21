@@ -29,6 +29,8 @@ services:
         generateValue: true
       - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_API_KEYS
+        sync: false
       - key: MONGODB_URI
         sync: false
       - key: DRIVE_FOLDER_ID

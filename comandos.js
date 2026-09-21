@@ -89,8 +89,8 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       `🩺 *Status da ${ia.nomeDaBot()}*`,
       `No ar há ${Math.round(process.uptime() / 60)} min · hoje (${estado.memoria.dia}): ${estado.memoria.mensagens.length} mensagens na memória`,
       `Gemini hoje: ${u.chamadas} chamadas · ${formatarTokens(u.entrada)} tokens de entrada (${formatarTokens(u.cache)} em cache) · ${formatarTokens(u.saida)} de saída`,
-      `Modelos: ${modelos.length} na fila (${modelos.length - lite} Flash, ${lite} Lite)`,
-      fora.length ? `De castigo: ${fora.map((m) => `${m.modelo} (volta em ${m.voltaEm})`).join(', ')}` : 'De castigo: nenhum ✅',
+      `Modelos: ${modelos.length} na fila (${modelos.length - lite} Flash, ${lite} Lite) · chaves do Gemini: ${ia.totalDeChaves()}${ia.totalDeChaves() > 1 ? ` (uso hoje: ${Object.entries(u.porChave || {}).map(([c, n]) => `chave ${c} = ${n}`).join(', ') || 'nenhum'})` : ''}`,
+      fora.length ? `De castigo (todas as chaves): ${fora.map((m) => `${m.modelo} (volta em ${m.voltaEm})`).join(', ')}` : 'De castigo: nenhum ✅',
       `Reservas externas: ${reservasDisponiveis().join(', ') || 'nenhuma'}`,
     ];
     await enviar(jidGrupo, linhas.join('\n'), msg, { rapido: true });

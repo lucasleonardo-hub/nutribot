@@ -6,14 +6,19 @@ import { agora, dataExtenso, formatarDuracao, formatarTokens } from './util.js';
 export { dataExtenso };
 
 const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-let ai;
 
-function cliente() {
-  if (ai) return ai;
-  if (!process.env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY não definida no .env');
-  ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, httpOptions: { timeout: 30_000 } }); // pedido pendurado não pode travar a fila
-  return ai;
+// Chaves do Gemini: GEMINI_API_KEY e, opcionalmente, mais chaves em GEMINI_API_KEYS (separadas por vírgula).
+// No nível gratuito a cota é por projeto do Google, então cada chave de um projeto diferente soma a própria cota.
+// O castigo (cota estourada, alta demanda) é por chave+modelo: esgotou a chave 1 num modelo, tenta a chave 2 nele.
+const CHAVES = [...new Set([process.env.GEMINI_API_KEY, ...String(process.env.GEMINI_API_KEYS || '').split(',')].map((k) => (k || '').trim()).filter(Boolean))];
+const clientes = new Map(); // índice da chave -> GoogleGenAI
+
+function cliente(ci = 0) {
+  if (!CHAVES.length) throw new Error('GEMINI_API_KEY não definida no .env');
+  if (!clientes.has(ci)) clientes.set(ci, new GoogleGenAI({ apiKey: CHAVES[ci], httpOptions: { timeout: 30_000 } })); // pedido pendurado não pode travar a fila
+  return clientes.get(ci);
 }
+export const totalDeChaves = () => CHAVES.length;
 
 // Nível mais permissivo possível: a persona xinga, então nada pode ser bloqueado.
 const SAFETY = [
@@ -172,8 +177,9 @@ const MODELOS_LEVES = (process.env.GEMINI_MODELOS_LEVES || 'gemini-3.5-flash-lit
 // Modelo que acabou de falhar fica "de castigo" por um tempo, pra não gastar tentativas (e segundos) nele a cada mensagem.
 // 429 de cota DIÁRIA: até o reset (meia-noite no Pacífico). 429 por minuto: o que a API pedir (retryDelay) ou 60 s.
 // 503 "alta demanda": 90 s. 404 (modelo não existe): 30 min. 402/403 (crédito/permissão): 15 min.
-const castigoAte = new Map();
-const emCastigo = (model) => (castigoAte.get(model) || 0) > Date.now();
+const castigoAte = new Map(); // "ci:model" -> timestamp
+const chaveCastigo = (ci, model) => `${ci}:${model}`;
+const emCastigo = (ci, model) => (castigoAte.get(chaveCastigo(ci, model)) || 0) > Date.now();
 
 /** Milissegundos até a próxima meia-noite no horário do Pacífico, quando a cota diária (RPD) do Gemini zera. */
 function msAteResetDiario() {
@@ -186,7 +192,7 @@ function msAteResetDiario() {
   return (86400 - segundos) * 1000 + 60_000; // +1 min de folga
 }
 
-function castigar(model, e) {
+function castigar(ci, model, e) {
   const msg = String(e?.message || '');
   const status = e?.status || e?.code;
   let ms = 90_000;
@@ -197,20 +203,22 @@ function castigar(model, e) {
     // Cota DIÁRIA (RPD) estourada: só volta à meia-noite no Pacífico. Cota por minuto: o que a API pedir, ou 60 s.
     ms = /per\s*day|daily|PerDay/i.test(msg) ? msAteResetDiario() : pedido ? Math.ceil(Number(pedido) * 1000) + 1000 : 60_000;
   }
-  castigoAte.set(model, Date.now() + ms);
-  console.warn(`[gemini] ${model} fora por ${formatarDuracao(ms)}${ms > 3600_000 ? ' (cota diária; volta no reset das 4h-5h de Brasília)' : ''}`);
+  castigoAte.set(chaveCastigo(ci, model), Date.now() + ms);
+  console.warn(`[gemini] ${model} (chave ${ci + 1}) fora por ${formatarDuracao(ms)}${ms > 3600_000 ? ' (cota diária; volta no reset das 4h-5h de Brasília)' : ''}`);
 }
 
 // Consumo de tokens: uma linha por chamada e um acumulado do dia (dia no fuso do grupo, igual ao resto do bot;
 // zera na virada tanto ao gravar quanto ao ler). Serve pra comparar com a cota do plano sem chutar.
-const uso = { dia: '', chamadas: 0, entrada: 0, saida: 0, cache: 0 };
+const uso = { dia: '', chamadas: 0, entrada: 0, saida: 0, cache: 0, porChave: {} };
 function zerarSeVirouDia() {
   const hoje = agora().dia;
-  if (uso.dia !== hoje) Object.assign(uso, { dia: hoje, chamadas: 0, entrada: 0, saida: 0, cache: 0 });
+  if (uso.dia !== hoje) Object.assign(uso, { dia: hoje, chamadas: 0, entrada: 0, saida: 0, cache: 0, porChave: {} });
 }
-function contabilizar(model, u) {
+function contabilizar(model, u, ci = 0) {
   if (!u) return;
   zerarSeVirouDia();
+  uso.porChave ||= {};
+  uso.porChave[ci + 1] = (uso.porChave[ci + 1] || 0) + 1;
   const entrada = u.promptTokenCount || 0;
   const saida = (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0);
   const cache = u.cachedContentTokenCount || 0;
@@ -219,7 +227,7 @@ function contabilizar(model, u) {
   uso.saida += saida;
   uso.cache += cache;
   const k = formatarTokens;
-  console.log(`[tokens] ${model}: ${k(entrada)} entrada (${k(cache)} em cache) + ${k(saida)} saída | hoje: ${uso.chamadas} chamadas, ${k(uso.entrada)} entrada, ${k(uso.saida)} saída`);
+  console.log(`[tokens] ${model}${CHAVES.length > 1 ? ` (chave ${ci + 1})` : ''}: ${k(entrada)} entrada (${k(cache)} em cache) + ${k(saida)} saída | hoje: ${uso.chamadas} chamadas, ${k(uso.entrada)} entrada, ${k(uso.saida)} saída`);
 }
 export function usoDeHoje() {
   zerarSeVirouDia();
@@ -228,11 +236,15 @@ export function usoDeHoje() {
 
 /** Situação de cada modelo agora: livre ou de castigo (e até quando). Pra !status e /status. */
 export function situacaoModelos() {
-  const agora = Date.now();
+  const agoraMs = Date.now();
   const linha = (m, papel) => {
-    const ate = castigoAte.get(m) || 0;
-    const restante = ate - agora;
-    return { modelo: m, papel, livre: restante <= 0, voltaEmMs: restante > 0 ? restante : 0, voltaEm: restante > 0 ? formatarDuracao(restante) : null };
+    const chaves = CHAVES.map((_, ci) => {
+      const restante = (castigoAte.get(chaveCastigo(ci, m)) || 0) - agoraMs;
+      return { chave: ci + 1, livre: restante <= 0, voltaEmMs: restante > 0 ? restante : 0, voltaEm: restante > 0 ? formatarDuracao(restante) : null };
+    });
+    const livres = chaves.filter((c) => c.livre);
+    const proxima = chaves.reduce((a, c) => (a === null || c.voltaEmMs < a.voltaEmMs ? c : a), null);
+    return { modelo: m, papel, livre: livres.length > 0, chavesLivres: livres.length, chaves, voltaEmMs: livres.length ? 0 : proxima?.voltaEmMs || 0, voltaEm: livres.length ? null : proxima?.voltaEm || null };
   };
   return [linha(MODELO, 'principal'), ...MODELOS_RESERVA.map((m) => linha(m, 'reserva')), ...MODELOS_LEVES.map((m) => linha(m, 'leve'))];
 }
@@ -284,17 +296,20 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
   const longo = (configApi.maxOutputTokens || 1024) > 2000;
   // leve=true: Flash Lite primeiro (cota diária 25x maior), Flash só se os Lite falharem. Senão: Flash primeiro, Lite no fim.
   const modelos = leve ? [...MODELOS_LEVES, MODELO, ...MODELOS_RESERVA] : [MODELO, ...MODELOS_RESERVA, ...MODELOS_LEVES];
-  for (let mi = 0; mi < modelos.length; mi++) {
+  let esgotouPrazo = false;
+  for (let mi = 0; mi < modelos.length && !esgotouPrazo; mi++) {
     const model = modelos[mi];
-    if (emCastigo(model)) continue;
+    for (let ci = 0; ci < CHAVES.length; ci++) {
+    if (emCastigo(ci, model)) continue;
     if (Date.now() > prazo) {
       console.warn(`[gemini] prazo de ${Math.round((prazo - inicio) / 1000)}s esgotado na cadeia Gemini; indo pras reservas`);
+      esgotouPrazo = true;
       break;
     }
     const rodadas = mi === 0 ? tentativas : 2; // "alta demanda" costuma durar minutos: cai rápido pro reserva
     for (let i = 0; i < rodadas; i++) {
       try {
-        const res = await cliente().models.generateContent({
+        const res = await cliente(ci).models.generateContent({
           model,
           contents,
           config: {
@@ -323,8 +338,8 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
           if (estrito) throw Object.assign(new Error(`resposta cortada por maxOutputTokens (${configApi.maxOutputTokens || 1024})`), { cortada: true, parcial: texto });
           console.warn(`[gemini] ${model}: resposta cortada por maxOutputTokens`);
         }
-        if (mi > 0 && !(leve && MODELOS_LEVES.includes(model))) console.warn(`[gemini] respondido pelo modelo reserva ${model}`);
-        contabilizar(model, res.usageMetadata);
+        if (mi > 0 && !(leve && MODELOS_LEVES.includes(model))) console.warn(`[gemini] respondido pelo modelo reserva ${model}${ci ? ` (chave ${ci + 1})` : ''}`);
+        contabilizar(model, res.usageMetadata, ci);
         return texto;
       } catch (e) {
         erro = e;
@@ -336,24 +351,25 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         }
         const transitorio =
           status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
-        console.warn(`[gemini] ${model} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
+        console.warn(`[gemini] ${model}${CHAVES.length > 1 ? ` (chave ${ci + 1})` : ''} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
         // 503 "alta demanda": insistir no mesmo modelo segundos depois quase nunca resolve; castigo e próximo modelo na hora
         if (status === 503 || /overloaded|high demand|UNAVAILABLE/i.test(e.message || '')) {
-          castigar(model, e);
+          castigar(ci, model, e);
           break;
         }
         if (!transitorio) {
           // 404 = nome de modelo errado; 402/403 = crédito/permissão: castigo longo e segue pro próximo.
           // Outros (400 etc.): não insiste neste modelo, mas ainda tenta os demais e as reservas antes de desistir.
           if (status === 404 || status === 402 || status === 403 || /NOT_FOUND|not found|credits are depleted|prepayment|PERMISSION_DENIED/i.test(e.message || '')) {
-            castigar(model, e);
+            castigar(ci, model, e);
             if (status === 402 || /credits are depleted|prepayment/i.test(e.message || '')) avisarCreditos(e);
           }
           break;
         }
-        if (i === rodadas - 1) castigar(model, e);
+        if (i === rodadas - 1) castigar(ci, model, e);
         else await new Promise((r) => setTimeout(r, 1200 * (i + 1)));
       }
+    }
     }
   }
 
