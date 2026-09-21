@@ -197,6 +197,22 @@ export async function refeicoesDoDia(dia) {
   return colecao('refeicoes').find({ dia }).toArray();
 }
 
+// ---------- Mensagens ainda não processadas (salvas no desligamento, reprocessadas no boot) ----------
+
+export async function salvarPendentes(lista) {
+  // lista = [{ id, b64 }]  (proto.WebMessageInfo codificado)
+  const col = colecao('fila_pendente');
+  await col.deleteMany({});
+  if (lista?.length) await col.insertMany(lista.map((m) => ({ ...m, salvoEm: new Date() })));
+}
+
+export async function carregarPendentes() {
+  const col = colecao('fila_pendente');
+  const docs = await col.find({}).sort({ salvoEm: 1 }).toArray();
+  if (docs.length) await col.deleteMany({});
+  return docs;
+}
+
 // ---------- Configuração do bot (nome escolhido pelo grupo, apresentações feitas) ----------
 
 export async function lerConfig() {

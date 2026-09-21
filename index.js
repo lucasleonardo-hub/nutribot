@@ -27,7 +27,7 @@ import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin } from './whatsapp.js';
 import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente } from './dia.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
-import { enfileirarMensagem, apresentarNaFila, chaveGrupo } from './mensagens.js';
+import { enfileirarMensagem, apresentarNaFila, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
 
 // ============================================================
 // Configuração
@@ -155,10 +155,17 @@ if (KEEPALIVE_URL) {
       console.log(`[config] grupo ${estado.memoria.grupo} marcado como já apresentado (bot já ativo nele)`);
     }
 
+    let restaurou = false;
     await iniciarWhatsApp({
       aoMensagem: enfileirarMensagem,
       aoEntrarNoGrupo: apresentarNaFila,
-      aoConectar: () => garantirDiaAtual().catch((e) => console.error('[bot] erro na virada de dia:', e.message)),
+      aoConectar: async () => {
+        await garantirDiaAtual().catch((e) => console.error('[bot] erro na virada de dia:', e.message));
+        if (!restaurou) {
+          restaurou = true;
+          await restaurarFilaPendente().catch((e) => console.error('[bot] falha ao restaurar pendentes:', e.message));
+        }
+      },
     });
 
     // Tudo que mexe na memória do dia passa pela mesma fila das mensagens: fechamento e cobrança nunca rodam no meio de uma resposta.
@@ -191,6 +198,7 @@ async function encerrar(sinal) {
   console.log(`[boot] ${sinal} recebido, encerrando...`);
   const limite = setTimeout(() => process.exit(0), 8000).unref();
   try {
+    await salvarFilaPendente().catch((e) => console.error('[bot] falha ao salvar pendentes:', e.message));
     await persistirMemoria(estado.memoria).catch(() => {});
     if (diarioPendente()) await gravarDiario().catch(() => {});
     encerrarSocket();

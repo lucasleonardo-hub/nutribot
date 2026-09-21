@@ -11,7 +11,7 @@ let ai;
 function cliente() {
   if (ai) return ai;
   if (!process.env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY não definida no .env');
-  ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, httpOptions: { timeout: 30_000 } }); // pedido pendurado não pode travar a fila
   return ai;
 }
 
@@ -157,7 +157,7 @@ function blocoHistorico(mensagens, limite = 60) {
 
 // Modelos reserva quando o principal está em "alta demanda" (503) ou sem cota (429)
 // No nível gratuito a cota diária (RPD) é POR MODELO. Espalhar em vários modelos multiplica os pedidos por dia.
-const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3-flash-preview,gemini-2.5-flash')
+const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.8-flash,gemini-3.7-flash,gemini-3.5-flash,gemini-3-flash-preview')
   .split(',')
   .map((m) => m.trim())
   .filter((m) => m && m !== MODELO);
@@ -272,22 +272,39 @@ function rebaixarPensar(model, e) {
  * Gera texto tentando o modelo principal, os reserva do Gemini e por fim Groq/HF/Cohere.
  * config.pensar=false desliga o raciocínio (do jeito certo pra cada série).
  * config.estrito=true faz resposta cortada por maxOutputTokens virar erro (documentos que serão gravados).
+ * config.prazoMs limita o tempo total gasto na cadeia Gemini antes de pular pras reservas (padrão: 60 s em resposta
+ * de conversa, 5 min em documentos longos). Sem isso, num dia de "alta demanda" geral uma mensagem levava 5 minutos.
  */
 async function gerar({ contents, config = {}, tentativas = 2 }) {
-  const { pensar, estrito, leve, ...configApi } = config;
+  const { pensar, estrito, leve, prazoMs, ...configApi } = config;
   let erro;
+  const inicio = Date.now();
+  const prazo = inicio + (prazoMs || ((configApi.maxOutputTokens || 1024) > 2000 ? 300_000 : 60_000));
+  const longo = (configApi.maxOutputTokens || 1024) > 2000;
   // leve=true: Flash Lite primeiro (cota diária 25x maior), Flash só se os Lite falharem. Senão: Flash primeiro, Lite no fim.
   const modelos = leve ? [...MODELOS_LEVES, MODELO, ...MODELOS_RESERVA] : [MODELO, ...MODELOS_RESERVA, ...MODELOS_LEVES];
   for (let mi = 0; mi < modelos.length; mi++) {
     const model = modelos[mi];
     if (emCastigo(model)) continue;
+    if (Date.now() > prazo) {
+      console.warn(`[gemini] prazo de ${Math.round((prazo - inicio) / 1000)}s esgotado na cadeia Gemini; indo pras reservas`);
+      break;
+    }
     const rodadas = mi === 0 ? tentativas : 2; // "alta demanda" costuma durar minutos: cai rápido pro reserva
     for (let i = 0; i < rodadas; i++) {
       try {
         const res = await cliente().models.generateContent({
           model,
           contents,
-          config: { safetySettings: SAFETY, temperature: 0.95, maxOutputTokens: 1024, ...configPensar(model, pensar), ...configApi, _dobrado: undefined },
+          config: {
+            safetySettings: SAFETY,
+            temperature: 0.95,
+            maxOutputTokens: 1024,
+            ...configPensar(model, pensar),
+            ...configApi,
+            _dobrado: undefined,
+            httpOptions: { timeout: longo ? 180_000 : 30_000 },
+          },
         });
         const texto = res.text?.trim();
         const fim = res.candidates?.[0]?.finishReason;
@@ -319,6 +336,11 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         const transitorio =
           status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
         console.warn(`[gemini] ${model} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
+        // 503 "alta demanda": insistir no mesmo modelo segundos depois quase nunca resolve; castigo e próximo modelo na hora
+        if (status === 503 || /overloaded|high demand|UNAVAILABLE/i.test(e.message || '')) {
+          castigar(model, e);
+          break;
+        }
         if (!transitorio) {
           // 404 = nome de modelo errado; 402/403 = crédito/permissão: castigo longo e segue pro próximo.
           // Outros (400 etc.): não insiste neste modelo, mas ainda tenta os demais e as reservas antes de desistir.

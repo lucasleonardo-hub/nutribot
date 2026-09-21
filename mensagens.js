@@ -1,9 +1,9 @@
 // mensagens.js - O fluxo de cada mensagem do grupo: apresentação e nome, comandos, cadastro, decisão de responder ou não,
 // resposta da IA (com pesquisa quando ela não sabe), atualização de perfil e registro de refeição.
 
-import { extractMessageContent, jidNormalizedUser } from '@whiskeysockets/baileys';
+import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
@@ -25,8 +25,66 @@ const gruposIgnoradosLogados = new Set();
 // ============================================================
 // Entrada: o que o whatsapp.js chama
 // ============================================================
+// Mensagens chegam numa lista e a fila drena a lista inteira de uma vez. Se acumulou atraso (IA lenta, bot fora do ar),
+// as mensagens de texto do lote entram só no histórico e a ÚLTIMA recebe a resposta, já sabendo de tudo que chegou.
+// Fotos e áudios do lote continuam sendo analisados um a um. Comandos e cadastro também rodam normalmente.
+const pendentes = [];
+let processando = null; // mensagem em andamento (pra salvar no desligamento também)
+
 export function enfileirarMensagem(msg) {
-  naFila('bot', () => processar(msg));
+  pendentes.push(msg);
+  naFila('bot', drenar);
+}
+
+async function drenar() {
+  if (!pendentes.length) return;
+  const lote = pendentes.splice(0, pendentes.length);
+  if (lote.length > 1) console.log(`[bot] ${lote.length} mensagens acumuladas: lendo tudo e respondendo de uma vez`);
+  for (let i = 0; i < lote.length; i++) {
+    processando = lote[i];
+    const ultima = i === lote.length - 1;
+    try {
+      await processar(lote[i], { emLote: !ultima, atrasadas: ultima ? lote.length - 1 : 0 });
+    } catch (e) {
+      console.error('[bot] erro ao processar:', e?.message || e);
+    } finally {
+      processando = null;
+    }
+  }
+}
+
+/** Mensagens que ainda não foram processadas (pra salvar no desligamento). */
+export function mensagensPendentes() {
+  return [processando, ...pendentes].filter(Boolean);
+}
+
+const codificar = (msg) => Buffer.from(proto.WebMessageInfo.encode(proto.WebMessageInfo.fromObject(msg)).finish()).toString('base64');
+const decodificar = (b64) => proto.WebMessageInfo.decode(Buffer.from(b64, 'base64'));
+
+/** Salva no Mongo o que ainda não foi respondido (chamado no SIGTERM do deploy). */
+export async function salvarFilaPendente() {
+  const lista = mensagensPendentes();
+  await salvarPendentes(lista.map((m) => ({ id: m.key?.id, b64: codificar(m) })));
+  if (lista.length) console.log(`[bot] ${lista.length} mensagem(ns) pendente(s) salva(s) pra depois do restart`);
+}
+
+/** No boot: reenfileira o que ficou pendente no processo anterior (respeitando a idade máxima). */
+export async function restaurarFilaPendente() {
+  const docs = await carregarPendentes().catch(() => []);
+  let n = 0;
+  for (const d of docs) {
+    try {
+      const msg = proto.WebMessageInfo.toObject(decodificar(d.b64), { longs: Number, defaults: false });
+      pendentes.push(msg);
+      n++;
+    } catch (e) {
+      console.warn('[bot] pendente ilegível, descartada:', e.message);
+    }
+  }
+  if (n) {
+    console.log(`[bot] ${n} mensagem(ns) do processo anterior reenfileirada(s)`);
+    naFila('bot', drenar);
+  }
 }
 
 export function apresentarNaFila(jidGrupo, motivo) {
@@ -85,7 +143,9 @@ export function prioridade({ texto, temImagem, temAudio, conteudo }) {
 // ============================================================
 // Lógica principal
 // ============================================================
-export async function processar(msg) {
+let ultimoAvisoFalhaIA = 0;
+
+export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   if (!msg.message) return;
   if (msg.key.fromMe && enviadosPeloBot.has(msg.key.id)) return; // resposta do próprio bot
   const jidGrupo = msg.key.remoteJid;
@@ -214,8 +274,13 @@ export async function processar(msg) {
   }
 
   const motivo = prioridade({ texto, temImagem, temAudio, conteudo });
+  if (emLote && !temImagem && !temAudio) {
+    // Mensagem atrasada de texto: entra no histórico; a resposta vai na última mensagem do lote, já sabendo desta
+    await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
+    return;
+  }
   const papoLiberado = Date.now() - ultimoPapoEm >= PAPO_INTERVALO_MIN * 60_000;
-  if (!motivo && !papoLiberado) {
+  if (!motivo && !papoLiberado && !atrasadas) {
     // Papo entre eles dentro do intervalo: só guarda no histórico (ela "ouviu"), sem gastar IA nem responder
     await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
     return;
@@ -229,7 +294,10 @@ export async function processar(msg) {
   const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
   const contextoHorario =
     `hora local de ${perfil.nome}: ${horaLocal}${eu.cidade ? ` em ${eu.cidade}` : ' (cidade/fuso ainda não informados, pode estar errada)'}; ` +
-    `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}`;
+    `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}` +
+    (atrasadas
+      ? `. ATENÇÃO: você ficou alguns minutos sem conseguir responder e as últimas ${atrasadas} mensagens do histórico chegaram nesse intervalo. Leia todas, responda de uma vez o que precisar de resposta (inclusive perguntas anteriores) e não peça desculpas mais de uma vez`
+      : '');
   // Papo aleatório não leva dossiê nem base de conhecimento (só persona, perfis e histórico): metade dos tokens
   const dossie = motivo ? await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), '')) : '';
   const conhecimento = motivo ? docsPara(eu, { texto }) : '';
@@ -249,6 +317,8 @@ export async function processar(msg) {
     console.error('[ia] falha total:', e.message);
     estado.memoria.mensagens.pop(); // não deixa a mensagem sem resposta no histórico como se tivesse sido ignorada
     persistirMemoria(estado.memoria).catch(() => {});
+    if (Date.now() - ultimoAvisoFalhaIA < 10 * 60_000) return; // um aviso a cada 10 min, não um por mensagem
+    ultimoAvisoFalhaIA = Date.now();
     return enviar(
       jidGrupo,
       acaso([
