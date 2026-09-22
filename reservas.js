@@ -21,7 +21,7 @@ const PROVEDORES = [
     chave: () => process.env.COHERE_API_KEY,
     texto: process.env.COHERE_MODEL || 'command-a-03-2025',
     visao: process.env.COHERE_MODEL_VISAO || 'command-a-vision-07-2025',
-    timeoutMs: 60_000,
+    timeoutMs: 45_000,
   },
   {
     id: 'groq',
@@ -80,12 +80,16 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
   const candidatos = PROVEDORES.filter((p) => p.chave() && (precisaVisao ? p.visao : p.texto));
   if (!candidatos.length) throw new Error(`nenhum provedor reserva disponível para ${precisaVisao ? 'imagem' : 'texto'}`);
 
-  const systemFinal = `${system || ''}\n\nFORMATO: WhatsApp. Negrito com UM asterisco (*assim*), nunca dois. Sem cabeçalhos markdown (#). Sem tabelas.${json ? ' Responda SOMENTE com JSON válido.' : ''}`;
+  const systemFinal =
+    `${system || ''}\n\nVOCÊ É A PERSONAGEM descrita acima e está respondendo dentro do grupo. Nunca fale dela em terceira pessoa nem responda como se fosse outra pessoa do grupo. ` +
+    `O texto do usuário traz o contexto (base de conhecimento, perfis, histórico com o nome de quem falou em cada linha) e termina na MENSAGEM ATUAL: responda a ela, em primeira pessoa, direto pra quem mandou.` +
+    `\n\nFORMATO: WhatsApp. Negrito com UM asterisco (*assim*), nunca dois. Sem cabeçalhos markdown (#). Sem tabelas.${json ? ' Responda SOMENTE com JSON válido.' : ''}`;
+  const usuarioFinal = `${usuario}\n\n(Responda agora como a personagem, em primeira pessoa, à MENSAGEM ATUAL acima. Se for foto de comida consumida, use o bloco 🕐 Refeição / 🍽️ O que eu vi / 🔥 Estimativa / ⚖️ Veredito / 💡 Dica.)`;
 
   let ultimoErro;
   for (const prov of candidatos) {
     const model = precisaVisao ? prov.visao : prov.texto;
-    const texto = encurtar(usuario, prov.maxChars || MAX_CHARS_ENTRADA);
+    const texto = encurtar(usuarioFinal, prov.maxChars || MAX_CHARS_ENTRADA);
     const conteudoUsuario = precisaVisao
       ? [{ type: 'text', text: texto }, ...imagens.map((im) => ({ type: 'image_url', image_url: { url: `data:${im.mimeType};base64,${im.data}` } }))]
       : texto;

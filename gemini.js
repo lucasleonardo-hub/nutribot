@@ -299,17 +299,29 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
   const { pensar, estrito, leve, prazoMs, ...configApi } = config;
   let erro;
   const inicio = Date.now();
-  const prazo = inicio + (prazoMs || ((configApi.maxOutputTokens || 1024) > 2000 ? 300_000 : 60_000));
   const longo = (configApi.maxOutputTokens || 1024) > 2000;
-  // leve=true: Flash Lite primeiro (cota diária 25x maior), Flash só se os Lite falharem. Senão: Flash primeiro, Lite no fim.
-  const modelos = leve ? [...MODELOS_LEVES, MODELO, ...MODELOS_RESERVA] : [MODELO, ...MODELOS_RESERVA, ...MODELOS_LEVES];
+  const prazoTotal = prazoMs || (longo ? 300_000 : 75_000);
+  // Duas fases com prazo próprio: a primeira família de modelos (Flash, ou Lite se leve) tem até ~55% do tempo; a outra
+  // família ganha a vez depois, mesmo que a primeira tenha engasgado. Num dia de "alta demanda" geral, os Lite costumam
+  // responder quando os Flash não respondem, e antes eles nem chegavam a ser tentados.
+  const primeira = leve ? [...MODELOS_LEVES] : [MODELO, ...MODELOS_RESERVA];
+  const segunda = leve ? [MODELO, ...MODELOS_RESERVA] : [...MODELOS_LEVES];
+  const modelos = [...primeira, ...segunda];
+  const prazoFase1 = inicio + Math.round(prazoTotal * 0.55);
+  const prazo = inicio + prazoTotal;
   let esgotouPrazo = false;
   for (let mi = 0; mi < modelos.length && !esgotouPrazo; mi++) {
     const model = modelos[mi];
+    const naPrimeira = mi < primeira.length;
     for (let ci = 0; ci < CHAVES.length; ci++) {
     if (emCastigo(ci, model)) continue;
+    if (naPrimeira && Date.now() > prazoFase1) {
+      console.warn(`[gemini] tempo da primeira família esgotado; passando pra ${leve ? 'Flash' : 'Lite'}`);
+      mi = primeira.length - 1; // próximo laço começa na segunda família
+      break;
+    }
     if (Date.now() > prazo) {
-      console.warn(`[gemini] prazo de ${Math.round((prazo - inicio) / 1000)}s esgotado na cadeia Gemini; indo pras reservas`);
+      console.warn(`[gemini] prazo de ${Math.round(prazoTotal / 1000)}s esgotado na cadeia Gemini; indo pras reservas`);
       esgotouPrazo = true;
       break;
     }
@@ -359,9 +371,10 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         const transitorio =
           status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
         console.warn(`[gemini] ${model}${CHAVES.length > 1 ? ` (chave ${ci + 1})` : ''} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
-        // 503 "alta demanda": insistir no mesmo modelo segundos depois quase nunca resolve; castigo e próximo modelo na hora
+        // 503 "alta demanda" é do MODELO (Google), não da chave: castiga o modelo em todas as chaves e pula pro próximo
         if (status === 503 || /overloaded|high demand|UNAVAILABLE/i.test(e.message || '')) {
-          castigar(ci, model, e);
+          for (let outra = 0; outra < CHAVES.length; outra++) if (outra === ci || !emCastigo(outra, model)) castigar(outra, model, e);
+          ci = CHAVES.length; // sai do laço das chaves deste modelo
           break;
         }
         if (!transitorio) {
