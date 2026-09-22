@@ -129,3 +129,57 @@ export function compilarSemana(refeicoes, perfis, dias) {
   }
   return blocos.join('\n\n');
 }
+
+// ============================================================
+// !hoje: totais do dia por pessoa a partir dos registros (sem IA)
+// ============================================================
+export function resumirHoje(refeicoes, perfis, dia) {
+  const blocos = [];
+  for (const p of perfis) {
+    const minhas = refeicoes.filter((r) => r.dia === dia && ((p.jids || []).includes(r.jid) || r.nome === p.nome)).sort((a, b) => a.minutos - b.minutos);
+    const primeiro = p.apelido || p.nome.split(' ')[0];
+    if (!minhas.length) {
+      blocos.push(`*${primeiro}*: nada registrado hoje ainda 👀`);
+      continue;
+    }
+    const linhas = minhas.map((r) => `${NOME_SLOT[r.slot] || r.slot} ${r.hora}: ${r.estimativa?.kcal ? `~${Math.round(r.estimativa.kcal)} kcal` : '(sem estimativa)'}${r.descricao ? ` · ${r.descricao.slice(0, 60)}` : ''}`);
+    const comEst = minhas.filter((r) => r.estimativa?.kcal);
+    const tot = comEst.reduce((a, r) => soma(a, r.estimativa), { kcal: 0, p: 0, c: 0, g: 0 });
+    const meta = p.peso ? ` · meta de proteína ${Math.round(p.peso * 1.6)} a ${Math.round(p.peso * 2.2)} g` : '';
+    blocos.push(`*${primeiro}* (${minhas.length} ${minhas.length === 1 ? 'refeição' : 'refeições'})\n${linhas.join('\n')}\n📊 ${comEst.length ? formatarEstimativa(tot) : 'sem estimativas'}${meta}`);
+  }
+  return blocos.join('\n\n');
+}
+
+// ============================================================
+// Mês: peso, média por semana e dias sem registro, por pessoa (sem IA)
+// ============================================================
+export function compilarMes(refeicoes, pesagens, perfis, dias) {
+  const blocos = [];
+  const semanaDe = (d) => Math.floor(dias.indexOf(d) / 7) + 1;
+  for (const p of perfis) {
+    const minhas = refeicoes.filter((r) => dias.includes(r.dia) && ((p.jids || []).includes(r.jid) || r.nome === p.nome));
+    const pesos = pesagens.filter((x) => (p.jids || []).includes(x.jid) || x.nome === p.nome).sort((a, b) => a.dia.localeCompare(b.dia));
+    const diasComRegistro = new Set(minhas.map((r) => r.dia));
+    const semDados = dias.filter((d) => !diasComRegistro.has(d)).length;
+    const porSemana = {};
+    for (const r of minhas) {
+      if (!r.estimativa?.kcal) continue;
+      const k = semanaDe(r.dia);
+      porSemana[k] ||= { dias: new Set(), tot: { kcal: 0, p: 0, c: 0, g: 0 } };
+      porSemana[k].dias.add(r.dia);
+      porSemana[k].tot = soma(porSemana[k].tot, r.estimativa);
+    }
+    const linhasSemana = Object.entries(porSemana).map(([k, v]) => {
+      const n = v.dias.size;
+      return `  - semana ${k}: média/dia ${formatarEstimativa({ kcal: v.tot.kcal / n, p: v.tot.p / n, c: v.tot.c / n, g: v.tot.g / n })} (${n} dia(s) com registro)`;
+    });
+    const linhaPeso = pesos.length
+      ? `  - peso: ${pesos.map((x) => `${x.peso} kg (${x.dia.slice(5)})`).join(' -> ')}${pesos.length > 1 ? ` = ${(pesos[pesos.length - 1].peso - pesos[0].peso).toFixed(1)} kg no período` : ''}`
+      : '  - peso: nenhuma pesagem registrada';
+    blocos.push(
+      `${p.nome} (objetivo: ${p.objetivo || '?'})\n${linhaPeso}\n${linhasSemana.join('\n') || '  - sem estimativas registradas'}\n  - ${minhas.length} refeição(ões) registrada(s); ${semDados} dia(s) sem nenhum registro`
+    );
+  }
+  return blocos.join('\n\n');
+}

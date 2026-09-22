@@ -25,7 +25,8 @@ import { reservasDisponiveis } from './reservas.js';
 import { TZ, agora } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin } from './whatsapp.js';
-import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria } from './dia.js';
+import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, pedirPesagem, fecharMes } from './dia.js';
+import { avisarAdmin } from './avisos.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
 
@@ -161,7 +162,8 @@ if (KEEPALIVE_URL) {
       aoMensagem: enfileirarMensagem,
       aoEntrarNoGrupo: apresentarNaFila,
       aoNovoMembro: receberNovoMembro,
-      aoConectar: async () => {
+      aoConectar: async ({ foraPorMin = 0 } = {}) => {
+        if (foraPorMin > 10) avisarAdmin('reconexao', `WhatsApp voltou depois de ${foraPorMin} min desconectado (uptime do processo: ${Math.round(process.uptime() / 60)} min).`).catch(() => {});
         await garantirDiaAtual().catch((e) => console.error('[bot] erro na virada de dia:', e.message));
         if (!restaurou) {
           restaurou = true;
@@ -178,6 +180,11 @@ if (KEEPALIVE_URL) {
     // A cada 10 min: alguém pulou a refeição do horário de costume? Cobra.
     cron.schedule('*/10 * * * *', () => naFila('cobranca', verificarCobrancas), { timezone: TZ });
     console.log(`[cron] cobrança de refeições a cada 10 min (atraso tolerado: ${ATRASO_COBRANCA_MIN} min)`);
+
+    // Domingo 09:00: pesagem semanal (sem IA), a tempo do resumo da semana. Dia 1 às 08:00: relatório do mês anterior.
+    cron.schedule('0 9 * * 0', () => naFila('pesagem', pedirPesagem), { timezone: TZ });
+    cron.schedule('0 8 1 * *', () => naFila('mes', fecharMes), { timezone: TZ });
+    console.log('[cron] pesagem todo domingo 09:00; relatório mensal dia 1 às 08:00');
 
     // Dia 1 de cada mês, 4h: a Nutri estuda o que saiu de novo e revisa a base de conhecimento.
     // Fora da fila de propósito: demora minutos, tem a própria guarda (estudando) e não mexe na memória do dia.

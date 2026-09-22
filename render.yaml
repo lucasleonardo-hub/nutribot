@@ -31,6 +31,8 @@ services:
         sync: false
       - key: GEMINI_API_KEYS
         sync: false
+      - key: ADMIN_JID
+        sync: false
       - key: MONGODB_URI
         sync: false
       - key: DRIVE_FOLDER_ID

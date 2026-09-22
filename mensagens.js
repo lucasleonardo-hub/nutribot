@@ -3,7 +3,7 @@
 
 import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
@@ -340,6 +340,11 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
     return;
   }
+  // !silencio: nesse período só foto/áudio, comando e menção/resposta direta a ela passam; o resto vai só pro histórico
+  if (estado.silencioAte > Date.now() && !['midia', 'mencao', 'resposta-a-ela'].includes(motivo)) {
+    await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
+    return;
+  }
   const papoLiberado = Date.now() - ultimoPapoEm >= PAPO_INTERVALO_MIN * 60_000;
   if (!motivo && !papoLiberado && !atrasadas) {
     // Papo entre eles dentro do intervalo: só guarda no histórico (ela "ouviu"), sem gastar IA nem responder
@@ -421,6 +426,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     if (novo) {
       perfil = await salvarPerfil(novo).catch((e) => (console.error('[perfil] falha ao atualizar:', e.message), perfil));
       console.log(`[perfil] ${perfil.nome} atualizado: ${Object.keys(novo).filter((k) => !['jids', 'atualizacoes'].includes(k)).join(', ')}`);
+      if (novo.peso) registrarPesagem({ jid: jids[0], nome: perfil.nome, dia, peso: novo.peso }).catch(() => {}); // evolução de peso com data
       salvarFicha(perfil, mdPerfil(perfil)).catch(() => {});
     }
   }

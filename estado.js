@@ -14,6 +14,7 @@ export const estado = {
   ultimoQR: null,
   sock: null,
   fechandoDia: false,
+  silencioAte: 0, // !silencio: até quando ela não entra em papo (foto, comando e menção direta continuam)
 };
 
 // Processa uma coisa por vez pra não embaralhar o contexto do dia

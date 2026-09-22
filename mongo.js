@@ -26,6 +26,7 @@ export async function garantirIndices() {
     colecao('refeicoes').createIndex({ dia: 1 }),
     colecao('arquivos_pessoa').createIndex({ arquivoId: 1 }),
     colecao('momentos').createIndex({ dia: -1 }),
+    colecao('pesagens').createIndex({ jid: 1, dia: 1 }),
   ]).catch((e) => console.warn('[mongo] índices:', e.message));
 }
 
@@ -195,6 +196,28 @@ export async function refeicoesDesde(jids, diaInicial) {
 
 export async function refeicoesDoDia(dia) {
   return colecao('refeicoes').find({ dia }).toArray();
+}
+
+// ---------- Pesagens (peso com data, pra evolução) ----------
+
+export async function registrarPesagem({ jid, nome, dia, peso }) {
+  // uma por pessoa por dia: a última vale
+  await colecao('pesagens').replaceOne({ jid, dia }, { jid, nome, dia, peso, criadoEm: new Date() }, { upsert: true });
+}
+
+export async function pesagensDesde(jids, diaInicial) {
+  return colecao('pesagens').find({ jid: { $in: jids }, dia: { $gte: diaInicial } }).sort({ dia: 1 }).toArray();
+}
+
+// ---------- Diário pessoal da Nutri (ela escreve toda noite; só acrescenta) ----------
+
+export async function registrarDiarioNutri({ dia, texto }) {
+  await colecao('diario_nutri').replaceOne({ _id: dia }, { _id: dia, dia, texto, criadoEm: new Date() }, { upsert: true });
+}
+
+export async function diarioNutriRecente(limite = 3) {
+  const docs = await colecao('diario_nutri').find({}).sort({ dia: -1 }).limit(limite).toArray();
+  return docs.reverse();
 }
 
 // ---------- Mensagens ainda não processadas (salvas no desligamento, reprocessadas no boot) ----------

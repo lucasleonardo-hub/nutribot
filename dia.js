@@ -1,12 +1,12 @@
 // dia.js - Memória do dia, daily note no Drive, virada e fechamento do dia (resumo, momentos, gírias, rotina, notas,
 // persona), fechamento da semana e a revisão mensal da base de conhecimento.
 
-import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes } from './mongo.js';
+import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde } from './mongo.js';
 import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { atualizarConhecimento } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
-import { compilarRefeicoes, compilarSemana } from './resumo.js';
+import { compilarRefeicoes, compilarSemana, compilarMes } from './resumo.js';
 import { agora, semanaISO, diaSeguinte, diasAnteriores, ehDomingo } from './util.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
@@ -150,10 +150,24 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
         await salvarFicha(p, mdPerfil(p)).catch(() => {});
       }
 
-      // A Nutri revisa quem ela é: apelidos, piadas internas, padrões e o que afiar amanhã
+      // Diário pessoal dela (só acrescenta): Mongo + Perfis/Nutri-Diario.md
+      try {
+        const entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona }))?.trim();
+        if (entrada) {
+          await registrarDiarioNutri({ dia, texto: entrada });
+          const atual = (await lerMarkdown('Perfis', 'Nutri-Diario.md').catch(() => null)) || frontmatter({ tipo: 'diario-nutri', tags: ['nutribot', 'diario-nutri'] }) + `\n# Diário da ${ia.nomeDaBot()}\n`;
+          await salvarMarkdown('Perfis', 'Nutri-Diario.md', `${atual.trimEnd()}\n\n## ${dia}\n${entrada}\n`).catch(() => {});
+          console.log(`[diario-nutri] entrada de ${dia} gravada (${entrada.length} chars)`);
+        }
+      } catch (e) {
+        console.error('[diario-nutri] falha:', e.message);
+      }
+
+      // A Nutri revisa quem ela é: apelidos, favoritos, implicâncias, padrões, opiniões e o que afiar amanhã
       try {
         const momentos = await momentosRecentes(30).catch(() => []);
-        const nova = await ia.evoluirPersona({ dia, personaAtual: estado.persona, perfis, historico, momentos });
+        const diario = await diarioNutriRecente(3).catch(() => []);
+        const nova = await ia.evoluirPersona({ dia, personaAtual: estado.persona, perfis, historico, momentos, diario });
         if (estado.persona.length > 300 && (nova?.trim().length || 0) < estado.persona.length * 0.4) {
           console.warn('[persona] reescrita descartada: perdeu mais de 60% do conteúdo');
         } else if (nova?.trim()) {
@@ -220,6 +234,50 @@ export async function fecharSemana({ dia, perfis, grupo }) {
     frontmatter({ tipo: 'resumo-semanal', semana, tags: ['nutribot', 'resumo', 'semanal'] }) +
       `\n# Semana ${semana}\n\n${resumo}\n\n---\nDias: ${resumosDiarios.map((r) => `[[Resumos/${r.dia}|${r.dia}]]`).join(' · ')}\n`
   );
+}
+
+// ============================================================
+// Pesagem de domingo: pede o peso de todo mundo (sem IA); o peso dito no grupo entra via ATUALIZAR + pesagens e no semanal da noite
+// ============================================================
+export async function pedirPesagem() {
+  const grupo = estado.memoria.grupo;
+  if (!grupo || estado.statusConexao !== 'conectado') return;
+  const perfis = await listarPerfis().catch(() => []);
+  if (!perfis.length) return;
+  const nomes = perfis.map((p) => p.apelido || p.nome.split(' ')[0]).join(', ');
+  const texto =
+    `⚖️ *Domingo, dia de pesagem!* ${nomes}: manda o peso de hoje aqui no grupo (de manhã, em jejum, depois do banheiro e antes do café, pra comparar igual toda semana). ` +
+    `Eu anoto com a data e já ponho a evolução no resumo da semana hoje à noite. Quem sumir da balança eu cobro. 👀`;
+  await enviar(grupo, texto);
+  await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto, tipo: 'bot' });
+}
+
+// ============================================================
+// Relatório mensal (dia 1): números do mês anterior em código + texto da IA -> grupo e Drive (Resumos/Mes-YYYY-MM.md)
+// ============================================================
+export async function fecharMes() {
+  const grupo = estado.memoria.grupo;
+  if (!grupo) return;
+  const hoje = agora().dia;
+  const primeiroDoMesAtual = `${hoje.slice(0, 7)}-01`;
+  const ultimoDoMesAnterior = diasAnteriores(primeiroDoMesAtual, 2)[0];
+  const mes = ultimoDoMesAnterior.slice(0, 7);
+  const dias = [];
+  for (let d = `${mes}-01`; d <= ultimoDoMesAnterior; d = diaSeguinte(d)) dias.push(d);
+  const perfis = await listarPerfis().catch(() => []);
+  if (!perfis.length) return;
+  const jids = perfis.flatMap((p) => p.jids || []);
+  const refeicoes = await refeicoesDesde(jids, dias[0]).catch(() => []);
+  const pesagens = (await pesagensDesde(jids, dias[0]).catch(() => [])).filter((x) => x.dia <= ultimoDoMesAnterior);
+  const tabela = compilarMes(refeicoes.filter((r) => r.dia <= ultimoDoMesAnterior), pesagens, perfis, dias);
+  console.log(`[mes] ${mes}:\n${tabela}`);
+  const texto = ia.separarAtualizacao(await ia.resumoMensal({ mes, perfis, tabela, persona: estado.persona })).texto || '(sem relatório)';
+  await enviar(grupo, `🗓️ *RELATÓRIO DO MÊS ${mes}*\n\n${texto}`);
+  await salvarMarkdown(
+    'Resumos',
+    `Mes-${mes}.md`,
+    frontmatter({ tipo: 'resumo-mensal', mes, tags: ['nutribot', 'resumo', 'mensal'] }) + `\n# Mês ${mes}\n\n${texto}\n\n---\n## Números\n\n\`\`\`\n${tabela}\n\`\`\`\n`
+  ).catch((e) => console.error('[mes] drive:', e.message));
 }
 
 // ============================================================

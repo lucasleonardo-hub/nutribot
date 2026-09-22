@@ -46,6 +46,24 @@ export const AVISOS = {
 
 const ultimoAviso = new Map(); // tipo -> timestamp
 
+// Avisos pro administrador (ADMIN_JID, ex.: 5548999999999@s.whatsapp.net) na conversa privada: reconexão depois de
+// muito tempo fora, IA totalmente fora, cotas esgotadas. No máximo 1 por tipo a cada 30 min.
+const ADMIN_JID = (process.env.ADMIN_JID || '').trim();
+const ultimoAvisoAdmin = new Map();
+export async function avisarAdmin(tipo, texto) {
+  if (!ADMIN_JID) return false;
+  const agoraMs = Date.now();
+  if (agoraMs - (ultimoAvisoAdmin.get(tipo) || 0) < 30 * 60_000) return false;
+  ultimoAvisoAdmin.set(tipo, agoraMs);
+  try {
+    await enviar(ADMIN_JID, `🔧 *NutriBot:* ${texto}`, undefined, { rapido: true });
+    return true;
+  } catch (e) {
+    console.error('[avisos] não consegui avisar o admin:', e.message);
+    return false;
+  }
+}
+
 /**
  * Manda um aviso do tipo dado, no máximo um por tipo a cada 10 min. `detalhe` (opcional) vai entre parênteses,
  * curto, pra quem quiser entender o que foi. Nunca lança.
@@ -56,6 +74,7 @@ export async function avisarErro(jid, tipo, detalhe) {
   if (agoraMs - (ultimoAviso.get(tipo) || 0) < INTERVALO_MS) return false;
   ultimoAviso.set(tipo, agoraMs);
   const frase = acaso(AVISOS[tipo] || AVISOS.interno);
+  if (tipo === 'ia') avisarAdmin('ia', `a IA falhou em todas as chaves e reservas (${String(detalhe || '').slice(0, 120) || 'sem detalhe'}). Confira o !status.`).catch(() => {});
   const extra = detalhe ? ` _(${String(detalhe).replace(/\s+/g, ' ').slice(0, 80)})_` : '';
   try {
     await enviar(jid, `${frase}${extra}`, undefined, { rapido: true });

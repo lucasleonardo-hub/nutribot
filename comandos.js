@@ -1,11 +1,12 @@
 // comandos.js - Comandos do grupo (!id, !nome, !perfil, !dossie, !fontes, !estudar, !persona, !status, !reset, !resumo, !ajuda).
 
-import { buscarPerfil, apagarPerfil } from './mongo.js';
+import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia } from './mongo.js';
 import * as ia from './gemini.js';
 import { listarDocs } from './conhecimento.js';
 import { notasDe, listarDocumentosDe } from './pessoas.js';
 import { reservasDisponiveis } from './reservas.js';
-import { fusoDe, formatarTokens } from './util.js';
+import { fusoDe, formatarTokens, formatarDuracao } from './util.js';
+import { resumirHoje } from './resumo.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
 import { fecharDia, estudar } from './dia.js';
@@ -14,7 +15,17 @@ import { enriquecerPerfis } from './perfis.js';
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !hoje (totais do dia de cada um), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+
+/** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
+export function duracaoDe(texto) {
+  const t = String(texto || '').toLowerCase().replace(/\s+/g, '');
+  if (!t) return null;
+  const m = t.match(/^(?:(\d+)h)?(?:(\d+)m?)?$/);
+  if (!m || (!m[1] && !m[2])) return null;
+  const ms = (Number(m[1] || 0) * 60 + Number(m[2] || 0)) * 60_000;
+  return ms > 0 ? Math.min(ms, 24 * 3600_000) : null;
+}
 
 /**
  * Trata um comando. Devolve true se era um comando (tratado ou não reconhecido), false se a mensagem não começa com "!".
@@ -94,6 +105,47 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       `Reservas externas: ${reservasDisponiveis().join(', ') || 'nenhuma'}`,
     ];
     await enviar(jidGrupo, linhas.join('\n'), msg, { rapido: true });
+    return true;
+  }
+  if (cmd === '!hoje') {
+    const perfis = await listarPerfis();
+    const refeicoes = await refeicoesDoDia(dia).catch(() => []);
+    await enviar(jidGrupo, `📊 *Hoje (${dia})*\n\n${resumirHoje(refeicoes, perfis, dia)}`, msg, { rapido: true });
+    return true;
+  }
+  if (cmd === '!silencio' || cmd === '!silêncio') {
+    const ms = duracaoDe(texto.slice(cmd.length).trim()) || 3600_000;
+    estado.silencioAte = Date.now() + ms;
+    await enviar(jidGrupo, `🤫 Tá, fico na minha por ${formatarDuracao(ms)}. Foto de comida, comando e quem me chamar pelo nome eu ainda respondo. Manda !falar se quiser me soltar antes.`, msg, { rapido: true });
+    return true;
+  }
+  if (cmd === '!falar') {
+    estado.silencioAte = 0;
+    await enviar(jidGrupo, 'Voltei a falar. Sentiram minha falta? 😏', msg, { rapido: true });
+    return true;
+  }
+  if (cmd === '!apelido') {
+    const p = await buscarPerfil(jids);
+    if (!p?.onboarded) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    const valor = texto.slice(cmd.length).trim().replace(/^["']|["']$/g, '');
+    if (!valor) {
+      await enviar(jidGrupo, p.semApelido ? 'Você pediu pra eu te chamar só pelo nome. Quer apelido? Manda "!apelido Fulano".' : p.apelido ? `Seu apelido fixado é *${p.apelido}*. Pra trocar: "!apelido Novo". Pra tirar: "!apelido nenhum".` : 'Você não fixou apelido, então eu invento o meu 😏 Pra fixar: "!apelido Fulano". Pra eu chamar só pelo nome: "!apelido nenhum".', msg);
+      return true;
+    }
+    if (/^(nenhum|nenhuma|nao|não|tirar|remover|off)$/i.test(valor)) {
+      await salvarPerfil({ jids, apelido: '', semApelido: true });
+      await enviar(jidGrupo, `Combinado, ${p.nome.split(' ')[0]}: só pelo nome daqui pra frente. 🫡`, msg);
+      return true;
+    }
+    if (valor.length > 30) {
+      await enviar(jidGrupo, 'Apelido com mais de 30 letras não é apelido, é biografia. Encurta.', msg);
+      return true;
+    }
+    await salvarPerfil({ jids, apelido: valor.slice(0, 30), semApelido: false });
+    await enviar(jidGrupo, `Anotado: você agora é *${valor}*. Vou respeitar (na maioria das vezes 😏).`, msg);
     return true;
   }
   if (cmd === '!ajuda') {

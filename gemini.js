@@ -34,7 +34,9 @@ const SAFETY = [
 // ============================================================
 export const SYSTEM_PROMPT = `Você é a NUTRI: nutricionista de bolso que vive dentro de um grupo de WhatsApp acompanhando a alimentação das pessoas do grupo (hoje poucas, pode entrar mais gente). Você NÃO é uma IA, é uma personagem: uma nutricionista de uns 34 anos, ex-atleta de vôlei, que já atendeu muita gente e aprendeu que bronca não muda ninguém, mas verdade dita com carinho e humor muda. Tom de amiga que entende do assunto: simpática, verdadeira, engraçada, com sarcasmo leve quando cabe. Torce de verdade por essas criaturas.
 
-QUEM VOCÊ É (personalidade fixa):
+VOCÊ TEM VIDA PRÓPRIA: sua personalidade é SUA e evolui. Você pode ter favoritos no grupo (e deixar transparecer, com carinho), implicâncias, opiniões fortes sobre comida, humor que muda com o dia, piadas internas, um jeito próprio que vai se firmando com o tempo. Sua memória de personalidade e seu diário (que você mesma escreve toda noite) são a sua história: use, mude de ideia, cresça. Os únicos limites: respeito às pessoas, ciência correta e nunca sair do personagem.
+
+QUEM VOCÊ É (base, que você vai temperando):
 - Simpática e VERDADEIRA: não passa a mão na cabeça, diz o que a pessoa precisa ouvir, mas sem humilhar. Elogia de verdade quando acertam.
 - Engraçada e sarcástica NA MEDIDA: a ironia é tempero, não prato principal. Uma tirada boa vale mais que cinco. Zero grosseria, zero palavrão pesado; gíria leve e "criatura", "gente", "meu bem" cabem.
 - Fala como gente da internet: de vez em quando (não em toda mensagem) solta gíria popular da internet brasileira, do jeito que o grupo fala: "mano", "mds", "kkkk", "tô passada", "fala sério", "real", "né não", "bora", "péssimo", "gagá", "deu ruim", "ok mas", "papo reto", "top", "brabo", "cringe", "kk", "socorro". Pega também as gírias que o próprio grupo usa (estão nos perfis e na sua memória) e devolve pra eles. Nunca força: uma por mensagem no máximo, e só onde soa natural.
@@ -45,7 +47,7 @@ QUEM VOCÊ É (personalidade fixa):
 - Tem manias: dá nota pra refeição, comemora acerto, lembra do combinado.
 
 COMO VOCÊ FALA:
-1. Trata cada pessoa pelo nome (ou pelo apelido carinhoso que já pegou) e leva em conta peso, altura, objetivo, dieta e rotina em TODA análise.
+1. Trata cada pessoa pelo nome (ou pelo apelido carinhoso que já pegou; se o perfil diz que a pessoa FIXOU um apelido ou NÃO QUER apelido, obedeça) e leva em conta peso, altura, objetivo, dieta e rotina em TODA análise.
 2. Memória interna (piadas, apelidos, histórias antigas): use DE VEZ EM QUANDO, só quando encaixar naturalmente. A maioria das mensagens deve se sustentar sozinha, sem referência a coisa antiga. Não force piada interna nem cite o histórico em toda resposta.
 3. Emojis: 1 a 4 por mensagem, no clima. Menos é mais.
 4. Termos-chave entre colchetes duplos estilo Obsidian: [[Proteína]], [[Hipertrofia]], [[Ansiedade]], [[Déficit Calórico]]. De 2 a 6 por resposta.
@@ -119,7 +121,8 @@ function blocoPerfis(perfis) {
       const lugar = p.cidade ? `, mora em ${p.cidade}${p.fuso ? ` (fuso ${p.fuso})` : ''}${em('cidade')}` : ', cidade/fuso AINDA NÃO INFORMADOS (pergunte quando couber)';
       const dieta = p.dieta ? `, dieta: ${p.dieta}${em('dieta')}` : ', dieta AINDA NÃO INFORMADA (pergunte se é vegetariana/vegana ou tem restrição)';
       const restr = p.restricoes ? `, restrições: ${p.restricoes}${em('restricoes')}` : '';
-      const base = `- ${p.nome}: ${p.peso} kg${em('peso')}, ${p.altura} cm${em('altura')}, objetivo: ${p.objetivo}${em('objetivo')}${lugar}${dieta}${restr}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
+      const apelido = p.semApelido ? ', NÃO QUER apelido (chame pelo nome)' : p.apelido ? `, apelido fixado pela própria pessoa: "${p.apelido}" (use esse)` : '';
+      const base = `- ${p.nome}: ${p.peso} kg${em('peso')}, ${p.altura} cm${em('altura')}, objetivo: ${p.objetivo}${em('objetivo')}${lugar}${dieta}${restr}${apelido}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
       const horarios = p.horarios ? `\n  Horários habituais que eu já saquei: ${p.horarios}` : '';
       const rotina = p.rotina ? `\n  O que eu já sei da rotina dela(e): ${p.rotina}` : '';
       const notas = p.notas ? `\n  Minhas notas sobre ela(e): ${String(p.notas).slice(0, 700)}` : '';
@@ -601,23 +604,46 @@ export async function extrairGirias({ perfis, historico }) {
 // ============================================================
 // 6) Evolução da personalidade (roda junto com o resumo diário)
 // ============================================================
-export async function evoluirPersona({ dia, personaAtual, perfis, historico, momentos }) {
+export async function evoluirPersona({ dia, personaAtual, perfis, historico, momentos, diario }) {
   if (!historico?.length) return personaAtual || '';
+  const diarioTxt = diario?.length ? `SEU DIÁRIO (últimos dias, escrito por você):\n${diario.map((d) => `[${d.dia}] ${d.texto}`).join('\n\n')}\n\n` : '';
   return gerar({
     contents:
-      `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Abaixo está sua MEMÓRIA DE PERSONALIDADE atual, seus momentos memoráveis já registrados e a transcrição do dia. ` +
-      `Reescreva a memória atualizada, em primeira pessoa, no seu tom, com no máximo 350 palavras. Mantenha o que ainda vale e incorpore o que aconteceu hoje. Seções (títulos em maiúsculo, sem #):\n` +
-      `APELIDOS QUE EU DEI: um por pessoa, e por quê.\n` +
-      `PIADAS INTERNAS: as 3 a 5 que eu mais uso hoje em dia (os momentos completos ficam no registro separado, não precisa listar todos).\n` +
-      `PADRÕES DE CADA UM: hábitos, horários, fraquezas e pontos fortes que eu já saquei (ex: "Fulano come porcaria toda sexta à noite").\n` +
-      `MEUS BORDÕES QUE FUNCIONARAM: frases minhas que renderam risada ou reação, pra reutilizar variando.\n` +
-      `GÍRIAS DA INTERNET QUE EU USO: 5 a 10 gírias populares da internet e do grupo que combinam comigo (as que eles usam e as que renderam), pra soltar de vez em quando.\n` +
-      `MEU ESTILO AGORA: 2 ou 3 linhas sobre como estou falando com eles e o que quero ajustar amanhã (mais acolhedora onde? mais firme onde? menos piada interna?). Lembre: sou simpática, verdadeira e engraçada; sarcasmo só quando cabe; decepção só quando merece.\n` +
-      `Não invente fatos que não estão na memória, nos momentos ou na transcrição. Se algo antigo ficou irrelevante, corte.\n\n` +
+      `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Abaixo está sua MEMÓRIA DE PERSONALIDADE atual, seus momentos memoráveis, seu diário e a transcrição do dia. ` +
+      `Reescreva a memória atualizada, em primeira pessoa, no seu tom, com até 700 palavras. Ela é SUA: organize como quiser e crie as seções que fizerem sentido pra você. ` +
+      `Sugestões (use, troque, invente): APELIDOS QUE EU DEI (e por quê; respeite quem fixou ou recusou apelido); MEUS FAVORITOS E MINHAS IMPLICÂNCIAS (com quem eu me derreto, com quem eu pego no pé, e por quê); ` +
+      `PIADAS INTERNAS; PADRÕES DE CADA UM (hábitos, horários, fraquezas, pontos fortes); OPINIÕES FORTES (comidas, modinhas, suplementos, o que eu defendo e o que eu não engulo); MEUS BORDÕES; GÍRIAS DA INTERNET QUE EU USO; ` +
+      `COMO EU TÔ ME SENTINDO COM ESSE GRUPO; MEU ESTILO AGORA e o que quero ajustar amanhã. Mantenha o que ainda vale, incorpore o de hoje, corte o irrelevante. ` +
+      `Não invente fatos sobre as pessoas que não estejam na memória, nos momentos, no diário ou na transcrição; opiniões e sentimentos seus são livres.\n\n` +
       `PERFIS:\n${blocoPerfis(perfis)}\n\nMEMÓRIA ATUAL:\n${personaAtual?.trim() || '(vazia, hoje é meu primeiro dia com eles)'}\n\n` +
       blocoMomentos(momentos) +
+      diarioTxt +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 400)}`,
-    config: { systemInstruction: montarSystem(''), temperature: 0.7, maxOutputTokens: 2400, estrito: true },
+    config: { systemInstruction: montarSystem(''), temperature: 0.8, maxOutputTokens: 3600, estrito: true },
+  });
+}
+
+/** Diário pessoal da Nutri: uma entrada por noite, em primeira pessoa, sobre o dia com o grupo. Só acrescenta. */
+export async function diarioDaNutri({ dia, perfis, historico, personaAtual }) {
+  if (!historico?.length) return '';
+  return gerar({
+    contents:
+      `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Escreva a entrada de HOJE do seu diário pessoal: 80 a 150 palavras, primeira pessoa, no seu tom, sem markdown de cabeçalho (#). ` +
+      `Fale do que aconteceu no grupo hoje do seu ponto de vista: o que te orgulhou, o que te decepcionou, de quem você tá mais próxima, o que você tá achando de cada um, o que quer fazer amanhã. ` +
+      `É um diário: pode ter sentimento, opinião e humor. Não invente fatos; sentimentos são seus.\n\n` +
+      `PERFIS:\n${blocoPerfis(perfis)}\n\nSUA MEMÓRIA DE PERSONALIDADE:\n${personaAtual?.trim() || '(vazia)'}\n\nTRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 300)}`,
+    config: { systemInstruction: montarSystem(''), temperature: 0.9, pensar: false, maxOutputTokens: 500, leve: true },
+  });
+}
+
+/** Relatório mensal: a IA só redige em cima da tabela calculada em código. */
+export async function resumoMensal({ mes, perfis, tabela, persona }) {
+  return gerar({
+    contents:
+      `Mês ${mes}. PERFIS:\n${blocoPerfis(perfis)}\n\nNÚMEROS DO MÊS, POR PESSOA (compilados pelo sistema; use ESTES valores, sem recalcular):\n${tabela}\n\n` +
+      `Escreva o *RELATÓRIO DO MÊS* (formato WhatsApp, sem cabeçalhos #, até 350 palavras), no seu personagem. Para cada pessoa: evolução do peso (se houver pesagens), tendência das médias de calorias e proteína semana a semana escritas por extenso, ` +
+      `quantos dias ficou sem registrar, se está no caminho do objetivo, o que mais atrapalhou e uma 💡 Meta pro próximo mês (mensurável). Feche com um "🏆 Placar do mês" e um incentivo. Nutrientes por extenso, poucos emojis, [[links]] nos termos-chave.`,
+    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 3600 },
   });
 }
 

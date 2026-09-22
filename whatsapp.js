@@ -148,13 +148,12 @@ export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoNovoMembr
     if (connection === 'open') {
       estado.ultimoQR = null;
       quedasSeguidas = 0;
-      if (desconectadoDesde && Date.now() - desconectadoDesde > ALERTA_DESCONEXAO_MIN * 60_000) {
-        console.warn(`[alerta] WhatsApp voltou depois de ${desconectadoHaMin()} min fora`);
-      }
+      const foraPorMin = desconectadoDesde ? desconectadoHaMin() : 0;
+      if (foraPorMin > ALERTA_DESCONEXAO_MIN) console.warn(`[alerta] WhatsApp voltou depois de ${foraPorMin} min fora`);
       desconectadoDesde = null;
       estado.statusConexao = 'conectado';
       console.log('[wa] conectado como', sock.user?.id, sock.user?.name ? `(${sock.user.name})` : '');
-      Promise.resolve(aoConectar?.()).catch((e) => console.error('[wa] erro ao conectar:', e.message));
+      Promise.resolve(aoConectar?.({ foraPorMin })).catch((e) => console.error('[wa] erro ao conectar:', e.message));
     }
     if (connection === 'close') {
       const codigo = lastDisconnect?.error?.output?.statusCode;

@@ -5,6 +5,8 @@
 //   Resumos/Semana-YYYY-Www.md           -> resumo semanal
 //   Perfis/Nutri.md                      -> memória de personalidade (reescrita toda noite; histórico no Mongo)
 //   Perfis/Nutri-Momentos.md             -> momentos memoráveis (só acrescenta, nunca reescreve)
+//   Perfis/Nutri-Diario.md               -> diário pessoal dela, uma entrada por noite (só acrescenta)
+//   Resumos/Mes-YYYY-MM.md               -> relatório mensal
 //   Conhecimento/*.md                    -> base de conhecimento por foco (revisada mensalmente)
 //   Conhecimento/Pesquisas/*.md          -> notas de estudo de pesquisas feitas no meio da conversa
 //   <Nome da pessoa>/                    -> pasta de cada usuário: docs que ELE deixa + Nutri-Notas.md e Nutri-Ficha.md (pessoas.js)
