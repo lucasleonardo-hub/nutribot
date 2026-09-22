@@ -15,7 +15,7 @@ import { enriquecerPerfis } from './perfis.js';
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !hoje (totais do dia de cada um), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !hoje (seus totais do dia; !hoje todos = grupo inteiro), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -108,9 +108,16 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     return true;
   }
   if (cmd === '!hoje') {
+    // Só de quem mandou o comando; "!hoje todos" mostra o grupo inteiro
+    const todos = /\btodos?\b|\bgeral\b/i.test(texto.slice(cmd.length));
     const perfis = await listarPerfis();
+    const alvo = todos ? perfis : perfis.filter((p) => p.jids?.some((j) => jids.includes(j)));
+    if (!alvo.length) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
     const refeicoes = await refeicoesDoDia(dia).catch(() => []);
-    await enviar(jidGrupo, `📊 *Hoje (${dia})*\n\n${resumirHoje(refeicoes, perfis, dia)}`, msg, { rapido: true });
+    await enviar(jidGrupo, `📊 *${todos ? 'Hoje, todo mundo' : 'Seu dia'} (${dia})*\n\n${resumirHoje(refeicoes, alvo, dia)}${todos ? '' : '\n\n_(!hoje todos mostra o grupo inteiro)_'}`, msg, { rapido: true });
     return true;
   }
   if (cmd === '!silencio' || cmd === '!silêncio') {
