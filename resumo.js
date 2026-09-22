@@ -142,7 +142,7 @@ export function resumirHoje(refeicoes, perfis, dia) {
       blocos.push(`*${primeiro}*: nada registrado hoje ainda 👀`);
       continue;
     }
-    const linhas = minhas.map((r) => `${NOME_SLOT[r.slot] || r.slot} ${r.hora}: ${r.estimativa?.kcal ? `~${Math.round(r.estimativa.kcal)} kcal` : '(sem estimativa)'}${r.descricao ? ` · ${r.descricao.slice(0, 60)}` : ''}`);
+    const linhas = minhas.map((r) => `${NOME_SLOT[r.slot] || r.slot} ${r.horaLocal || r.hora}: ${r.estimativa?.kcal ? `~${Math.round(r.estimativa.kcal)} kcal` : '(sem estimativa)'}${r.descricao ? ` · ${r.descricao.slice(0, 60)}` : ''}`);
     const comEst = minhas.filter((r) => r.estimativa?.kcal);
     const tot = comEst.reduce((a, r) => soma(a, r.estimativa), { kcal: 0, p: 0, c: 0, g: 0 });
     const meta = p.peso ? ` · meta de proteína ${Math.round(p.peso * 1.6)} a ${Math.round(p.peso * 2.2)} g` : '';
@@ -182,4 +182,21 @@ export function compilarMes(refeicoes, pesagens, perfis, dias) {
     );
   }
   return blocos.join('\n\n');
+}
+
+// ============================================================
+// Tipo de refeição dito pela IA na análise ("🕐 *Refeição:* café da manhã") -> id do slot
+// ============================================================
+const TIPO_POR_PALAVRA = [
+  [/caf[eé]|desjejum|breakfast|brunch/i, 'cafe'],
+  [/almo[cç]o|lunch/i, 'almoco'],
+  [/lanche|snack|merenda|pr[eé].?treino|p[oó]s.?treino/i, 'lanche'],
+  [/jantar|janta|dinner/i, 'jantar'],
+  [/ceia|madrugada/i, 'ceia'],
+];
+export function lerTipoRefeicao(texto) {
+  const m = String(texto || '').match(/Refei[cç][aã]o:\*?\s*([^\n]{2,40})/i);
+  if (!m) return null;
+  const achado = TIPO_POR_PALAVRA.find(([re]) => re.test(m[1]));
+  return achado ? achado[1] : null;
 }

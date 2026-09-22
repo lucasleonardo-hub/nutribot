@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { compilarRefeicoes, lerEstimativa, descricaoDaAnalise, compilarSemana } from '../resumo.js';
+import { compilarRefeicoes, lerEstimativa, descricaoDaAnalise, compilarSemana, lerTipoRefeicao } from '../resumo.js';
 
 const L = 'Lucas';
 
@@ -48,4 +48,12 @@ test('compilarSemana monta a tabela por dia e a média', () => {
   assert.match(t, /2026-09-19 \(sáb\): 2 refeições .* ~1200 kcal · Proteína 70 g/);
   assert.match(t, /2026-09-20 \(dom\): 1 refeição/);
   assert.match(t, /MÉDIA nos 1 dia\(s\) com estimativa: ~1200 kcal/);
+});
+
+test('lerTipoRefeicao entende a linha "Refeição:" da análise', () => {
+  assert.equal(lerTipoRefeicao('🕐 *Refeição:* café da manhã\n🍽️ *O que eu vi:* ovos'), 'cafe');
+  assert.equal(lerTipoRefeicao('🕐 *Refeição:* Almoço'), 'almoco');
+  assert.equal(lerTipoRefeicao('Refeição: lanche pós-treino'), 'lanche');
+  assert.equal(lerTipoRefeicao('🕐 *Refeição:* jantar tardio'), 'jantar');
+  assert.equal(lerTipoRefeicao('sem a linha'), null);
 });

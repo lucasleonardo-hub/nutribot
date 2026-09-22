@@ -9,7 +9,7 @@ import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
-import { lerEstimativa, descricaoDaAnalise } from './resumo.js';
+import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao } from './resumo.js';
 import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
@@ -438,13 +438,16 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
 
   const resumoRefeicao = texto || (temImagem ? '[foto]' : temAudio ? '[áudio]' : '');
   if (foiRefeicao) {
+    // O tipo da refeição vem do que a IA entendeu (a pessoa disse "café da manhã"); o relógio só quando ela não disse
+    const slotFinal = lerTipoRefeicao(resposta) || slot.id;
     registrarRefeicao({
       jid: jids[0],
       nome: perfil.nome,
       dia,
       hora,
+      horaLocal, // no fuso da pessoa (Paris é Paris), pra mostrar no !hoje e nos resumos
       minutos: minutosDe(horaLocal), // no fuso da pessoa: é assim que ela aprende o horário habitual
-      slot: slot.id,
+      slot: slotFinal,
       resumo: resumoRefeicao.slice(0, 120),
       descricao: descricaoDaAnalise(resposta, resumoRefeicao),
       estimativa: lerEstimativa(resposta), // kcal e macros da análise, gravados agora: o resumo semanal soma daqui
@@ -453,7 +456,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     // marca a mensagem da pessoa (a última que não é da bot) como refeição, pro diário e pro resumo
     for (let i = mensagens.length - 1; i >= 0; i--) {
       if (mensagens[i].tipo !== 'bot') {
-        mensagens[i].refeicao = slot.id;
+        mensagens[i].refeicao = slotFinal;
         break;
       }
     }
