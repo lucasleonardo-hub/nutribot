@@ -41,6 +41,7 @@ export function iniciarDrive() {
   if (drive) return drive;
   if (!ROOT_ID) throw new Error('DRIVE_FOLDER_ID não definida no .env');
   const auth = new google.auth.GoogleAuth({ credentials: carregarCredenciais(), scopes: SCOPES });
+  google.options({ timeout: Number(process.env.DRIVE_TIMEOUT_MS) || 25_000 }); // pedido pendurado no Drive não pode travar a fila
   drive = google.drive({ version: 'v3', auth });
   console.log('[drive] cliente pronto. Pasta raiz:', ROOT_ID);
   return drive;

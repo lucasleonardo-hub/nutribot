@@ -164,3 +164,14 @@ export function mencionaNome(texto, nome) {
   const escapar = (p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return partes.some((p) => new RegExp(`(?<![\\p{L}\\p{N}])${escapar(p)}(?![\\p{L}\\p{N}])`, 'u').test(t));
 }
+
+// ============================================================
+// Limite de tempo pra qualquer promessa (chamada externa que pode pendurar)
+// ============================================================
+export function comTempo(promessa, ms, rotulo = 'operação') {
+  let timer;
+  const limite = new Promise((_, rejeitar) => {
+    timer = setTimeout(() => rejeitar(new Error(`${rotulo} passou de ${Math.round(ms / 1000)}s`)), ms);
+  });
+  return Promise.race([promessa, limite]).finally(() => clearTimeout(timer));
+}

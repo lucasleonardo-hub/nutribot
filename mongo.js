@@ -11,7 +11,7 @@ export async function conectarMongo() {
   if (db) return db;
   const uri = process.env.MONGODB_URI;
   if (!uri) throw new Error('MONGODB_URI não definida no .env');
-  client = new MongoClient(uri, { maxPoolSize: 5 });
+  client = new MongoClient(uri, { maxPoolSize: 5, serverSelectionTimeoutMS: 15_000, socketTimeoutMS: 45_000, connectTimeoutMS: 15_000 });
   await client.connect();
   db = client.db(process.env.MONGODB_DB || 'nutribot');
   console.log('[mongo] conectado ao banco', db.databaseName);

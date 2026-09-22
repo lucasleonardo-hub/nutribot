@@ -4,7 +4,7 @@ import { listarPerfis, refeicoesDoDia, persistirMemoria } from './mongo.js';
 import * as ia from './gemini.js';
 import { docsPara } from './conhecimento.js';
 import { dossieDe } from './pessoas.js';
-import { agora, fusoDe, SLOTS, minutosDe, hhmmDe } from './util.js';
+import { agora, fusoDe, SLOTS, minutosDe, hhmmDe, comTempo } from './util.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
 import { lembrar, garantirDiaAtual } from './dia.js';
@@ -59,7 +59,7 @@ export async function verificarCobrancas() {
         persona: estado.persona,
         historico: estado.memoria.mensagens,
         conhecimento: docsPara(p, { soBase: true }), // só o documento base: cobrança não precisa da base inteira
-        dossie: await dossieDe(p).catch(() => ''),
+        dossie: await comTempo(dossieDe(p), 20_000, 'dossiê').catch(() => ''),
       });
       if (msg && !/^silencio\W*$/i.test(msg)) {
         await enviar(estado.memoria.grupo, msg);

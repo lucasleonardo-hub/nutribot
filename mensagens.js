@@ -10,7 +10,7 @@ import { docsPara, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
 import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao } from './resumo.js';
-import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome } from './util.js';
+import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
@@ -60,7 +60,8 @@ async function drenar() {
     processando = lote[i];
     const ultima = i === lote.length - 1;
     try {
-      await processar(lote[i], { emLote: !ultima, atrasadas: ultima ? lote.length - 1 : 0 });
+      // cão de guarda: nenhuma mensagem pode prender a fila por mais de 4 min (IA, Drive, Mongo e reservas somados)
+      await comTempo(processar(lote[i], { emLote: !ultima, atrasadas: ultima ? lote.length - 1 : 0 }), 4 * 60_000, 'processamento da mensagem');
     } catch (e) {
       console.error('[bot] erro ao processar:', e);
       const jid = lote[i]?.key?.remoteJid;
@@ -299,7 +300,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     if (faltando.length) return enviar(jidGrupo, await ia.cobrarDadosFaltando(faltando, estado.persona), msg);
 
     perfil = await salvarPerfil({ jids, onboarded: true });
-    const dossieNovo = await dossieDe(perfil).catch((e) => (console.error('[pessoas]', e.message), ''));
+    const dossieNovo = await comTempo(dossieDe(perfil), 20_000, 'leitura da pasta no Drive').catch((e) => (console.error('[pessoas]', e.message), ''));
     const bemVindo = await ia.boasVindas(perfil, estado.persona, dossieNovo);
     await enviar(jidGrupo, bemVindo);
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: bemVindo, tipo: 'bot' });
@@ -365,9 +366,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
       ? `. ATENÇÃO: as últimas ${atrasadas + 1} mensagens do histórico (esta incluída) chegaram juntas, em sequência. Trate como UMA fala só (mesmo contexto, mesma refeição se for comida, mesma pergunta se for dúvida): responda uma vez, considerando tudo, e não responda mensagem por mensagem`
       : '');
   // Papo aleatório não leva dossiê nem base de conhecimento (só persona, perfis e histórico): metade dos tokens
-  const dossie = motivo ? await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), '')) : '';
+  // Drive e Mongo com limite de tempo: se o Google/Atlas pendurar, ela responde sem o dossiê em vez de travar a fila
+  const dossie = motivo ? await comTempo(dossieDe(eu), 20_000, 'leitura da pasta no Drive').catch((e) => (console.error('[pessoas]', e.message), '')) : '';
   const conhecimento = motivo ? docsPara(eu, { texto }) : '';
-  const momentos = await momentosRecentes(12).catch(() => []);
+  const momentos = await comTempo(momentosRecentes(12), 8_000, 'momentos').catch(() => []);
   const citada = citacaoDe(conteudo, perfis);
   const marcaCitacao = citada ? `(respondendo a ${citada.autor}: "${citada.texto.slice(0, 80)}${citada.texto.length > 80 ? '…' : ''}") ` : '';
   const entradaTexto = `${marcaCitacao}${temImagem ? `📷 [foto]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto}`;
