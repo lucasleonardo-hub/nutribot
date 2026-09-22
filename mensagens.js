@@ -13,7 +13,7 @@ import { lerEstimativa, descricaoDaAnalise } from './resumo.js';
 import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
-import { lembrar, garantirDiaAtual } from './dia.js';
+import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
 import { avisarErro } from './avisos.js';
@@ -248,7 +248,9 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   // Perfil criado na entrada no grupo fica com o número como nome até a pessoa dizer o dela; o nome do contato já ajuda
   const nomeNumerico = (n) => !n || /^\d{6,}$/.test(String(n));
   if (nomeNumerico(perfil.nome) && msg.pushName && !/^\d+$/.test(msg.pushName)) {
+    const antigo = perfil.nome;
     perfil = await salvarPerfil({ jids, nome: msg.pushName.trim().slice(0, 60) }).catch(() => perfil);
+    renomearNaMemoria(antigo, perfil.nome);
   }
 
   if (!perfil.onboarded) {
@@ -259,6 +261,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
       parcial[campo] = valor;
       parcial.atualizacoes[campo] = dia;
     };
+    const nomeAntes = perfil.nome;
     if (d.nome) marcar('nome', d.nome);
     if (d.peso_kg) marcar('peso', d.peso_kg);
     if (d.altura_cm) marcar('altura', d.altura_cm);
@@ -268,6 +271,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     if (d.dieta) marcar('dieta', d.dieta);
     if (d.restricoes) marcar('restricoes', d.restricoes);
     perfil = await salvarPerfil(parcial);
+    if (perfil.nome !== nomeAntes) renomearNaMemoria(nomeAntes, perfil.nome);
 
     const faltando = [];
     if (nomeNumerico(perfil.nome)) faltando.push('nome');

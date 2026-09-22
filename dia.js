@@ -48,6 +48,27 @@ export async function gravarDiario(snapshot = estado.memoria) {
 }
 export const diarioPendente = () => diarioSujo;
 
+/** Pessoa mudou de nome no perfil (ex.: entrou como número e depois se cadastrou): renomeia no histórico do dia. */
+export function renomearNaMemoria(antigo, novo) {
+  if (!antigo || !novo || antigo === novo) return 0;
+  let n = 0;
+  for (const m of estado.memoria.mensagens) if (m.nome === antigo) { m.nome = novo; n++; }
+  if (n) {
+    persistirMemoria(estado.memoria).catch(() => {});
+    agendarDiario();
+    console.log(`[memoria] ${n} mensagem(ns) renomeada(s): ${antigo} -> ${novo}`);
+  }
+  return n;
+}
+
+/** No boot: mensagens do dia gravadas com um número no lugar do nome ganham o nome atual do perfil. */
+export function normalizarNomesNaMemoria(perfis) {
+  for (const p of perfis) {
+    const numeros = (p.jids || []).map((j) => j.split('@')[0]).filter((n) => /^\d{6,}$/.test(n));
+    for (const num of numeros) renomearNaMemoria(num, p.nome);
+  }
+}
+
 // ============================================================
 // Virada e fechamento do dia
 // ============================================================

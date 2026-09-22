@@ -25,7 +25,7 @@ import { reservasDisponiveis } from './reservas.js';
 import { TZ, agora } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin } from './whatsapp.js';
-import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente } from './dia.js';
+import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria } from './dia.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
 
@@ -145,6 +145,7 @@ if (KEEPALIVE_URL) {
       estado.memoria = { dia: salva.dia, grupo: salva.grupo || GRUPO_PERMITIDO || null, mensagens: salva.mensagens, cobrancas: salva.cobrancas || {} };
       console.log(`[memoria] restaurada: ${estado.memoria.mensagens.length} mensagens de ${estado.memoria.dia}`);
       // se a data mudou enquanto o bot dormia, o dia antigo é fechado assim que o WhatsApp conectar
+      normalizarNomesNaMemoria(await listarPerfis().catch(() => []));
     }
 
     // Grupo onde ela já trabalhava antes de existir a apresentação: marca como apresentada, senão ela "chega" num grupo
