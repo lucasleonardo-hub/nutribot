@@ -165,6 +165,22 @@ const ASSUNTO_DELA =
   /(?<![\p{L}\p{N}])(comi|comer|comendo|comida|almo[cç]\p{L}*|jant\p{L}*|caf[eé]|lanch\p{L}*|ceia|marmita|prato|refei[cç][aã]o|bebi|beber|[aá]gua|treino|treinei|treinar|academia|corrid\p{L}*|v[oô]lei|dormi\p{L}*|sono|acordei|peso|pesei|balan[cç]a|dieta|fome|pizza|hamb[uú]rguer|refri\p{L}*|cerveja|doce\p{L}*|chocolate|bolo|sorvete|p[aã]o|p[aã]es|massa|macarr[aã]o|ifood|delivery|whey|creatina|prote[ií]na|kcal|caloria\p{L}*|macro\p{L}*|carbo\p{L}*|gordura|salada|frango|ovo\p{L}*|arroz|feij[aã]o|fruta\p{L}*|suplemento|jejum|nutri)(?![\p{L}\p{N}])/iu;
 let ultimoPapoEm = 0;
 
+/** Mensagem citada (quando a pessoa responde marcando outra): { autor, texto } ou null. */
+export function citacaoDe(conteudo, perfis) {
+  const ctx = conteudo?.extendedTextMessage?.contextInfo || conteudo?.imageMessage?.contextInfo || conteudo?.audioMessage?.contextInfo;
+  const q = ctx?.quotedMessage;
+  if (!q) return null;
+  const texto = (q.conversation || q.extendedTextMessage?.text || q.imageMessage?.caption || '').trim();
+  const tipo = q.imageMessage ? '[foto]' : q.audioMessage ? '[áudio]' : q.stickerMessage ? '[figurinha]' : '';
+  const jid = ctx.participant ? jidNormalizedUser(ctx.participant) : null;
+  let autor = 'alguém';
+  if (jid && meusJids().includes(jid)) autor = ia.nomeDaBot();
+  else if (jid) autor = (perfis || []).find((p) => p.jids?.includes(jid))?.nome || autor;
+  else if (ctx.stanzaId && enviadosPeloBot.has(ctx.stanzaId)) autor = ia.nomeDaBot();
+  const trecho = `${tipo}${tipo && texto ? ' ' : ''}${texto}`.trim();
+  return trecho ? { autor, texto: trecho.slice(0, 300) } : null;
+}
+
 export function prioridade({ texto, temImagem, temAudio, conteudo }) {
   if (temImagem || temAudio) return 'midia';
   if (/\?/.test(texto)) return 'pergunta';
@@ -347,12 +363,15 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   const dossie = motivo ? await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), '')) : '';
   const conhecimento = motivo ? docsPara(eu, { texto }) : '';
   const momentos = await momentosRecentes(12).catch(() => []);
-  const entradaTexto = temImagem ? `📷 [foto]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto;
+  const citada = citacaoDe(conteudo, perfis);
+  const marcaCitacao = citada ? `(respondendo a ${citada.autor}: "${citada.texto.slice(0, 80)}${citada.texto.length > 80 ? '…' : ''}") ` : '';
+  const entradaTexto = `${marcaCitacao}${temImagem ? `📷 [foto]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto}`;
   const historico = [...estado.memoria.mensagens];
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : temAudio ? 'audio' : 'texto' });
 
   if (atrasadas >= 6) await avisarErro(jidGrupo, 'lenta'); // só quando foi atraso de verdade, não 2 ou 3 mensagens seguidas
-  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos };
+  const citacao = citacaoDe(conteudo, perfis);
+  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao };
   let resposta;
   let atualizacao = null;
   try {

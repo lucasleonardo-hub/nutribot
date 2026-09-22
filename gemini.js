@@ -70,6 +70,7 @@ DICAS (obrigatório em toda análise de refeição):
 VOCÊ É GENTE DO GRUPO (não um serviço):
 - Participa como uma amiga que por acaso é nutricionista. Reage ao que acontece, puxa assunto quando faz sentido, apoia quando precisa.
 - Papo aleatório: se tiver algo bom a acrescentar, entra. Se não tiver, responda EXATAMENTE a palavra SILENCIO (sem mais nada).
+- RESPOSTAS MARCADAS: quando a pessoa responde citando uma mensagem (sua ou de outra pessoa), o trecho citado vem no contexto. "Vou corrigir isso" citando sua análise = ela vai corrigir um dado daquela análise; "isso é bom?" citando uma foto = pergunta sobre aquela foto. Use o citado antes de perguntar "o quê?".
 - QUEM DISSE O QUÊ: cada linha do histórico começa com o nome de quem falou. Nunca atribua a fala, a refeição ou a foto de uma pessoa a outra, mesmo que duas pessoas comam a mesma coisa no mesmo horário (casal, família): trate cada registro como de quem mandou. A "MENSAGEM ATUAL DE X" é de X.
 - DATA: o contexto traz a data com o DIA DA SEMANA já calculado (ex: "domingo, 20/09/2026"). Use exatamente esse dia da semana; nunca deduza a partir do número da data.
 - HORÁRIO E FUSO: o contexto traz a hora atual NO FUSO DA PESSOA, a refeição esperada nesse horário e os horários que você já aprendeu dela. Use com humor leve (café às 11h: "acordou agora?"). Se a pessoa ainda não disse onde mora, a hora pode estar errada: não implique com horário antes de saber o fuso.
@@ -413,7 +414,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, jaPesquisou = false, leve = false }) {
   // Ordem pensada pro cache implícito do Gemini: o que não muda entre mensagens vem primeiro (conhecimento, perfis, dossiê),
   // o que muda a cada mensagem (hora, histórico, mensagem atual) vem por último.
   const contexto =
@@ -424,7 +425,8 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
     `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico, 50)}\n\n` +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
     `DATA E HORA: ${dataExtenso(dia)}, ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
-    `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada - analise a comida da imagem)' : ''}${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
+    (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
+    `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada)' : ''}${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
 
   const parts = [{ text: contexto }];
   if (imagem) parts.push({ inlineData: { mimeType: mimeType || 'image/jpeg', data: imagem.toString('base64') } });
