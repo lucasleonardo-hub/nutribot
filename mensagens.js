@@ -32,15 +32,30 @@ const gruposIgnoradosLogados = new Set();
 const pendentes = [];
 let processando = null; // mensagem em andamento (pra salvar no desligamento também)
 
+// Janela de espera: quem manda 3 mensagens seguidas ("comi arroz", "e feijão", "e uma banana") não quer 3 respostas.
+// Cada mensagem nova reinicia a espera (até um teto), e aí o lote inteiro é lido de uma vez.
+const ESPERA_LOTE_MS = Number(process.env.ESPERA_LOTE_MS) || 6000;
+const ESPERA_LOTE_MAX_MS = Number(process.env.ESPERA_LOTE_MAX_MS) || 20000;
+let esperaTimer = null;
+let esperaDesde = 0;
+
 export function enfileirarMensagem(msg) {
   pendentes.push(msg);
-  naFila('bot', drenar);
+  const agoraMs = Date.now();
+  if (!esperaDesde) esperaDesde = agoraMs;
+  if (esperaTimer) clearTimeout(esperaTimer);
+  const restante = Math.max(0, Math.min(ESPERA_LOTE_MS, esperaDesde + ESPERA_LOTE_MAX_MS - agoraMs));
+  esperaTimer = setTimeout(() => {
+    esperaTimer = null;
+    esperaDesde = 0;
+    naFila('bot', drenar);
+  }, restante);
 }
 
 async function drenar() {
   if (!pendentes.length) return;
   const lote = pendentes.splice(0, pendentes.length);
-  if (lote.length > 1) console.log(`[bot] ${lote.length} mensagens acumuladas: lendo tudo e respondendo de uma vez`);
+  if (lote.length > 1) console.log(`[bot] ${lote.length} mensagens juntas: lendo tudo e respondendo de uma vez`);
   for (let i = 0; i < lote.length; i++) {
     processando = lote[i];
     const ultima = i === lote.length - 1;
@@ -230,6 +245,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     return;
   }
 
+  // Perfil criado na entrada no grupo fica com o número como nome até a pessoa dizer o dela; o nome do contato já ajuda
+  const nomeNumerico = (n) => !n || /^\d{6,}$/.test(String(n));
+  if (nomeNumerico(perfil.nome) && msg.pushName && !/^\d+$/.test(msg.pushName)) {
+    perfil = await salvarPerfil({ jids, nome: msg.pushName.trim().slice(0, 60) }).catch(() => perfil);
+  }
+
   if (!perfil.onboarded) {
     if (!texto) return enviar(jidGrupo, 'Foto e áudio não valem como cadastro 😅 Manda em TEXTO: nome, peso, altura, objetivo, cidade onde mora e se é vegetariana(o) ou tem restrição.', msg);
     const d = await ia.extrairDadosOnboarding(texto);
@@ -249,7 +270,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     perfil = await salvarPerfil(parcial);
 
     const faltando = [];
-    if (!perfil.nome) faltando.push('nome');
+    if (nomeNumerico(perfil.nome)) faltando.push('nome');
     if (!perfil.peso) faltando.push('peso');
     if (!perfil.altura) faltando.push('altura');
     if (!perfil.objetivo) faltando.push('objetivo');
@@ -316,17 +337,17 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     `hora local de ${perfil.nome}: ${horaLocal}${eu.cidade ? ` em ${eu.cidade}` : ' (cidade/fuso ainda não informados, pode estar errada)'}; ` +
     `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}` +
     (atrasadas
-      ? `. ATENÇÃO: você ficou alguns minutos sem conseguir responder e as últimas ${atrasadas} mensagens do histórico chegaram nesse intervalo. Leia todas, responda de uma vez o que precisar de resposta (inclusive perguntas anteriores) e não peça desculpas mais de uma vez`
+      ? `. ATENÇÃO: as últimas ${atrasadas + 1} mensagens do histórico (esta incluída) chegaram juntas, em sequência. Trate como UMA fala só (mesmo contexto, mesma refeição se for comida, mesma pergunta se for dúvida): responda uma vez, considerando tudo, e não responda mensagem por mensagem`
       : '');
   // Papo aleatório não leva dossiê nem base de conhecimento (só persona, perfis e histórico): metade dos tokens
   const dossie = motivo ? await dossieDe(eu).catch((e) => (console.error('[pessoas]', e.message), '')) : '';
   const conhecimento = motivo ? docsPara(eu, { texto }) : '';
   const momentos = await momentosRecentes(12).catch(() => []);
-  const entradaTexto = temImagem ? `📷 [foto de comida]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto;
+  const entradaTexto = temImagem ? `📷 [foto]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto;
   const historico = [...estado.memoria.mensagens];
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : temAudio ? 'audio' : 'texto' });
 
-  if (atrasadas >= 3) await avisarErro(jidGrupo, 'lenta');
+  if (atrasadas >= 6) await avisarErro(jidGrupo, 'lenta'); // só quando foi atraso de verdade, não 2 ou 3 mensagens seguidas
   const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos };
   let resposta;
   let atualizacao = null;
@@ -364,8 +385,9 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     }
   }
 
-  // Foi refeição? (foto, ou a Nutri analisou comida) -> registra pra aprender a rotina e não cobrar depois
-  const foiRefeicao = temImagem || /O que eu vi|Estimativa[^:\n]*:/i.test(resposta || ''); // inclui "Estimativa corrigida:"
+  // Foi refeição? Só quando a Nutri analisou como refeição consumida (bloco "O que eu vi"/"Estimativa"). Foto de receita,
+  // rótulo, cardápio ou dúvida ("isso é bom?") não conta como refeição, então não entra na rotina nem no resumo.
+  const foiRefeicao = /O que eu vi|Estimativa[^:\n]*:/i.test(resposta || ''); // inclui "Estimativa corrigida:"
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
   if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
@@ -399,8 +421,13 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
       estimativa: lerEstimativa(resposta), // kcal e macros da análise, gravados agora: o resumo semanal soma daqui
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
     const mensagens = estado.memoria.mensagens;
-    const ultima = mensagens[mensagens.length - (resposta ? 2 : 1)];
-    if (ultima) ultima.refeicao = slot.id;
+    // marca a mensagem da pessoa (a última que não é da bot) como refeição, pro diário e pro resumo
+    for (let i = mensagens.length - 1; i >= 0; i--) {
+      if (mensagens[i].tipo !== 'bot') {
+        mensagens[i].refeicao = slot.id;
+        break;
+      }
+    }
   }
   // A daily note do Drive é regerada a partir da memória (agendarDiario, chamado por lembrar)
 }

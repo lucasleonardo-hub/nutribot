@@ -24,7 +24,7 @@ export function descricaoDaAnalise(textoBot, fallback) {
     .replace(/^\s*[-•*]\s*/gm, '')
     .replace(/\s+/g, ' ')
     .trim();
-  return (d || String(fallback || '').replace(/^📷\s*\[foto de comida\]\s*/, '') || '').slice(0, 160);
+  return (d || String(fallback || '').replace(/^📷\s*\[foto(?: de comida)?\]\s*/, '') || '').slice(0, 160);
 }
 
 export const formatarEstimativa = (e) =>
@@ -50,7 +50,7 @@ export function compilarRefeicoes(historico, perfis) {
     if (ant && ant.slot === item.slot && minutosDe(item.hora) - minutosDe(ant.hora) <= JANELA_COMPLEMENTO_MIN) {
       // mesma refeição complementada: mantém o horário original e fica com a estimativa mais nova (se houver)
       if (item.est) ant.est = item.est;
-      const extra = String(m.texto || '').replace(/^📷\s*\[foto de comida\]\s*/, '').trim();
+      const extra = String(m.texto || '').replace(/^📷\s*\[foto(?: de comida)?\]\s*/, '').trim();
       if (extra && !ant.descricao.includes(extra)) ant.descricao = `${ant.descricao} (+ ${extra})`.slice(0, 220);
       continue;
     }

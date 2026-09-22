@@ -34,14 +34,13 @@ function pausaHumana(texto) {
   return base + Math.random() * 700;
 }
 
-// Frases instantâneas quando chega foto de comida (sem IA): a pessoa sabe que a Nutri "tá olhando"
+// Frases instantâneas quando chega foto (sem IA): a pessoa sabe que a Nutri "tá olhando". Pode ser prato, receita ou rótulo.
 export const ACKS_FOTO = [
-  '👀 Deixa eu ver esse prato...',
-  '🔍 Analisando essa refeição, segura aí.',
+  '👀 Deixa eu ver essa foto...',
+  '🔍 Olhando aqui, segura aí.',
   'Hmm, olhando com carinho aqui... 🧐',
-  'Calma que eu tô olhando essa comida. 👀🍽️',
-  'Já vi. Fazendo as contas... 🧮',
-  'Peraí, dando zoom no prato. 🔎',
+  'Já vi. Analisando... 🧮',
+  'Peraí, dando zoom. 🔎',
   'Ó a foto chegando. Tô avaliando... 😊',
 ];
 export const acaso = (lista) => lista[Math.floor(Math.random() * lista.length)];

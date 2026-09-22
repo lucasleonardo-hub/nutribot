@@ -143,13 +143,22 @@ export function docsPara(perfilOuLista, { texto, soBase = false } = {}) {
   }
 
   const escolhidos = [...docs.values()].filter((d) => focos.has(d.foco)).sort((a, b) => (a.foco === 'base' ? -1 : b.foco === 'base' ? 1 : a.id.localeCompare(b.id)));
-  // pesquisas recentes que ela mesma fez no meio da conversa (as 2 mais novas, resumidas)
-  const pesquisas = soBase
+  // Pesquisas que ela mesma fez no meio da conversa: as que falam do assunto da mensagem atual (por palavra) + a mais recente.
+  // Assim uma pesquisa antiga sobre "whey X" volta quando alguém pergunta do whey de novo, sem pesquisar outra vez.
+  const semAcento = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const palavras = (t) => new Set(semAcento(t).split(/[^a-z0-9]+/).filter((w) => w.length >= 4));
+  const todasPesquisas = soBase
     ? []
-    : [...docs.values()]
-        .filter((d) => d.foco === 'pesquisa')
-        .sort((a, b) => String(b.atualizado).localeCompare(String(a.atualizado)))
-        .slice(0, 2);
+    : [...docs.values()].filter((d) => d.foco === 'pesquisa').sort((a, b) => String(b.atualizado).localeCompare(String(a.atualizado)));
+  let pesquisas = todasPesquisas.slice(0, completo ? 2 : 1);
+  if (!soBase && texto) {
+    const daMensagem = palavras(texto);
+    const relevantes = todasPesquisas.filter((d) => {
+      const doDoc = palavras(`${d.titulo} ${d.consulta_en} ${d.corpo.slice(0, 300)}`);
+      return [...daMensagem].some((w) => doDoc.has(w));
+    });
+    pesquisas = [...new Set([...relevantes.slice(0, 3), ...pesquisas])].slice(0, 4);
+  }
   if (!escolhidos.length && !pesquisas.length) return '';
   const cortar = (t, n) => (t.length > n ? t.slice(0, n) + '\n[...]' : t);
   return [
