@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resumirHoje, compilarMes, registradasHojeParaPrompt } from '../resumo.js';
 import { duracaoDe } from '../comandos.js';
+import { montarCorrecao, DESCULPAS } from '../revisao.js';
 
 const perfis = [
   { nome: 'Lucas Leonardo', jids: ['a@s'], peso: 73, objetivo: 'hipertrofia' },
@@ -57,4 +58,10 @@ test('registradasHojeParaPrompt: uma linha por pessoa', () => {
   const t = registradasHojeParaPrompt(refeicoes, perfis, '2026-09-23');
   assert.match(t, /- Lucas Leonardo: Lanche da manhã 06:20 \(~270 kcal\); Café da manhã 08:34 \(~470 kcal\)/);
   assert.match(t, /- Ale: nada registrado ainda hoje/);
+});
+
+test('montarCorrecao: desculpa no personagem + resposta revisada', () => {
+  const t = montarCorrecao('  🕐 Refeição: Almoço\n🔥 Estimativa: ~600 kcal  ', DESCULPAS[0]);
+  assert.equal(t, `${DESCULPAS[0]}\n\n🕐 Refeição: Almoço\n🔥 Estimativa: ~600 kcal`);
+  assert.ok(DESCULPAS.every((d) => d.length > 20));
 });

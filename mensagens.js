@@ -17,6 +17,7 @@ import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
 import { avisarErro } from './avisos.js';
+import { registrarParaRevisao } from './revisao.js';
 
 const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood após o bot voltar do sleep)
 const PAPO_INTERVALO_MIN = Number(process.env.PAPO_INTERVALO_MIN) || 10; // papo aleatório: ela entra no máximo 1x a cada N min
@@ -410,6 +411,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     persistirMemoria(estado.memoria).catch(() => {});
     return avisarErro(jidGrupo, 'ia'); // 1 aviso a cada 10 min, não um por mensagem
   }
+  let origemExterna = ia.ultimaFoiExterna(); // saiu por Cohere/OpenRouter/Groq/HF? então vai pra revisão quando o Gemini voltar
 
   // A Nutri não sabia: pesquisa (PubMed/Wikipedia), responde de novo e guarda a nota de estudo no Drive
   const pedido = resposta?.match(/^\s*PESQUISAR:\s*(.+?)\s*$/im);
@@ -426,6 +428,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     });
     resposta = r2.texto;
     atualizacao = r2.atualizacao || atualizacao;
+    origemExterna = ia.ultimaFoiExterna();
     if (fontes.length) {
       ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
         .then((nota) => salvarPesquisa({ consulta, nota, fontes, dia }))
@@ -460,12 +463,14 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     }
   }
 
+  let enviado = null;
   if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
-    await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
+    enviado = await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
   }
 
   const resumoRefeicao = texto || (temImagem ? '[foto]' : temAudio ? '[áudio]' : '');
+  let refeicaoRegistrada = null; // { slot, minutos } do registro feito agora, pra revisão poder corrigi-lo
   if (foiRefeicao) {
     // O tipo da refeição vem do que a IA entendeu (a pessoa disse "café da manhã"); numa correção, o da refeição corrigida
     const slotFinal = (correcaoRecente && minhaUltima?.slot) || lerTipoRefeicao(resposta) || slot.id;
@@ -489,6 +494,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
       estimativa, // kcal e macros da análise (ou estimativa de reserva), gravados agora: o resumo semanal soma daqui
       correcao: Boolean(correcaoRecente),
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
+    refeicaoRegistrada = { slot: slotFinal, minutos: correcaoRecente ? minhaUltima.minutos : minutosDe(horaLocal) };
     const mensagens = estado.memoria.mensagens;
     // marca a mensagem da pessoa (a última que não é da bot) como refeição, pro diário e pro resumo
     for (let i = mensagens.length - 1; i >= 0; i--) {
@@ -497,6 +503,13 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
         break;
       }
     }
+  }
+
+  // Resposta saiu por reserva externa (Gemini em alta demanda): fica anotada pra ela mesma revisar quando o Gemini voltar.
+  // Se estava errada, ela corrige no grupo citando a mensagem e conserta o registro da refeição (revisao.js, cron de 10 min).
+  if (origemExterna && enviado?.key && resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
+    registrarParaRevisao({ jidGrupo, jid: jids[0], perfil, texto, imagem, mimeType, resposta, dia, hora, horaLocal, enviado, refeicao: refeicaoRegistrada })
+      .catch((e) => console.error('[revisao] falha ao anotar pra revisão:', e.message));
   }
   // A daily note do Drive é regerada a partir da memória (agendarDiario, chamado por lembrar)
 }

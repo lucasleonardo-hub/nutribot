@@ -7,6 +7,7 @@
 //   comandos.js   !comandos do grupo
 //   dia.js        memória do dia, daily note, fechamento do dia/semana, revisão mensal
 //   cobranca.js   cobrança de refeição atrasada
+//   revisao.js    revisão (pelo Gemini) do que saiu por reserva externa; corrige no grupo se errou
 //   whatsapp.js   conexão, reconexão, envio
 //   perfis.js     perfis com horários habituais e atualização de dados
 //   estado.js     estado compartilhado e fila única
@@ -28,6 +29,7 @@ import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSock
 import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes } from './dia.js';
 import { avisarAdmin } from './avisos.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
+import { revisarPendentes } from './revisao.js';
 import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
 
 // ============================================================
@@ -180,6 +182,9 @@ if (KEEPALIVE_URL) {
 
     // A cada 10 min: alguém pulou a refeição do horário de costume? Cobra.
     cron.schedule('*/10 * * * *', () => naFila('cobranca', verificarCobrancas), { timezone: TZ });
+    // Revisão das respostas que saíram por reserva externa: quando o Gemini volta, ela confere e corrige no grupo se errou
+    cron.schedule('5-59/10 * * * *', () => naFila('revisao', revisarPendentes), { timezone: TZ });
+    console.log('[cron] revisão de respostas de reserva a cada 10 min');
     console.log(`[cron] cobrança de refeições a cada 10 min (atraso tolerado: ${ATRASO_COBRANCA_MIN} min)`);
 
     // Domingo 09:00: pesagem semanal (sem IA), a tempo do resumo da semana. Dia 1 às 08:00: relatório do mês anterior.

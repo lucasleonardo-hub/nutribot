@@ -197,6 +197,12 @@ export async function registrarRefeicao(r) {
   await col.insertOne({ ...r, criadoEm: new Date() });
 }
 
+/** Apaga o registro de uma refeição específica (revisão descobriu que não era comida consumida). Devolve quantos apagou. */
+export async function apagarRefeicaoEm({ jid, dia, slot, minutos }) {
+  const r = await colecao('refeicoes').deleteOne({ jid, dia, slot, minutos });
+  return r.deletedCount || 0;
+}
+
 export async function refeicoesDesde(jids, diaInicial) {
   return colecao('refeicoes').find({ jid: { $in: jids }, dia: { $gte: diaInicial } }).sort({ dia: 1, minutos: 1 }).toArray();
 }
@@ -241,6 +247,20 @@ export async function carregarPendentes() {
   const docs = await col.find({}).sort({ salvoEm: 1 }).toArray();
   if (docs.length) await col.deleteMany({});
   return docs;
+}
+
+// ---------- Respostas dadas por reserva externa, à espera de revisão pelo Gemini (revisao.js) ----------
+
+export async function salvarRevisaoPendente(doc) {
+  await colecao('revisoes_pendentes').insertOne({ ...doc, criadoEm: new Date() });
+}
+
+export async function revisoesPendentes(limite = 5) {
+  return colecao('revisoes_pendentes').find({}).sort({ criadoEm: 1 }).limit(limite).toArray();
+}
+
+export async function apagarRevisaoPendente(id) {
+  await colecao('revisoes_pendentes').deleteOne({ _id: id });
 }
 
 // ---------- Configuração do bot (nome escolhido pelo grupo, apresentações feitas) ----------

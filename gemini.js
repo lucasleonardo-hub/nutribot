@@ -12,6 +12,9 @@ function anotarResposta(entrada) {
   if (ultimas.length > 30) ultimas.shift();
 }
 export const ultimasRespostas = (n = 6) => ultimas.slice(-n);
+// De onde saiu a última resposta gerada ('gemini' ou 'externa'): a fila é sequencial, então quem chamou lê logo em seguida
+let origemUltima = 'gemini';
+export const ultimaFoiExterna = () => origemUltima === 'externa';
 export { dataExtenso };
 
 const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
@@ -310,7 +313,7 @@ function rebaixarPensar(model, e) {
  * de conversa, 5 min em documentos longos). Sem isso, num dia de "alta demanda" geral uma mensagem levava 5 minutos.
  */
 async function gerar({ contents, config = {}, tentativas = 2 }) {
-  const { pensar, estrito, leve, prazoMs, ...configApi } = config;
+  const { pensar, estrito, leve, prazoMs, semReserva, ...configApi } = config;
   let erro;
   const falhas = []; // { modelo, chave, motivo } desta chamada, pro aviso do admin
   const inicio = Date.now();
@@ -375,6 +378,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         const foraDoEsperado = mi > 0 && !(leve && MODELOS_LEVES.includes(model));
         if (foraDoEsperado) console.warn(`[gemini] respondido pelo modelo reserva ${model}${ci ? ` (chave ${ci + 1})` : ''}`);
         contabilizar(model, res.usageMetadata, ci);
+        origemUltima = 'gemini';
         anotarResposta({ modelo: model, chave: ci + 1, papel: mi === 0 ? 'principal' : MODELOS_LEVES.includes(model) ? 'leve' : 'reserva', motivo: foraDoEsperado ? resumirFalhas(falhas) : '' });
         if (foraDoEsperado) avisarAdmin('reserva-gemini', `resposta das ${agora().hora} saiu pelo *${model}* (chave ${ci + 1}) porque: ${resumirFalhas(falhas)}. Aviso 1x a cada 30 min; !status lista as últimas.`).catch(() => {});
         return texto;
@@ -417,7 +421,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
   const partes = partesDe(contents);
   const imagens = partes.filter((p) => p?.inlineData?.mimeType?.startsWith('image/')).map((p) => p.inlineData);
   const temOutraMidia = partes.some((p) => p?.inlineData && !p.inlineData.mimeType?.startsWith('image/'));
-  if (reservasDisponiveis().length && !temOutraMidia) {
+  if (!semReserva && reservasDisponiveis().length && !temOutraMidia) {
     try {
       console.warn(`[gemini] todos os modelos Gemini falharam; tentando reservas (${reservasDisponiveis().join(', ')})`);
       const textoReserva = await gerarReserva({
@@ -430,6 +434,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
       });
       const reserva = ultimaReservaUsada();
       const rotuloReserva = reserva ? `${reserva.id} (${reserva.modelo})` : 'reserva externa';
+      origemUltima = 'externa';
       anotarResposta({ modelo: `externa: ${rotuloReserva}`, chave: 0, papel: 'externa', motivo: resumirFalhas(falhas) });
       avisarAdmin('reserva-externa', `resposta das ${agora().hora} saiu pela reserva externa *${rotuloReserva}* porque o Gemini falhou em tudo: ${resumirFalhas(falhas)}. Qualidade menor; aviso 1x a cada 30 min.`).catch(() => {});
       return textoReserva;
@@ -727,6 +732,58 @@ export async function estimarRefeicaoManual({ descricao, perfil }) {
   } catch {
     return { estimativa: null, descricao: descricao.slice(0, 120), tipo: null };
   }
+}
+
+/**
+ * Revisão, pelo Gemini, de uma resposta que saiu por reserva externa. Só roda no Gemini (semReserva): se ele ainda
+ * estiver em alta demanda, lança e a revisão fica pra depois. Devolve { ok, motivo, resposta_corrigida, refeicao_consumida }.
+ */
+export async function revisarRespostaReserva({ perfil, texto, imagem, mimeType, respostaReserva, dia, hora, persona }) {
+  const contexto =
+    `Você é a ${nomeDaBot()}, nutricionista de bolso de um grupo de WhatsApp de amigos.\nSUA PERSONA:\n${persona || '(sem persona)'}\n\n` +
+    `Enquanto seu cérebro principal estava fora do ar, um modelo reserva mais fraco respondeu POR VOCÊ à mensagem abaixo. Agora você voltou e vai REVISAR o que foi dito em seu nome.\n\n` +
+    `PESSOA: ${perfil?.nome || '?'}${perfil?.apelido ? ` (apelido: ${perfil.apelido})` : ''} · objetivo: ${perfil?.objetivo || '?'} · ${perfil?.peso || '?'} kg · dieta: ${perfil?.dieta || '?'}\n` +
+    `DATA E HORA DA MENSAGEM: ${dataExtenso(dia)}, ${hora || '?'}\n\n` +
+    `MENSAGEM DA PESSOA${imagem ? ' (a FOTO dela está anexada: olhe a foto)' : ''}:\n"""${texto || '(sem legenda)'}"""\n\n` +
+    `RESPOSTA QUE SAIU EM SEU NOME:\n"""${respostaReserva}"""\n\n` +
+    `A resposta está ERRADA se: (1) identificou errado a comida da foto ou da legenda; (2) calorias ou macros mais de 30% fora do que você estimaria; ` +
+    `(3) usou objetivo, peso ou dados de outra pessoa; (4) deu orientação nutricional incorreta ou perigosa; (5) falou como se fosse outra pessoa, em terceira pessoa, ou ignorou a pergunta feita; ` +
+    `(6) registrou como refeição algo que não era comida consumida (receita, rótulo, dúvida, pedido de sugestão). ` +
+    `Diferença só de estilo, tom, emoji, ordem ou arredondamento pequeno NÃO é erro: nesse caso ok=true e resposta_corrigida vazia.\n` +
+    `Se estiver errada: escreva a resposta corrigida NO SEU PERSONAGEM, falando com a pessoa, formato WhatsApp (negrito com UM asterisco), até 120 palavras. ` +
+    `Se for análise de comida consumida, use o bloco: 🕐 Refeição: <tipo> / 🍽️ O que eu vi: ... / 🔥 Estimativa: ~X kcal · Proteína Y g · Carboidratos Z g · Gorduras W g / ⚖️ Veredito: ... / 💡 Dica: ... ` +
+    `NÃO peça desculpas nem explique que houve erro (o sistema já faz isso antes do seu texto). Sem linha ATUALIZAR.\n` +
+    `refeicao_consumida: true se a mensagem relatava comida que a pessoa de fato comeu; false se era receita, rótulo, dúvida, pedido de sugestão ou plano futuro.`;
+  const parts = [{ text: contexto }];
+  if (imagem) parts.push({ inlineData: { mimeType: mimeType || 'image/jpeg', data: imagem.toString('base64') } });
+  const json = await gerar({
+    contents: [{ role: 'user', parts }],
+    tentativas: 1,
+    config: {
+      temperature: 0.3,
+      semReserva: true,
+      prazoMs: 90_000,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          motivo: { type: 'string' },
+          resposta_corrigida: { type: 'string' },
+          refeicao_consumida: { type: 'boolean' },
+        },
+        required: ['ok', 'motivo', 'refeicao_consumida'],
+      },
+      maxOutputTokens: 700,
+    },
+  });
+  const d = JSON.parse(json);
+  return {
+    ok: Boolean(d.ok),
+    motivo: String(d.motivo || '').slice(0, 200),
+    resposta_corrigida: d.ok ? '' : String(d.resposta_corrigida || '').trim(),
+    refeicao_consumida: typeof d.refeicao_consumida === 'boolean' ? d.refeicao_consumida : null,
+  };
 }
 
 /** Momentos memoráveis do dia (vexames, acertos, frases, promessas) -> memória de longo prazo que só cresce. */

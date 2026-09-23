@@ -57,6 +57,7 @@ export async function enviar(jid, texto, quoted, { rapido = false } = {}) {
     enviadosPeloBot.add(r.key.id);
     if (enviadosPeloBot.size > 500) enviadosPeloBot.delete(enviadosPeloBot.values().next().value);
   }
+  return r; // a mensagem enviada (key + message), pra quem quiser citá-la depois
 }
 
 /** Baixa a mídia (foto/áudio) de uma mensagem como Buffer. */
