@@ -1,7 +1,7 @@
 // gemini.js - A "Nutri de bolso" (Google Gemini via @google/genai): persona, prompts e fallback de modelos
 
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
-import { gerarReserva, reservasDisponiveis } from './reservas.js';
+import { gerarReserva, reservasDisponiveis, ultimaReservaUsada } from './reservas.js';
 import { agora, dataExtenso, formatarDuracao, formatarTokens } from './util.js';
 import { avisarAdmin } from './avisos.js';
 
@@ -275,7 +275,7 @@ let ultimoAvisoCreditos = 0;
 function avisarCreditos(e) {
   if (Date.now() - ultimoAvisoCreditos < 60 * 60_000) return;
   ultimoAvisoCreditos = Date.now();
-  console.error(`[gemini] ⚠️ CRÉDITOS DO GEMINI ESGOTADOS (402). O bot está rodando só nas reservas (Groq/HF/Cohere), com qualidade menor. Recarregue em https://aistudio.google.com ou troque a GEMINI_API_KEY. Detalhe: ${String(e?.message || '').slice(0, 200)}`);
+  console.error(`[gemini] ⚠️ CRÉDITOS DO GEMINI ESGOTADOS (402). O bot está rodando só nas reservas (Cohere/OpenRouter/Groq/HF), com qualidade menor. Recarregue em https://aistudio.google.com ou troque a GEMINI_API_KEY. Detalhe: ${String(e?.message || '').slice(0, 200)}`);
 }
 export const creditosEsgotados = () => Date.now() - ultimoAvisoCreditos < 60 * 60_000;
 
@@ -303,7 +303,7 @@ function rebaixarPensar(model, e) {
 }
 
 /**
- * Gera texto tentando o modelo principal, os reserva do Gemini e por fim Groq/HF/Cohere.
+ * Gera texto tentando o modelo principal, os reserva do Gemini e por fim Cohere/OpenRouter/Groq/HF.
  * config.pensar=false desliga o raciocínio (do jeito certo pra cada série).
  * config.estrito=true faz resposta cortada por maxOutputTokens virar erro (documentos que serão gravados).
  * config.prazoMs limita o tempo total gasto na cadeia Gemini antes de pular pras reservas (padrão: 60 s em resposta
@@ -413,7 +413,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
   }
 
   if (!erro) erro = new Error('todos os modelos Gemini estão temporariamente indisponíveis');
-  // Todos os Gemini falharam. Reservas (Groq / Hugging Face / Cohere): texto e foto sim; áudio e PDF não.
+  // Todos os Gemini falharam. Reservas (Cohere / OpenRouter / Groq / Hugging Face): texto e foto sim; áudio e PDF não.
   const partes = partesDe(contents);
   const imagens = partes.filter((p) => p?.inlineData?.mimeType?.startsWith('image/')).map((p) => p.inlineData);
   const temOutraMidia = partes.some((p) => p?.inlineData && !p.inlineData.mimeType?.startsWith('image/'));
@@ -428,8 +428,10 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         maxTokens: configApi.maxOutputTokens || 1024,
         temperature: configApi.temperature ?? 0.9,
       });
-      anotarResposta({ modelo: 'reserva externa (Cohere/Groq/HF)', chave: 0, papel: 'externa', motivo: resumirFalhas(falhas) });
-      avisarAdmin('reserva-externa', `resposta das ${agora().hora} saiu por reserva externa (Cohere/Groq/HF) porque o Gemini falhou em tudo: ${resumirFalhas(falhas)}. Qualidade menor; aviso 1x a cada 30 min.`).catch(() => {});
+      const reserva = ultimaReservaUsada();
+      const rotuloReserva = reserva ? `${reserva.id} (${reserva.modelo})` : 'reserva externa';
+      anotarResposta({ modelo: `externa: ${rotuloReserva}`, chave: 0, papel: 'externa', motivo: resumirFalhas(falhas) });
+      avisarAdmin('reserva-externa', `resposta das ${agora().hora} saiu pela reserva externa *${rotuloReserva}* porque o Gemini falhou em tudo: ${resumirFalhas(falhas)}. Qualidade menor; aviso 1x a cada 30 min.`).catch(() => {});
       return textoReserva;
     } catch (e) {
       console.error('[reserva] todos falharam:', e.message);

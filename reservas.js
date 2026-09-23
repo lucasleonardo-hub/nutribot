@@ -2,8 +2,13 @@
 // Todos falam o formato OpenAI (chat/completions). Ordem = prioridade. Cada um tem uma chave opcional no .env;
 // sem a chave, o provedor é simplesmente pulado.
 //
-//   TEXTO : Cohere (command-a, o mais estável) -> Groq (qwen/qwen3.8-27b, rápido) -> Hugging Face (Qwen2.5-72B)
-//   FOTO  : Cohere (command-a-vision) -> Hugging Face (gemma-3-27b-it) -> Hugging Face (Qwen3-VL-30B)
+//   TEXTO : Cohere (command-a, o mais estável) -> OpenRouter (Nemotron 3 Super 120B, grátis) -> Groq (qwen/qwen3.8-27b)
+//           -> Hugging Face (Qwen2.5-72B)
+//   FOTO  : Cohere (command-a-vision) -> Hugging Face (gemma-3-27b-it) -> Hugging Face (Qwen3-VL-30B) -> OpenRouter (Qwen3.8-27B)
+//   OpenRouter gratuito: 50 pedidos/dia no total e os modelos ":free" vivem saturados (429 "rate-limited upstream"),
+//   principalmente os de visão — por isso é reserva da reserva, nunca principal. O "openrouter/free" (roteador automático)
+//   NÃO serve: nos testes caiu num modelo de moderação que responde "User Safety: safe". Sempre modelo nomeado.
+//   Os modelos da NVIDIA raciocinam em inglês dentro da resposta; por isso o pedido vai com reasoning desligado.
 //   ÁUDIO / PDF: só o Gemini faz. Sem reserva.
 //
 // Limites gratuitos (set/2026): Groq ~6-30k tokens/min; Hugging Face crédito mensal pequeno (402 quando acaba);
@@ -11,6 +16,9 @@
 
 const MAX_CHARS_ENTRADA = Number(process.env.RESERVA_MAX_CHARS) || 24000; // ~6-7k tokens (HF, Cohere)
 const MAX_CHARS_GROQ = Number(process.env.RESERVA_MAX_CHARS_GROQ) || 12000; // Groq on_demand devolve 413 acima de ~6k tokens por pedido
+
+// OpenRouter pede esses cabeçalhos pra identificar o app (aparece no painel deles; sem eles funciona, mas fica anônimo)
+const OPENROUTER_HEADERS = { 'HTTP-Referer': 'https://github.com/lucasleonardo-hub/nutribot', 'X-Title': 'NutriBot' };
 
 const PROVEDORES = [
   // Ordem = o que respondeu de fato nos logs: Cohere estável; Groq rápido mas recusa prompt grande (413) e estoura por minuto;
@@ -22,6 +30,16 @@ const PROVEDORES = [
     texto: process.env.COHERE_MODEL || 'command-a-03-2025',
     visao: process.env.COHERE_MODEL_VISAO || 'command-a-vision-07-2025',
     timeoutMs: 45_000,
+  },
+  {
+    id: 'openrouter',
+    url: 'https://openrouter.ai/api/v1/chat/completions',
+    chave: () => process.env.OPENROUTER_API_KEY,
+    texto: process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-super-120b-a12b:free',
+    visao: null, // a visão dele fica por último (openrouter-visao), porque os modelos de foto grátis quase sempre dão 429
+    timeoutMs: 60_000, // a fila gratuita do OpenRouter às vezes leva 45 s pra responder
+    headers: OPENROUTER_HEADERS,
+    extra: { reasoning: { enabled: false } },
   },
   {
     id: 'groq',
@@ -48,9 +66,23 @@ const PROVEDORES = [
     visao: process.env.HF_MODEL_VISAO_2 || 'Qwen/Qwen3-VL-30B-A3B-Instruct',
     timeoutMs: 40_000,
   },
+  {
+    id: 'openrouter-visao',
+    url: 'https://openrouter.ai/api/v1/chat/completions',
+    chave: () => process.env.OPENROUTER_API_KEY,
+    texto: null,
+    visao: process.env.OPENROUTER_MODEL_VISAO || 'qwen/qwen3.8-27b:free',
+    timeoutMs: 60_000, // a fila gratuita do OpenRouter às vezes leva 45 s pra responder
+    headers: OPENROUTER_HEADERS,
+    extra: { reasoning: { enabled: false } },
+  },
 ];
 
 export const reservasDisponiveis = () => PROVEDORES.filter((p) => p.chave()).map((p) => p.id);
+
+// Qual reserva respondeu por último (pro !status e pro aviso do admin dizerem o nome certo)
+let ultimaReserva = null;
+export const ultimaReservaUsada = () => ultimaReserva;
 
 /** Corta o meio de um texto longo, preservando começo (data/perfis) e fim (mensagem atual). */
 function encurtar(texto, max = MAX_CHARS_ENTRADA) {
@@ -109,12 +141,13 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
       ],
       max_tokens: Math.min(maxTokens, 4096),
       temperature,
+      ...(prov.extra || {}),
     };
     if (json && prov.id !== 'cohere') body.response_format = { type: 'json_object' };
     try {
       const res = await fetch(prov.url, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${prov.chave()}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${prov.chave()}`, 'Content-Type': 'application/json', ...(prov.headers || {}) },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(precisaVisao ? Math.max(prov.timeoutMs || 60_000, 90_000) : prov.timeoutMs || 60_000),
       });
@@ -123,6 +156,7 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
       const texto = extrairTexto(data, nomePersonagem);
       if (!texto) throw new Error('resposta vazia');
       console.warn(`[reserva] respondido por ${prov.id} (${model})`);
+      ultimaReserva = { id: prov.id, modelo: model };
       return texto;
     } catch (e) {
       ultimoErro = e;
