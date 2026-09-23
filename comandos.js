@@ -104,6 +104,7 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       `Modelos: ${modelos.length} na fila (${modelos.length - lite} Flash, ${lite} Lite) · chaves do Gemini: ${ia.totalDeChaves()}${ia.totalDeChaves() > 1 ? ` (uso hoje: ${Object.entries(u.porChave || {}).map(([c, n]) => `chave ${c} = ${n}`).join(', ') || 'nenhum'})` : ''}`,
       fora.length ? `De castigo (todas as chaves): ${fora.map((m) => `${m.modelo} (volta em ${m.voltaEm})`).join(', ')}` : 'De castigo: nenhum ✅',
       `Reservas externas: ${reservasDisponiveis().join(', ') || 'nenhuma'}`,
+      `Últimas respostas: ${ia.ultimasRespostas(6).map((r) => `${r.hora} ${String(r.modelo).replace(/^gemini-/, '')}${r.chave ? ` ch${r.chave}` : ''}${r.motivo ? ` (${r.motivo})` : ''}`).join(' · ') || 'nenhuma desde o último restart'}`,
     ];
     await enviar(jidGrupo, linhas.join('\n'), msg, { rapido: true });
     return true;

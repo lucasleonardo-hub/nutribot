@@ -3,6 +3,15 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { gerarReserva, reservasDisponiveis } from './reservas.js';
 import { agora, dataExtenso, formatarDuracao, formatarTokens } from './util.js';
+import { avisarAdmin } from './avisos.js';
+
+// Mapa das últimas respostas: qual modelo/chave respondeu e por quê (pra !status e pro aviso no privado do admin)
+const ultimas = [];
+function anotarResposta(entrada) {
+  ultimas.push({ hora: agora().hora, ...entrada });
+  if (ultimas.length > 30) ultimas.shift();
+}
+export const ultimasRespostas = (n = 6) => ultimas.slice(-n);
 export { dataExtenso };
 
 const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
@@ -302,6 +311,7 @@ function rebaixarPensar(model, e) {
 async function gerar({ contents, config = {}, tentativas = 2 }) {
   const { pensar, estrito, leve, prazoMs, ...configApi } = config;
   let erro;
+  const falhas = []; // { modelo, chave, motivo } desta chamada, pro aviso do admin
   const inicio = Date.now();
   const longo = (configApi.maxOutputTokens || 1024) > 2000;
   const prazoTotal = prazoMs || (longo ? 300_000 : 75_000);
@@ -361,8 +371,11 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
           if (estrito) throw Object.assign(new Error(`resposta cortada por maxOutputTokens (${configApi.maxOutputTokens || 1024})`), { cortada: true, parcial: texto });
           console.warn(`[gemini] ${model}: resposta cortada por maxOutputTokens`);
         }
-        if (mi > 0 && !(leve && MODELOS_LEVES.includes(model))) console.warn(`[gemini] respondido pelo modelo reserva ${model}${ci ? ` (chave ${ci + 1})` : ''}`);
+        const foraDoEsperado = mi > 0 && !(leve && MODELOS_LEVES.includes(model));
+        if (foraDoEsperado) console.warn(`[gemini] respondido pelo modelo reserva ${model}${ci ? ` (chave ${ci + 1})` : ''}`);
         contabilizar(model, res.usageMetadata, ci);
+        anotarResposta({ modelo: model, chave: ci + 1, papel: mi === 0 ? 'principal' : MODELOS_LEVES.includes(model) ? 'leve' : 'reserva', motivo: foraDoEsperado ? resumirFalhas(falhas) : '' });
+        if (foraDoEsperado) avisarAdmin('reserva-gemini', `resposta das ${agora().hora} saiu pelo *${model}* (chave ${ci + 1}) porque: ${resumirFalhas(falhas)}. Aviso 1x a cada 30 min; !status lista as últimas.`).catch(() => {});
         return texto;
       } catch (e) {
         erro = e;
@@ -375,6 +388,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         const transitorio =
           status === 429 || status === 503 || status === 500 || /overloaded|high demand|RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL/i.test(e.message || '');
         console.warn(`[gemini] ${model}${CHAVES.length > 1 ? ` (chave ${ci + 1})` : ''} tentativa ${i + 1}/${rodadas} falhou: ${String(e.message).slice(0, 140)}`);
+        falhas.push({ modelo: model, chave: ci + 1, motivo: status === 503 || /high demand|overloaded/i.test(e.message || '') ? 'alta demanda' : status === 429 ? (/per\s*day|daily|PerDay/i.test(e.message || '') ? 'cota diária' : 'cota por minuto') : `erro ${status || ''}`.trim() });
         // 503 "alta demanda" é do MODELO (Google), não da chave: castiga o modelo em todas as chaves e pula pro próximo
         if (status === 503 || /overloaded|high demand|UNAVAILABLE/i.test(e.message || '')) {
           for (let outra = 0; outra < CHAVES.length; outra++) if (outra === ci || !emCastigo(outra, model)) castigar(outra, model, e);
@@ -405,7 +419,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
   if (reservasDisponiveis().length && !temOutraMidia) {
     try {
       console.warn(`[gemini] todos os modelos Gemini falharam; tentando reservas (${reservasDisponiveis().join(', ')})`);
-      return await gerarReserva({
+      const textoReserva = await gerarReserva({
         system: configApi.systemInstruction || '',
         usuario: textoDe(contents),
         imagens,
@@ -413,11 +427,25 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         maxTokens: configApi.maxOutputTokens || 1024,
         temperature: configApi.temperature ?? 0.9,
       });
+      anotarResposta({ modelo: 'reserva externa (Cohere/Groq/HF)', chave: 0, papel: 'externa', motivo: resumirFalhas(falhas) });
+      avisarAdmin('reserva-externa', `resposta das ${agora().hora} saiu por reserva externa (Cohere/Groq/HF) porque o Gemini falhou em tudo: ${resumirFalhas(falhas)}. Qualidade menor; aviso 1x a cada 30 min.`).catch(() => {});
+      return textoReserva;
     } catch (e) {
       console.error('[reserva] todos falharam:', e.message);
     }
   }
   throw erro;
+}
+
+/** "3.6-flash e 3.8-flash em alta demanda; 3.7-flash cota diária" */
+function resumirFalhas(falhas) {
+  const porMotivo = new Map();
+  for (const f of falhas) {
+    const nome = f.modelo.replace(/^gemini-/, '');
+    if (!porMotivo.has(f.motivo)) porMotivo.set(f.motivo, new Set());
+    porMotivo.get(f.motivo).add(nome);
+  }
+  return [...porMotivo.entries()].map(([motivo, modelos]) => `${[...modelos].join(', ')} em ${motivo}`).join('; ') || 'sem detalhe';
 }
 
 // contents do Gemini -> texto puro (pro Groq) / detecta mídia
