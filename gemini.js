@@ -663,6 +663,40 @@ export async function resumoMensal({ mes, perfis, tabela, persona }) {
   });
 }
 
+/** Estimativa rápida (JSON) de uma refeição descrita em texto, pro comando !refeicao. Modelo leve. */
+export async function estimarRefeicaoManual({ descricao, perfil }) {
+  const json = await gerar({
+    contents:
+      `Estime calorias e macros desta refeição descrita em texto por ${perfil?.nome || 'uma pessoa'}${perfil?.peso ? ` (${perfil.peso} kg)` : ''}. Use porções brasileiras usuais quando faltar quantidade. ` +
+      `Devolva também uma descrição curta normalizada (até 80 caracteres) e o tipo da refeição se der pra inferir.\n\nREFEIÇÃO: """${descricao}"""`,
+    config: {
+      temperature: 0.2,
+      pensar: false,
+      leve: true,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          kcal: { type: 'number' },
+          proteina_g: { type: 'number' },
+          carboidratos_g: { type: 'number' },
+          gorduras_g: { type: 'number' },
+          descricao: { type: 'string' },
+          tipo: { type: 'string', nullable: true, enum: ['cafe', 'almoco', 'lanche', 'jantar', 'ceia'] },
+        },
+        required: ['kcal', 'proteina_g', 'carboidratos_g', 'gorduras_g', 'descricao'],
+      },
+      maxOutputTokens: 200,
+    },
+  });
+  try {
+    const d = JSON.parse(json);
+    return { estimativa: { kcal: Number(d.kcal) || 0, p: Number(d.proteina_g) || 0, c: Number(d.carboidratos_g) || 0, g: Number(d.gorduras_g) || 0 }, descricao: String(d.descricao || descricao).slice(0, 120), tipo: d.tipo || null };
+  } catch {
+    return { estimativa: null, descricao: descricao.slice(0, 120), tipo: null };
+  }
+}
+
 /** Momentos memoráveis do dia (vexames, acertos, frases, promessas) -> memória de longo prazo que só cresce. */
 export async function extrairMomentos({ dia, perfis, historico }) {
   if (!historico?.length || !perfis?.length) return [];

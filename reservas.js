@@ -102,7 +102,7 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
         { role: 'system', content: systemFinal },
         { role: 'user', content: conteudoUsuario },
       ],
-      max_tokens: Math.min(maxTokens, 2048),
+      max_tokens: Math.min(maxTokens, 4096),
       temperature,
     };
     if (json && prov.id !== 'cohere') body.response_format = { type: 'json_object' };

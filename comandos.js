@@ -1,12 +1,13 @@
 // comandos.js - Comandos do grupo (!id, !nome, !perfil, !dossie, !fontes, !estudar, !persona, !status, !reset, !resumo, !ajuda).
 
-import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia } from './mongo.js';
+import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao } from './mongo.js';
 import * as ia from './gemini.js';
 import { listarDocs } from './conhecimento.js';
 import { notasDe, listarDocumentosDe } from './pessoas.js';
 import { reservasDisponiveis } from './reservas.js';
-import { fusoDe, formatarTokens, formatarDuracao } from './util.js';
-import { resumirHoje } from './resumo.js';
+import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS } from './util.js';
+import { resumirHoje, formatarEstimativa, lerTipoRefeicao } from './resumo.js';
+import { lembrar } from './dia.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
 import { fecharDia, estudar } from './dia.js';
@@ -15,7 +16,7 @@ import { enriquecerPerfis } from './perfis.js';
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !hoje (seus totais do dia; !hoje todos = grupo inteiro), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !hoje (seus totais do dia; !hoje todos = grupo inteiro), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -118,6 +119,44 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     }
     const refeicoes = await refeicoesDoDia(dia).catch(() => []);
     await enviar(jidGrupo, `📊 *${todos ? 'Hoje, todo mundo' : 'Seu dia'} (${dia})*\n\n${resumirHoje(refeicoes, alvo, dia)}${todos ? '' : '\n\n_(!hoje todos mostra o grupo inteiro)_'}`, msg, { rapido: true });
+    return true;
+  }
+  if (cmd === '!refeicao' || cmd === '!refeição') {
+    const p = await buscarPerfil(jids);
+    if (!p?.onboarded) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    let resto = texto.slice(cmd.length).trim();
+    if (!resto) {
+      await enviar(jidGrupo, 'Assim: "!refeicao café 2 ovos mexidos e 1 banana" ou "!refeicao almoço arroz, feijão e 150 g de frango". O tipo (café/almoço/lanche/jantar/ceia) é opcional: sem ele eu uso o horário.', msg, { rapido: true });
+      return true;
+    }
+    const tipoDito = lerTipoRefeicao(`Refeição: ${resto.split(/\s+/).slice(0, 3).join(' ')}`);
+    if (tipoDito) resto = resto.replace(/^(caf[eé](\s+da\s+manh[ãa])?|almo[cç]o|lanche(\s+da\s+tarde)?|jantar?|ceia)\s*[:\-]?\s*/i, '').trim();
+    if (!resto) {
+      await enviar(jidGrupo, 'Faltou dizer o que comeu 😅', msg, { rapido: true });
+      return true;
+    }
+    const horaLocal = agora(fusoDe(p)).hora;
+    const est = await ia.estimarRefeicaoManual({ descricao: resto, perfil: p }).catch(() => ({ estimativa: null, descricao: resto, tipo: null }));
+    const slot = tipoDito || est.tipo || slotDaHora(horaLocal).id;
+    await registrarRefeicao({
+      jid: jids[0],
+      nome: p.nome,
+      dia,
+      hora: agora().hora,
+      horaLocal,
+      minutos: minutosDe(horaLocal),
+      slot,
+      resumo: resto.slice(0, 120),
+      descricao: est.descricao,
+      estimativa: est.estimativa,
+      manual: true,
+    });
+    await lembrar({ hora: agora().hora, jid: jids[0], nome: p.nome, texto: `(registro manual) ${resto}`, tipo: 'texto', refeicao: slot });
+    const nomeSlot = SLOTS.find((s) => s.id === slot)?.nome || slot;
+    await enviar(jidGrupo, `✅ Anotei como *${nomeSlot}* (${horaLocal}): ${est.descricao}${est.estimativa ? `\n🔥 ${formatarEstimativa(est.estimativa)}` : '\n(sem estimativa, a IA não respondeu; fica registrado mesmo assim)'}`, msg, { rapido: true });
     return true;
   }
   if (cmd === '!silencio' || cmd === '!silêncio') {
