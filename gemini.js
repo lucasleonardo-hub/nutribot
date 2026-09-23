@@ -548,16 +548,13 @@ export async function resumoDiario({ dia, perfis, historico, persona, refeicoes 
       `Hoje é ${dataExtenso(dia)}.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
       `TRANSCRIÇÃO DO DIA (só pra contexto de tom, acertos e conversas; os números oficiais estão no bloco seguinte):\n${blocoHistorico(historico, 400)}\n\n` +
       `REFEIÇÕES REGISTRADAS HOJE, POR PESSOA (compiladas pelo sistema a partir das suas próprias análises; use ESTES números e ESTA lista, sem omitir nenhuma refeição e sem recalcular):\n${refeicoes}\n\n` +
-      `Escreva o *RESUMO DO DIA* (formato WhatsApp, sem cabeçalhos #, até 320 palavras), no seu personagem: simpática, sincera, engraçada, sarcasmo leve só onde couber. Para CADA pessoa cadastrada, nesta ordem:\n` +
-      `*Nome* (apelido se tiver)\n` +
-      `uma linha por refeição registrada, com emoji, nome da refeição, horário e descrição curta (ex: "🍽️ Almoço (12:49): macarrão com molho de carne moída"). TODAS as refeições do bloco, na ordem.\n` +
-      `📊 *Total do dia:* ~X kcal · Proteína X g · Carboidratos X g · Gorduras X g (copie do bloco) e, em seguida, se bateu ou não a meta de proteína da pessoa (~1,6 a 2,2 g por kg de peso) em uma frase simples.\n` +
-      `✅ Acertos e ⚠️ derrapadas, ligando ao objetivo (se saiu MUITO do combinado, demonstre decepção sincera, sem grosseria).\n` +
-      `⭐ Nota do dia (0-10).\n` +
-      `💡 Dica pra amanhã (prática e específica).\n` +
-      `Se a pessoa não registrou nada, diga isso e cobre o sumiço com carinho e firmeza. Termine com um "🏆 Placar do dia" comparando todo mundo do grupo com humor leve. ` +
-      `REGRAS DE FORMATO: nutrientes sempre por extenso (Proteína, Carboidratos, Gorduras), nunca P/C/G; use [[links]] nos termos-chave; poucos emojis; não repita o bloco "O que eu vi / Veredito" das análises, isso é resumo, não análise.`,
-    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 3600 },
+      `Escreva o *RESUMO DO DIA*, CURTO (formato WhatsApp, sem cabeçalhos #, no máximo 60 palavras por pessoa e 200 no total), no seu personagem: simpática, sincera, engraçada. Para CADA pessoa cadastrada, exatamente este formato:\n` +
+      `*Nome*: ~X kcal · Proteína X g (✅ bateu a meta / ⚠️ faltou X g pra meta de ~1,6 a 2,2 g/kg) · N refeições registradas\n` +
+      `uma frase só com o que mais pegou no dia dessa pessoa (o melhor OU o pior momento, com o objetivo dela em mente; se saiu muito do combinado, decepção sincera e curta).\n` +
+      `Se a pessoa não registrou nada: "*Nome*: nada registrado hoje" + uma frase cobrando com carinho.\n` +
+      `Feche com UMA linha: "🏆 Placar do dia:" com o ranking com humor leve.\n` +
+      `REGRAS: números copiados do bloco (não recalcule, não invente refeição); nutrientes por extenso; no máximo 1 emoji por linha; sem [[links]] neste resumo; sem lista de refeições, sem dica de amanhã, sem nota.`,
+    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 2000 },
   });
 }
 
