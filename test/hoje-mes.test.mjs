@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { resumirHoje, compilarMes, registradasHojeParaPrompt } from '../resumo.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
+import { interpretarAbas, resumoSaude, ehPlanilhaSaude } from '../saude.js';
 
 const perfis = [
   { nome: 'Lucas Leonardo', jids: ['a@s'], peso: 73, objetivo: 'hipertrofia' },
@@ -64,4 +65,42 @@ test('montarCorrecao: desculpa no personagem + resposta revisada', () => {
   const t = montarCorrecao('  🕐 Refeição: Almoço\n🔥 Estimativa: ~600 kcal  ', DESCULPAS[0]);
   assert.equal(t, `${DESCULPAS[0]}\n\n🕐 Refeição: Almoço\n🔥 Estimativa: ~600 kcal`);
   assert.ok(DESCULPAS.every((d) => d.length > 20));
+});
+
+test('saude: interpreta as 3 abas do Health Data Export e resume', () => {
+  const abas = {
+    Activity: [
+      ['Date', 'Source(s)', 'Timezone', 'Steps', 'Distance (m)', 'Elevation (m)', 'Floors climbed', 'Total Calories (kcal)', 'Active Calories (kcal)', 'Power min (W)', 'Power max (W)', 'Power avg (W)', 'Speed min (m/s)', 'Speed max (m/s)', 'Speed avg (m/s)', 'VO2 max min (ml/min/kg)', 'VO2 max max (ml/min/kg)', 'VO2 max avg (ml/min/kg)', 'Wheelchair pushes', 'Start Date/Time', 'Exercise Name', 'Duration (min)', 'Exercise Calories (kcal)', 'Exercise Distance (m)'],
+      ['2026-09-16', 'com.fitbit.FitbitMobile', 'America/Sao_Paulo', '7828', '8656,686', '', '', '3444'],
+      ['2026-09-16', 'com.hevy', 'America/Sao_Paulo', '', '', '', '', '3444', '', '', '', '', '', '', '', '', '', '', '', '2026-09-16 07:21:28', 'Body Pump', '210'],
+      ['2026-09-16', 'com.sec.android.app.shealth', 'America/Sao_Paulo', '9001', '1407,286987', '', '', '3444', '', '', '', '', '0', '1,669', '1,426', '', '', '', '', '2026-09-16 06:53:48', '79 - Walking', '16', '', '1407,286987'],
+      ['2026-09-17', 'com.sec.android.app.shealth', 'America/Sao_Paulo', '9822', '', '', '', '2721'],
+    ],
+    'Body Measurements': [
+      ['Date/Time', 'Source(s)', 'Timezone', 'Weight (kg)', 'Body Fat (%)', 'Bone mass (kg)', 'Height (m)', 'Lean body mass (kg)'],
+      ['2026-09-16 07:10:52', 'com.sec.android.app.shealth', 'America/Sao_Paulo', '75.70', '19.37', '', '2026-09-16 07:10:52=1.810'],
+      ['2026-09-17 07:07:21', 'com.sec.android.app.shealth', 'America/Sao_Paulo', '75.20', '19.33', '', '2026-09-17 07:07:21=1.810'],
+    ],
+    Sleep: [
+      ['Date', 'Source(s)', 'Timezone', 'Start Time', 'End Time', 'Light Sleep (min)', 'Deep Sleep (min)', 'REM Sleep (min)', 'Awake (min)'],
+      ['2026-09-17', 'com.sec.android.app.shealth', 'America/Sao_Paulo', '2026-09-17 00:13:00', '2026-09-17 05:50:00', '159', '87', '51', '19'],
+      ['2026-09-17', 'com.sec.android.app.shealth', 'America/Sao_Paulo', '2026-09-17 14:00:00', '2026-09-17 14:30:00', '30', '0', '0', '0'],
+    ],
+  };
+  const d = interpretarAbas(abas);
+  assert.equal(d.pesos.length, 2);
+  assert.deepEqual({ peso: d.pesos[1].peso, gordura: d.pesos[1].gordura, altura: d.pesos[1].altura }, { peso: 75.2, gordura: 19.33, altura: 1.81 });
+  assert.equal(d.sonos[0].total, 159 + 87 + 51 + 30);
+  assert.equal(d.sonos[0].sessoes, 2);
+  assert.equal(d.atividades[0].passos, 9001); // maior entre as fontes
+  assert.deepEqual(d.atividades[0].treinos.map((t) => t.nome), ['Body Pump', 'Walking']);
+  const r = resumoSaude(d, { hoje: '2026-09-17', nomePlanilha: 'Saude-Galaxy-Watch' });
+  assert.match(r, /- 17\/09: 75,2 kg · gordura 19,3% \(massa gorda ~14,5 kg, magra ~60,7 kg\)/);
+  assert.match(r, /altura 1,81 m · IMC 23,0/);
+  assert.match(r, /- 17\/09: 5h27 dormindo \(leve 3h09, profundo 1h27, REM 0h51, acordado 19 min\) · deitou 00:13, levantou 05:50/);
+  assert.match(r, /- 16\/09: 9\.001 passos · gasto total 3\.444 kcal · treino: Body Pump \(210 min\), Walking \(16 min\)/);
+  assert.ok(r.length < 1600, `resumo grande demais: ${r.length}`);
+  assert.match(r, /deita em média 00:13/);
+  assert.equal(ehPlanilhaSaude({ name: 'Saude-Galaxy-Watch', mimeType: 'application/vnd.google-apps.spreadsheet' }), true);
+  assert.equal(ehPlanilhaSaude({ name: 'Orçamento', mimeType: 'application/vnd.google-apps.spreadsheet' }), false);
 });

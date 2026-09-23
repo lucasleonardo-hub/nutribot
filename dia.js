@@ -1,7 +1,7 @@
 // dia.js - Memória do dia, daily note no Drive, virada e fechamento do dia (resumo, momentos, gírias, rotina, notas,
 // persona), fechamento da semana e a revisão mensal da base de conhecimento.
 
-import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde } from './mongo.js';
+import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde, ultimaPesagem } from './mongo.js';
 import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { atualizarConhecimento } from './conhecimento.js';
@@ -276,10 +276,21 @@ export async function pedirPesagem() {
   if (!grupo || estado.statusConexao !== 'conectado') return;
   const perfis = await listarPerfis().catch(() => []);
   if (!perfis.length) return;
-  const nomes = perfis.map((p) => p.apelido || p.nome.split(' ')[0]).join(', ');
+  // quem tem o relógio mandando o peso pela planilha (pesagem 'relogio' nos últimos 3 dias) não precisa mandar na mão
+  const hoje = agora().dia;
+  const limite = diasAnteriores(hoje, 3)[0];
+  const comRelogio = [];
+  const semRelogio = [];
+  for (const p of perfis) {
+    const u = await ultimaPesagem(p.jids || []).catch(() => null);
+    (u?.fonte === 'relogio' && u.dia >= limite ? comRelogio : semRelogio).push(p);
+  }
+  const nomeDe = (p) => p.apelido || p.nome.split(' ')[0];
+  if (!semRelogio.length) return; // todo mundo com relógio: nada a pedir
   const texto =
-    `⚖️ *Domingo, dia de pesagem!* ${nomes}: manda o peso de hoje aqui no grupo (de manhã, em jejum, depois do banheiro e antes do café, pra comparar igual toda semana). ` +
-    `Eu anoto com a data e já ponho a evolução no resumo da semana hoje à noite. Quem sumir da balança eu cobro. 👀`;
+    `⚖️ *Domingo, dia de pesagem!* ${semRelogio.map(nomeDe).join(', ')}: manda o peso de hoje aqui no grupo (de manhã, em jejum, depois do banheiro e antes do café, pra comparar igual toda semana). ` +
+    `Eu anoto com a data e já ponho a evolução no resumo da semana hoje à noite. Quem sumir da balança eu cobro. 👀` +
+    (comRelogio.length ? ` (${comRelogio.map(nomeDe).join(' e ')}: o teu eu já pego do relógio, tá de boa 😎)` : '');
   await enviar(grupo, texto);
   await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto, tipo: 'bot' });
 }

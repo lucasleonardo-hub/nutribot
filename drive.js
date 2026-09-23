@@ -9,6 +9,7 @@
 //   Resumos/Mes-YYYY-MM.md               -> relatório mensal
 //   Conhecimento/*.md                    -> base de conhecimento por foco (revisada mensalmente)
 //   Conhecimento/Pesquisas/*.md          -> notas de estudo de pesquisas feitas no meio da conversa
+//   <Nome da pessoa>/Nutri-Saude.md      -> resumo dos dados do relógio (saude.js), regerado quando a planilha muda
 //   <Nome da pessoa>/                    -> pasta de cada usuário: docs que ELE deixa + Nutri-Notas.md e Nutri-Ficha.md (pessoas.js)
 //   Logs/YYYY-MM-DD.md                   -> log técnico do dia
 
@@ -20,6 +21,7 @@ const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const ROOT_ID = process.env.DRIVE_FOLDER_ID;
 
 let drive;
+let autenticacao; // a mesma credencial serve pra Sheets API (saude.js)
 const cachePastas = new Map(); // "parentId/nome" -> Promise<folderId> (a Promise em andamento também entra, pra duas escritas simultâneas não criarem a pasta duas vezes)
 
 function carregarCredenciais() {
@@ -42,9 +44,16 @@ export function iniciarDrive() {
   if (!ROOT_ID) throw new Error('DRIVE_FOLDER_ID não definida no .env');
   const auth = new google.auth.GoogleAuth({ credentials: carregarCredenciais(), scopes: SCOPES });
   google.options({ timeout: Number(process.env.DRIVE_TIMEOUT_MS) || 25_000 }); // pedido pendurado no Drive não pode travar a fila
+  autenticacao = auth;
   drive = google.drive({ version: 'v3', auth });
   console.log('[drive] cliente pronto. Pasta raiz:', ROOT_ID);
   return drive;
+}
+
+/** Credencial já inicializada, pra outras APIs do Google (Sheets) usarem a mesma conta. */
+export function autenticacaoGoogle() {
+  iniciarDrive();
+  return autenticacao;
 }
 
 const escapar = (s) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");

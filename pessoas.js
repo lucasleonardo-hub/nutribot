@@ -7,6 +7,8 @@
 import { colecao, salvarPerfil } from './mongo.js';
 import { listarPastasRaiz, listarArquivos, baixarArquivo, pastaNaRaiz, salvarEmPasta } from './drive.js';
 import * as ia from './gemini.js';
+import { ehPlanilhaSaude, sincronizarSaude } from './saude.js';
+import { agora } from './util.js';
 
 const PASTAS_SISTEMA = new Set(['conhecimento', 'logs', 'diario', 'resumos', 'perfis']);
 const CACHE_LISTA_MS = 10 * 60_000; // relista a pasta no máximo a cada 10 min
@@ -120,11 +122,17 @@ async function sincronizar(perfil, { forcar = false } = {}) {
       if (t != null) st.notas = t.replace(/^---[\s\S]*?---\n/, '').trim();
       continue;
     }
-    if (arq.name.startsWith('Nutri-')) continue; // coisas dela mesma (ficha), não entram no dossiê
+    if (arq.name.startsWith('Nutri-')) continue; // coisas dela mesma (ficha, saúde), não entram no dossiê
     const chave = `${arq.id}:${arq.modifiedTime}`;
     if (!st.textos.has(chave)) {
-      const t = await textoDoArquivo(arq);
-      st.textos.set(chave, { nome: arq.name, texto: t });
+      if (ehPlanilhaSaude(arq)) {
+        // planilha do relógio (Health Connect): vira resumo curto em vez do CSV inteiro, e alimenta pesagens/perfil
+        const t = await sincronizarSaude(perfil, arq, { pastaId, hoje: agora().dia }).catch((e) => (console.error(`[saude] falha em "${arq.name}":`, e.message), null));
+        st.textos.set(chave, { nome: arq.name, texto: t, saude: true });
+      } else {
+        const t = await textoDoArquivo(arq);
+        st.textos.set(chave, { nome: arq.name, texto: t });
+      }
     }
   }
   // limpa textos de arquivos que sumiram/mudaram
@@ -138,12 +146,18 @@ export async function dossieDe(perfil) {
   const st = await sincronizar(perfil);
   const partes = [];
   let usados = 0;
-  for (const { nome, texto } of st.textos.values()) {
+  // dados do relógio primeiro (curtos e sempre atuais); documentos longos depois, até o limite
+  const entradas = [...st.textos.values()].sort((a, b) => Number(Boolean(b.saude)) - Number(Boolean(a.saude)));
+  for (const { nome, texto, saude } of entradas) {
     if (!texto) continue;
     const restante = MAX_CHARS_DOSSIE - usados;
     if (restante <= 500) break;
     const corte = texto.length > restante ? texto.slice(0, restante) + '\n[...]' : texto;
-    partes.push(`--- Documento "${nome}" (deixado pela própria pessoa na pasta dela) ---\n${corte}`);
+    partes.push(
+      saude
+        ? `--- DADOS DO RELÓGIO de ${perfil.nome} (Galaxy Watch, atualizados automaticamente; use pra acompanhar peso, composição, sono e atividade, e pra comentar tendências) ---\n${corte}`
+        : `--- Documento "${nome}" (deixado pela própria pessoa na pasta dela) ---\n${corte}`
+    );
     usados += corte.length;
   }
   if (st.notas) partes.push(`--- Suas notas sobre ${perfil.nome} (${ARQ_NOTAS}) ---\n${st.notas.slice(0, MAX_CHARS_NOTAS)}`);

@@ -213,9 +213,17 @@ export async function refeicoesDoDia(dia) {
 
 // ---------- Pesagens (peso com data, pra evolução) ----------
 
-export async function registrarPesagem({ jid, nome, dia, peso }) {
-  // uma por pessoa por dia: a última vale
-  await colecao('pesagens').replaceOne({ jid, dia }, { jid, nome, dia, peso, criadoEm: new Date() }, { upsert: true });
+export async function registrarPesagem({ jid, nome, dia, peso, gordura, fonte }) {
+  // uma por pessoa por dia: a última vale. fonte 'relogio' = veio da planilha do Galaxy Watch (saude.js)
+  const doc = { jid, nome, dia, peso, criadoEm: new Date() };
+  if (gordura != null) doc.gordura = gordura;
+  if (fonte) doc.fonte = fonte;
+  await colecao('pesagens').replaceOne({ jid, dia }, doc, { upsert: true });
+}
+
+/** Última pesagem da pessoa (qualquer fonte). */
+export async function ultimaPesagem(jids) {
+  return colecao('pesagens').find({ jid: { $in: jids } }).sort({ dia: -1 }).limit(1).next();
 }
 
 export async function pesagensDesde(jids, diaInicial) {
