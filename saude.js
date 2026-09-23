@@ -313,7 +313,7 @@ export async function sincronizarSaude(perfil, arq, { pastaId, hoje } = {}) {
   }
   if (pastaId) {
     const md = `---\ntipo: saude\npessoa: ${perfil.nome}\natualizado: ${hoje || new Date().toISOString().slice(0, 10)}\nfonte: "${arq.name}"\ntags: [nutribot, pessoa, saude, galaxy-watch]\n---\n\n# Saúde de ${perfil.nome} (relógio)\n\n${texto}\n`;
-    salvarEmPasta(pastaId, ARQ_SAUDE, md).catch((e) => console.error('[saude] Nutri-Saude.md:', e.message));
+    await salvarEmPasta(pastaId, ARQ_SAUDE, md).catch((e) => console.error('[saude] Nutri-Saude.md:', e.message));
   }
   return texto;
 }
