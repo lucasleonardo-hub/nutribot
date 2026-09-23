@@ -2,19 +2,32 @@
 // A IA só redige o resumo; quem lista as refeições e soma calorias e macros é o sistema. Assim nenhuma refeição
 // some do resumo (o que acontecia quando o modelo reserva cortava o meio do prompt) e os números batem com o dia.
 
-const NOME_SLOT = { cafe: '☕ Café da manhã', almoco: '🍽️ Almoço', lanche: '🥪 Lanche', jantar: '🌙 Jantar', ceia: '🌃 Ceia' };
+const NOME_SLOT = { cafe: '☕ Café da manhã', lanche_manha: '🥤 Lanche da manhã', almoco: '🍽️ Almoço', lanche: '🥪 Lanche', jantar: '🌙 Jantar', ceia: '🌃 Ceia' };
 const JANELA_COMPLEMENTO_MIN = 20; // "a vitamina tem whey" 1 min depois da foto = mesma refeição, não outra
 
 import { minutosDe } from './util.js';
 
 const num = (t) => Number(String(t).replace(/\./g, '').replace(',', '.')) || 0;
 
-/** Lê "~620 kcal · Proteína 32 g · Carboidratos 82 g · Gorduras 16 g" (ou o formato antigo "P: 32g | C: 82g | G: 16g"). */
+/**
+ * Lê a estimativa da análise em qualquer formato razoável: "~620 kcal · Proteína 32 g · Carboidratos 82 g · Gorduras 16 g",
+ * o antigo "P: 32g | C: 82g | G: 16g", "Proteínas: 25g", ordem trocada, "kcal" antes ou depois do número, etc.
+ * Procura na linha da Estimativa; se não houver, no texto todo (modelos reserva às vezes não escrevem "Estimativa").
+ */
 export function lerEstimativa(texto) {
-  const m = String(texto || '').match(
-    /Estimativa[^:\n]*:\*?\s*~?\s*([\d.,]+)\s*kcal[\s\S]{0,40}?(?:P:|Prote[ií]nas?:?)\s*~?([\d.,]+)\s*g[\s\S]{0,40}?(?:C:|Carbo\w*:?)\s*~?([\d.,]+)\s*g[\s\S]{0,40}?(?:G:|Gorduras?:?)\s*~?([\d.,]+)\s*g/i
-  );
-  return m ? { kcal: num(m[1]), p: num(m[2]), c: num(m[3]), g: num(m[4]) } : null;
+  const t = String(texto || '');
+  const linhaEst = t.match(/Estimativa[^:\n]*:([^\n]*(?:\n(?![\s*]*[⚖️💡🍽️🕐])[^\n]*){0,2})/i)?.[1];
+  const ler = (trecho) => {
+    if (!trecho) return null;
+    const kcal = trecho.match(/~?\s*(\d[\d.,]*)\s*(?:kcal|calorias?)/i)?.[1] ?? trecho.match(/(?:kcal|calorias?)[:\s~]*(\d[\d.,]*)/i)?.[1];
+    const p = trecho.match(/(?:prote[ií]nas?|\bP)\s*[:=]?\s*~?\s*(\d[\d.,]*)\s*g?/i)?.[1];
+    const c = trecho.match(/(?:carbo\w*|\bC)\s*[:=]?\s*~?\s*(\d[\d.,]*)\s*g?/i)?.[1];
+    const g = trecho.match(/(?:gorduras?|lip[ií]d\w*|\bG)\s*[:=]?\s*~?\s*(\d[\d.,]*)\s*g?/i)?.[1];
+    if (!kcal || !p || !c || !g) return null;
+    const r = { kcal: num(kcal), p: num(p), c: num(c), g: num(g) };
+    return r.kcal > 0 ? r : null;
+  };
+  return ler(linhaEst) || ler(t.match(/[^\n]*(?:kcal|calorias)[^\n]*(?:\n[^\n]*){0,3}/i)?.[0]);
 }
 
 /** Descrição curta da refeição: o bloco "O que eu vi" da análise; sem ele, o texto da própria pessoa. */
@@ -188,6 +201,7 @@ export function compilarMes(refeicoes, pesagens, perfis, dias) {
 // Tipo de refeição dito pela IA na análise ("🕐 *Refeição:* café da manhã") -> id do slot
 // ============================================================
 const TIPO_POR_PALAVRA = [
+  [/lanche da manh|cola[cç][aã]o|meio da manh|(?:pr[eé]|p[oó]s).?treino[^\n]{0,20}manh|manh[^\n]{0,20}(?:pr[eé]|p[oó]s).?treino/i, 'lanche_manha'],
   [/caf[eé]|desjejum|breakfast|brunch/i, 'cafe'],
   [/almo[cç]o|lunch/i, 'almoco'],
   [/lanche|snack|merenda|pr[eé].?treino|p[oó]s.?treino/i, 'lanche'],

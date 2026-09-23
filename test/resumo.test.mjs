@@ -9,6 +9,10 @@ test('lerEstimativa entende o formato novo e o antigo', () => {
   assert.deepEqual(lerEstimativa('🔥 *Estimativa:* ~780 kcal | P: 36g | C: 72g | G: 38g'), { kcal: 780, p: 36, c: 72, g: 38 });
   assert.deepEqual(lerEstimativa('🔥 *Estimativa corrigida:* ~750 kcal · Proteína 40 g · Carboidratos 90 g · Gorduras 25 g'), { kcal: 750, p: 40, c: 90, g: 25 });
   assert.equal(lerEstimativa('sem números aqui'), null);
+  // formatos de modelo reserva
+  assert.deepEqual(lerEstimativa('🔥 Estimativa: 420 kcal, proteínas 25g, carboidratos 50g e gorduras 10g'), { kcal: 420, p: 25, c: 50, g: 10 });
+  assert.deepEqual(lerEstimativa('Estimativa:\nCalorias: ~500 kcal\nProteína: 30 g\nCarboidratos: 60 g\nGorduras: 12 g'), { kcal: 500, p: 30, c: 60, g: 12 });
+  assert.deepEqual(lerEstimativa('Esse prato tem uns 650 kcal (Proteína 40 g, Carboidratos 70 g, Gorduras 20 g).'), { kcal: 650, p: 40, c: 70, g: 20 });
 });
 
 test('descricaoDaAnalise tira o bloco "O que eu vi"', () => {
@@ -56,4 +60,8 @@ test('lerTipoRefeicao entende a linha "Refeição:" da análise', () => {
   assert.equal(lerTipoRefeicao('Refeição: lanche pós-treino'), 'lanche');
   assert.equal(lerTipoRefeicao('🕐 *Refeição:* jantar tardio'), 'jantar');
   assert.equal(lerTipoRefeicao('sem a linha'), null);
+  assert.equal(lerTipoRefeicao('🕐 *Refeição:* lanche da manhã (pré-treino)'), 'lanche_manha');
+  assert.equal(lerTipoRefeicao('Refeição: pós-treino'), 'lanche'); // sem "manhã", vale o lanche comum
+  assert.equal(lerTipoRefeicao('🕐 *Refeição:* pré-treino da manhã'), 'lanche_manha');
+  assert.equal(lerTipoRefeicao('Refeição: lanche da tarde'), 'lanche');
 });

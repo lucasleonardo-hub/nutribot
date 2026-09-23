@@ -445,6 +445,13 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   if (foiRefeicao) {
     // O tipo da refeição vem do que a IA entendeu (a pessoa disse "café da manhã"); o relógio só quando ela não disse
     const slotFinal = lerTipoRefeicao(resposta) || slot.id;
+    // Sem números legíveis na análise (modelo reserva com formato próprio)? Estimativa rápida num modelo leve a partir da descrição
+    let estimativa = lerEstimativa(resposta);
+    const descricaoBase = descricaoDaAnalise(resposta, resumoRefeicao);
+    if (!estimativa && descricaoBase && !/^\[(foto|áudio)\]$/.test(descricaoBase)) {
+      estimativa = (await ia.estimarRefeicaoManual({ descricao: descricaoBase, perfil }).catch(() => null))?.estimativa || null;
+      if (estimativa) console.log(`[refeicoes] estimativa de reserva pra ${perfil.nome}: ${JSON.stringify(estimativa)}`);
+    }
     registrarRefeicao({
       jid: jids[0],
       nome: perfil.nome,
@@ -454,8 +461,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
       minutos: minutosDe(horaLocal), // no fuso da pessoa: é assim que ela aprende o horário habitual
       slot: slotFinal,
       resumo: resumoRefeicao.slice(0, 120),
-      descricao: descricaoDaAnalise(resposta, resumoRefeicao),
-      estimativa: lerEstimativa(resposta), // kcal e macros da análise, gravados agora: o resumo semanal soma daqui
+      descricao: descricaoBase,
+      estimativa, // kcal e macros da análise (ou estimativa de reserva), gravados agora: o resumo semanal soma daqui
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
     const mensagens = estado.memoria.mensagens;
     // marca a mensagem da pessoa (a última que não é da bot) como refeição, pro diário e pro resumo

@@ -91,6 +91,8 @@ export const formatarTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : 
 // ============================================================
 export const SLOTS = [
   { id: 'cafe', nome: 'café da manhã', ini: 5 * 60, fim: 10 * 60 + 30, padrao: 8 * 60 + 30, cobrar: true },
+  // pré/pós-treino ou lanche leve de manhã: só a IA (ou !refeicao) classifica assim; o relógio cai no café da manhã
+  { id: 'lanche_manha', nome: 'lanche da manhã', ini: -1, fim: -1, padrao: 7 * 60, cobrar: false },
   { id: 'almoco', nome: 'almoço', ini: 10 * 60 + 30, fim: 14 * 60 + 30, padrao: 12 * 60 + 30, cobrar: true },
   { id: 'lanche', nome: 'lanche da tarde', ini: 14 * 60 + 30, fim: 18 * 60, padrao: 16 * 60, cobrar: false },
   { id: 'jantar', nome: 'jantar', ini: 18 * 60, fim: 22 * 60 + 30, padrao: 20 * 60, cobrar: true },
