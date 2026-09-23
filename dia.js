@@ -64,7 +64,8 @@ export function renomearNaMemoria(antigo, novo) {
 /** No boot: marca na memória do dia as mensagens que correspondem a refeições registradas (corrigidas à mão ou não), pelo nome e hora (±3 min). */
 export function sincronizarRefeicoesNaMemoria(registros) {
   let n = 0;
-  for (const r of registros || []) {
+  const lista = registros || [];
+  for (const r of lista) {
     const alvo = minutosDe(r.hora);
     for (const m of estado.memoria.mensagens) {
       if (m.tipo === 'bot' || m.refeicao || m.nome !== r.nome) continue;
@@ -73,6 +74,15 @@ export function sincronizarRefeicoesNaMemoria(registros) {
         n++;
         break;
       }
+    }
+  }
+  // marcação sem registro correspondente (ex.: sugestão que tinha sido registrada e depois apagada): limpa
+  for (const m of estado.memoria.mensagens) {
+    if (m.tipo === 'bot' || !m.refeicao) continue;
+    const temRegistro = lista.some((r) => r.nome === m.nome && Math.abs(minutosDe(r.hora) - minutosDe(m.hora)) <= 3);
+    if (!temRegistro) {
+      delete m.refeicao;
+      n++;
     }
   }
   if (n) {

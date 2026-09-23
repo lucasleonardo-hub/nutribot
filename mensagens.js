@@ -10,7 +10,7 @@ import { docsPara, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
 import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt } from './resumo.js';
-import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo } from './util.js';
+import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
@@ -386,7 +386,9 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   const dossie = motivo ? await comTempo(dossieDe(eu), 20_000, 'leitura da pasta no Drive').catch((e) => (console.error('[pessoas]', e.message), '')) : '';
   const conhecimento = motivo ? docsPara(eu, { texto }) : '';
   const momentos = await comTempo(momentosRecentes(12), 8_000, 'momentos').catch(() => []);
-  const registradas = registradasHojeParaPrompt(await comTempo(refeicoesDoDia(dia), 8_000, 'refeições do dia').catch(() => []), perfis, dia);
+  const refeicoesHoje = await comTempo(refeicoesDoDia(dia), 8_000, 'refeições do dia').catch(() => []);
+  const registradas = registradasHojeParaPrompt(refeicoesHoje, perfis, dia);
+  const minhaUltima = refeicoesHoje.filter((r) => jids.includes(r.jid)).sort((a, b) => b.minutos - a.minutos)[0];
   const citada = citacaoDe(conteudo, perfis);
   const marcaCitacao = citada ? `(respondendo a ${citada.autor}: "${citada.texto.slice(0, 80)}${citada.texto.length > 80 ? '…' : ''}") ` : '';
   const entradaTexto = `${marcaCitacao}${temImagem ? `📷 [foto]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto}`;
@@ -437,7 +439,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   // bloco (modelo reserva esqueceu) e não diz que é receita/rótulo/produto: registra mesmo assim, sem estimativa.
   const temBloco = /Refei[cç][aã]o:\*?\s*(caf[eé]|almo[cç]o|lanche|jantar|ceia)|O que eu vi/i.test(resposta || '');
   const naoEhComida = /receita|r[óo]tulo|tabela nutricional|card[áa]pio|produto|embalagem|print|suplemento novo|não (é|foi) (uma )?refei|comeu isso ou/i.test(resposta || '');
-  const foiRefeicao = temBloco || (temImagem && Boolean(resposta) && !naoEhComida);
+  const blocoDeSugestao = /O que eu vi:\*?[^\n]*sugest|Estimativa[^:\n]*:[^\n]*sugest/i.test(resposta || '');
+  // Texto sem foto que é pedido de sugestão ou plano futuro NUNCA vira refeição, mesmo que a IA tenha posto o bloco
+  const ehPedido = !temImagem && !temAudio && parecePedidoOuPlano(texto);
+  // Correção de uma análise recente ("não é picanha, é fígado") com estimativa nova: atualiza o registro anterior
+  const correcaoRecente = !temImagem && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30 && Boolean(lerEstimativa(resposta));
+  const foiRefeicao = !ehPedido && !blocoDeSugestao && (temBloco || correcaoRecente || (temImagem && Boolean(resposta) && !naoEhComida));
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
   if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
@@ -460,8 +467,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
 
   const resumoRefeicao = texto || (temImagem ? '[foto]' : temAudio ? '[áudio]' : '');
   if (foiRefeicao) {
-    // O tipo da refeição vem do que a IA entendeu (a pessoa disse "café da manhã"); o relógio só quando ela não disse
-    const slotFinal = lerTipoRefeicao(resposta) || slot.id;
+    // O tipo da refeição vem do que a IA entendeu (a pessoa disse "café da manhã"); numa correção, o da refeição corrigida
+    const slotFinal = (correcaoRecente && minhaUltima?.slot) || lerTipoRefeicao(resposta) || slot.id;
     // Sem números legíveis na análise (modelo reserva com formato próprio)? Estimativa rápida num modelo leve a partir da descrição
     let estimativa = lerEstimativa(resposta);
     const descricaoBase = descricaoDaAnalise(resposta, resumoRefeicao);
@@ -475,11 +482,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
       dia,
       hora,
       horaLocal, // no fuso da pessoa (Paris é Paris), pra mostrar no !hoje e nos resumos
-      minutos: minutosDe(horaLocal), // no fuso da pessoa: é assim que ela aprende o horário habitual
+      minutos: correcaoRecente ? minhaUltima.minutos : minutosDe(horaLocal), // correção cai no registro que corrige
       slot: slotFinal,
       resumo: resumoRefeicao.slice(0, 120),
       descricao: descricaoBase,
       estimativa, // kcal e macros da análise (ou estimativa de reserva), gravados agora: o resumo semanal soma daqui
+      correcao: Boolean(correcaoRecente),
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
     const mensagens = estado.memoria.mensagens;
     // marca a mensagem da pessoa (a última que não é da bot) como refeição, pro diário e pro resumo

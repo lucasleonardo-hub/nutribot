@@ -179,11 +179,18 @@ export async function registrarRefeicao(r) {
   // Complemento/correção da mesma refeição poucos minutos depois ("a vitamina tem whey") atualiza o registro em vez de criar outro
   const col = colecao('refeicoes');
   const ultima = await col.find({ jid: r.jid, dia: r.dia, slot: r.slot }).sort({ minutos: -1 }).limit(1).next();
-  if (ultima && r.minutos - ultima.minutos <= 20) {
-    const resumo = [ultima.resumo, r.resumo].filter((t) => t && t !== '[foto]').join(' + ') || ultima.resumo || r.resumo;
-    const set = { resumo: resumo.slice(0, 200), atualizadoEm: new Date() };
+  if (ultima && Math.abs(r.minutos - ultima.minutos) <= 30) {
+    const set = { atualizadoEm: new Date() };
     if (r.estimativa) set.estimativa = r.estimativa; // estimativa corrigida substitui a anterior
-    if (r.descricao && r.descricao !== ultima.descricao) set.descricao = `${ultima.descricao || ''}${ultima.descricao ? ' (+ ' : ''}${r.descricao}${ultima.descricao ? ')' : ''}`.slice(0, 220);
+    if (r.correcao) {
+      // correção ("não é picanha, é fígado"): a descrição nova SUBSTITUI a antiga
+      if (r.descricao) set.descricao = r.descricao.slice(0, 220);
+      set.resumo = `${ultima.resumo || ''} (corrigido)`.slice(0, 200);
+    } else {
+      // complemento ("a vitamina tem whey"): soma
+      set.resumo = ([ultima.resumo, r.resumo].filter((t) => t && t !== '[foto]').join(' + ') || ultima.resumo || r.resumo || '').slice(0, 200);
+      if (r.descricao && r.descricao !== ultima.descricao) set.descricao = `${ultima.descricao || ''}${ultima.descricao ? ' (+ ' : ''}${r.descricao}${ultima.descricao ? ')' : ''}`.slice(0, 220);
+    }
     await col.updateOne({ _id: ultima._id }, { $set: set });
     return;
   }

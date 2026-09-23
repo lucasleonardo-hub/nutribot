@@ -59,10 +59,14 @@ function encurtar(texto, max = MAX_CHARS_ENTRADA) {
   return `${texto.slice(0, cabeca)}\n\n[... contexto cortado por limite do modelo reserva ...]\n\n${texto.slice(-(max - cabeca))}`;
 }
 
-function extrairTexto(data) {
+function extrairTexto(data, nomePersonagem = 'Nutri') {
   // OpenAI-like (Groq, HF) ou Cohere v2
   const t = data?.choices?.[0]?.message?.content ?? data?.message?.content?.map?.((c) => c.text).join('\n');
-  return typeof t === 'string' ? t.trim().replace(/<think>[\s\S]*?<\/think>\s*/g, '') : '';
+  if (typeof t !== 'string') return '';
+  const semThink = t.trim().replace(/<think>[\s\S]*?<\/think>\s*/g, '');
+  // a deixa "Nome:" às vezes volta no começo da resposta
+  const esc = nomePersonagem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return semThink.replace(new RegExp(`^\\s*\\*?(?:${esc}|Nutri)\\*?\\s*:\\s*`, 'i'), '').trim();
 }
 
 /**
@@ -86,8 +90,9 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
     `\n\nFORMATO: WhatsApp. Negrito com UM asterisco (*assim*), nunca dois. Sem cabeçalhos markdown (#). Sem tabelas.${json ? ' Responda SOMENTE com JSON válido.' : ''}`;
   const nomePersonagem = (String(system || '').match(/te batizou de "([^"]+)"/) || [])[1] || 'Nutri';
   const usuarioFinal =
-    `${usuario}\n\n(Responda agora como ${nomePersonagem}, a nutricionista do grupo, em primeira pessoa, falando COM quem mandou a MENSAGEM ATUAL. ` +
-    `Você NÃO é essa pessoa: não narre o que ela comeu como se fosse você. Se for foto de comida consumida, use o bloco 🕐 Refeição / 🍽️ O que eu vi / 🔥 Estimativa / ⚖️ Veredito / 💡 Dica; se for pedido de sugestão, use 💡 Sugestão e nenhum bloco.)\n\n${nomePersonagem}:`;
+    `${usuario}\n\n(Responda agora como ${nomePersonagem}, a nutricionista do grupo, em primeira pessoa, falando COM quem mandou a MENSAGEM ATUAL, usando o objetivo da PESSOA ATUAL. ` +
+    `Você NÃO é essa pessoa: não narre o que ela comeu como se fosse você. Analise SOMENTE o que está nesta mensagem (legenda manda; foto complementa); NÃO copie análises anteriores do histórico, que são de outras refeições e outras pessoas. ` +
+    `Se for foto de comida consumida, use o bloco 🕐 Refeição / 🍽️ O que eu vi / 🔥 Estimativa / ⚖️ Veredito / 💡 Dica; se for pedido de sugestão ou plano, use 💡 Sugestão e nenhum bloco. Não comece a resposta com o seu nome.)\n\n${nomePersonagem}:`;
 
   let ultimoErro;
   for (const prov of candidatos) {
@@ -115,7 +120,7 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${data?.error?.message || data?.message || JSON.stringify(data).slice(0, 160)}`);
-      const texto = extrairTexto(data);
+      const texto = extrairTexto(data, nomePersonagem);
       if (!texto) throw new Error('resposta vazia');
       console.warn(`[reserva] respondido por ${prov.id} (${model})`);
       return texto;

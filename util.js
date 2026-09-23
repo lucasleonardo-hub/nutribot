@@ -177,3 +177,15 @@ export function comTempo(promessa, ms, rotulo = 'operação') {
   });
   return Promise.race([promessa, limite]).finally(() => clearTimeout(timer));
 }
+
+// ============================================================
+// A mensagem relata comida consumida, pede sugestão/plano, ou corrige uma análise?
+// ============================================================
+const RE_PEDIDO = /\?|sugest|indica|o que (eu )?(como|posso|devo)|tem algo|alguma (ideia|dica|op[cç][aã]o)|me (d[aá]|passa) (uma|umas)|irei|vou (tentar|comer|almo[cç]ar|jantar|lanchar|comprar)|pretendo|talvez|depois|mais tarde|[àa]s \d{1,2}h/i;
+const RE_CONSUMO = /\b(comi|tomei|almocei|jantei|lanchei|bebi|acabei de|comendo|tô comendo|to comendo|foi (meu|minha|o|a)|esse foi|essa foi|aqui (o|a|meu|minha))\b/i;
+const RE_CORRECAO = /n[ãa]o (é|era|foi|tinha|tem)|na verdade|era[m]?\s+\d|tinha (tamb[ée]m|mais|s[óo])|esqueci|faltou|tamb[ée]m tinha|corrig|na real/i;
+
+/** Pedido de sugestão ou plano futuro ("vou tentar comer algo às 18h", "tem algo pra comprar?") e não relato do que comeu. */
+export const parecePedidoOuPlano = (t) => RE_PEDIDO.test(String(t || '')) && !RE_CONSUMO.test(String(t || ''));
+/** Correção de uma análise recente ("não é picanha, é fígado", "eram 2 pães"). */
+export const pareceCorrecao = (t) => RE_CORRECAO.test(String(t || '')) && !parecePedidoOuPlano(t);

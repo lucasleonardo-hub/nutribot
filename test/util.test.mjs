@@ -17,6 +17,8 @@ import {
   semLinhaAtualizar,
   fusoValido,
   mencionaNome,
+  parecePedidoOuPlano,
+  pareceCorrecao,
 } from '../util.js';
 
 test('agora respeita o fuso pedido', () => {
@@ -100,4 +102,14 @@ test('mencionaNome: palavra inteira, sem acento, nomes curtos', () => {
   assert.equal(mencionaNome('banana', 'Ana'), false);
   assert.equal(mencionaNome('oi Nutrí', 'Nutri'), true);
   assert.equal(mencionaNome('sem nada', 'Dona Benta'), false);
+});
+
+test('parecePedidoOuPlano e pareceCorrecao', () => {
+  assert.equal(parecePedidoOuPlano('N é fácil mas irei tentar comer algo as 18h, terei que comprar algo'), true);
+  assert.equal(parecePedidoOuPlano('Eu nao to em casa tem algo q consiga comprar?'), true);
+  assert.equal(parecePedidoOuPlano('comi 2 ovos e uma banana'), false);
+  assert.equal(parecePedidoOuPlano('Infelizmente isso foi meu cafe da tarde agr'), false);
+  assert.equal(pareceCorrecao('nao é picanha é fígado bovino'), true);
+  assert.equal(pareceCorrecao('a vitamina tinha também whey'), true);
+  assert.equal(pareceCorrecao('vou comer algo às 18h'), false);
 });

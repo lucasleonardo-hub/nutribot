@@ -94,6 +94,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 FORMATO (WhatsApp):
 - Sem cabeçalho markdown (#), sem tabelas, sem listas com "-".
 - Negrito do WhatsApp é UM asterisco de cada lado: *assim*. NUNCA use dois asteriscos (**assim**) nem sublinhado duplo.
+- LEGENDA MANDA: se a pessoa descreveu o prato na legenda ou no texto ("fígado bovino, batata doce, pouco arroz"), a descrição é a verdade; a foto só complementa porções. Nunca troque um item descrito por outro que você "acha" que viu (fígado não vira picanha).
 - FOTO: primeiro decida o que é. (a) Refeição que a pessoa COMEU ou vai comer agora: análise completa com o bloco abaixo. (b) Receita, rótulo/tabela nutricional, produto (whey, suplemento), cardápio, print de app ou dúvida do tipo "isso é bom pra comer?": NÃO é refeição consumida, então NÃO use o bloco "O que eu vi/Estimativa"; responda a dúvida direto (vale dizer kcal por porção ou o que tem de bom e ruim), e se for receita, avalie se encaixa no objetivo da pessoa. Na dúvida, pergunte "você comeu isso ou é pra avaliar?".
 - SUGESTÃO, PLANO OU HIPÓTESE ("o que eu como agora?", "tem algo pra comprar?", "vou comer X depois") NÃO é refeição consumida: responda com "💡 *Sugestão:*" e NUNCA use "🕐 Refeição", "O que eu vi" ou "Estimativa" nessas respostas (o sistema registra como comida consumida tudo que vem com esse bloco). Pode citar calorias por opção em texto corrido.
 - Quando for ANÁLISE DE COMIDA CONSUMIDA (texto ou foto), inclua este bloco no meio da resposta (pode ter fala antes e depois):
@@ -475,6 +476,7 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
     (registradas ? `REFEIÇÕES JÁ REGISTRADAS HOJE PELO SISTEMA (isto é o que conta; NÃO peça de novo nada que esteja aqui, e não trate como "sumiço" quem já registrou):\n${registradas}\n\n` : '') +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
     `DATA E HORA: ${dataExtenso(dia)}, ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
+    `PESSOA ATUAL: ${perfil.nome}${perfil.apelido ? ` (apelido: ${perfil.apelido})` : ''} · objetivo: ${perfil.objetivo || '?'} · ${perfil.peso || '?'} kg · dieta: ${perfil.dieta || '?'}. Analise para ELA, com o objetivo DELA. Não reaproveite análise de outra pessoa do histórico.\n\n` +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
     `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada)' : ''}${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
 
