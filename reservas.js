@@ -84,7 +84,10 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
     `${system || ''}\n\nVOCÊ É A PERSONAGEM descrita acima e está respondendo dentro do grupo. Nunca fale dela em terceira pessoa nem responda como se fosse outra pessoa do grupo. ` +
     `O texto do usuário traz o contexto (base de conhecimento, perfis, histórico com o nome de quem falou em cada linha) e termina na MENSAGEM ATUAL: responda a ela, em primeira pessoa, direto pra quem mandou.` +
     `\n\nFORMATO: WhatsApp. Negrito com UM asterisco (*assim*), nunca dois. Sem cabeçalhos markdown (#). Sem tabelas.${json ? ' Responda SOMENTE com JSON válido.' : ''}`;
-  const usuarioFinal = `${usuario}\n\n(Responda agora como a personagem, em primeira pessoa, à MENSAGEM ATUAL acima. Se for foto de comida consumida, use o bloco 🕐 Refeição / 🍽️ O que eu vi / 🔥 Estimativa / ⚖️ Veredito / 💡 Dica.)`;
+  const nomePersonagem = (String(system || '').match(/te batizou de "([^"]+)"/) || [])[1] || 'Nutri';
+  const usuarioFinal =
+    `${usuario}\n\n(Responda agora como ${nomePersonagem}, a nutricionista do grupo, em primeira pessoa, falando COM quem mandou a MENSAGEM ATUAL. ` +
+    `Você NÃO é essa pessoa: não narre o que ela comeu como se fosse você. Se for foto de comida consumida, use o bloco 🕐 Refeição / 🍽️ O que eu vi / 🔥 Estimativa / ⚖️ Veredito / 💡 Dica; se for pedido de sugestão, use 💡 Sugestão e nenhum bloco.)\n\n${nomePersonagem}:`;
 
   let ultimoErro;
   for (const prov of candidatos) {

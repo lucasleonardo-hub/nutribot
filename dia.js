@@ -7,7 +7,7 @@ import * as ia from './gemini.js';
 import { atualizarConhecimento } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
 import { compilarRefeicoes, compilarSemana, compilarMes } from './resumo.js';
-import { agora, semanaISO, diaSeguinte, diasAnteriores, ehDomingo } from './util.js';
+import { agora, semanaISO, diaSeguinte, diasAnteriores, ehDomingo, minutosDe } from './util.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
 import { enriquecerPerfis } from './perfis.js';
@@ -57,6 +57,28 @@ export function renomearNaMemoria(antigo, novo) {
     persistirMemoria(estado.memoria).catch(() => {});
     agendarDiario();
     console.log(`[memoria] ${n} mensagem(ns) renomeada(s): ${antigo} -> ${novo}`);
+  }
+  return n;
+}
+
+/** No boot: marca na memória do dia as mensagens que correspondem a refeições registradas (corrigidas à mão ou não), pelo nome e hora (±3 min). */
+export function sincronizarRefeicoesNaMemoria(registros) {
+  let n = 0;
+  for (const r of registros || []) {
+    const alvo = minutosDe(r.hora);
+    for (const m of estado.memoria.mensagens) {
+      if (m.tipo === 'bot' || m.refeicao || m.nome !== r.nome) continue;
+      if (Math.abs(minutosDe(m.hora) - alvo) <= 3) {
+        m.refeicao = r.slot;
+        n++;
+        break;
+      }
+    }
+  }
+  if (n) {
+    persistirMemoria(estado.memoria).catch(() => {});
+    agendarDiario();
+    console.log(`[memoria] ${n} mensagem(ns) marcada(s) como refeição a partir dos registros`);
   }
   return n;
 }

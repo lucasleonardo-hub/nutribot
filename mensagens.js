@@ -415,9 +415,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     }
   }
 
-  // Foi refeição? Só quando a Nutri analisou como refeição consumida (bloco "O que eu vi"/"Estimativa"). Foto de receita,
-  // rótulo, cardápio ou dúvida ("isso é bom?") não conta como refeição, então não entra na rotina nem no resumo.
-  const foiRefeicao = /O que eu vi|Estimativa[^:\n]*:/i.test(resposta || ''); // inclui "Estimativa corrigida:"
+  // Foi refeição? Quando a análise traz "🕐 Refeição:" ou "O que eu vi" (comida consumida). "Estimativa" sozinha não basta:
+  // sugestões também trazem estimativa e não são refeição. Exceção: foto com legenda de comida cuja resposta veio sem
+  // bloco (modelo reserva esqueceu) e não diz que é receita/rótulo/produto: registra mesmo assim, sem estimativa.
+  const temBloco = /Refei[cç][aã]o:\*?\s*(caf[eé]|almo[cç]o|lanche|jantar|ceia)|O que eu vi/i.test(resposta || '');
+  const naoEhComida = /receita|r[óo]tulo|tabela nutricional|card[áa]pio|produto|embalagem|print|suplemento novo|não (é|foi) (uma )?refei|comeu isso ou/i.test(resposta || '');
+  const foiRefeicao = temBloco || (temImagem && Boolean(resposta) && !naoEhComida);
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
   if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
