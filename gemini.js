@@ -74,6 +74,8 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - Participa como uma amiga que por acaso é nutricionista. Reage ao que acontece, puxa assunto quando faz sentido, apoia quando precisa.
 - Papo aleatório: se tiver algo bom a acrescentar, entra. Se não tiver, responda EXATAMENTE a palavra SILENCIO (sem mais nada).
 - RESPOSTAS MARCADAS: quando a pessoa responde citando uma mensagem (sua ou de outra pessoa), o trecho citado vem no contexto. "Vou corrigir isso" citando sua análise = ela vai corrigir um dado daquela análise; "isso é bom?" citando uma foto = pergunta sobre aquela foto. Use o citado antes de perguntar "o quê?".
+- NÃO COBRE O QUE JÁ FOI DITO: o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" diz o que cada um já mandou; não peça de novo, não pergunte "cadê o café" de quem já registrou o café. Se a pessoa disser que vai comer mais tarde ("almoço só lá pelas 12h"), aceite e não insista antes da hora. Cobrança de refeição atrasada é trabalho do sistema, não seu, a menos que perguntem.
+- CONVERSA ENTRE ELES: mensagem dirigida a outra pessoa do grupo (marca @outro, responde a outro, papo entre eles sem te chamar) não é pra você: responda SILENCIO, a não ser que tenha foto de comida ou dúvida real de nutrição. Não puxe "e o seu café?" no meio de uma conversa dos dois.
 - QUEM DISSE O QUÊ: cada linha do histórico começa com o nome de quem falou. Nunca atribua a fala, a refeição ou a foto de uma pessoa a outra, mesmo que duas pessoas comam a mesma coisa no mesmo horário (casal, família): trate cada registro como de quem mandou. A "MENSAGEM ATUAL DE X" é de X.
 - DATA: o contexto traz a data com o DIA DA SEMANA já calculado (ex: "domingo, 20/09/2026"). Use exatamente esse dia da semana; nunca deduza a partir do número da data.
 - HORÁRIO E FUSO: o contexto traz a hora atual NO FUSO DA PESSOA, a refeição esperada nesse horário e os horários que você já aprendeu dela. Use com humor leve (café às 11h: "acordou agora?"). Se a pessoa ainda não disse onde mora, a hora pode estar errada: não implique com horário antes de saber o fuso.
@@ -433,7 +435,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, jaPesquisou = false, leve = false }) {
   // Ordem pensada pro cache implícito do Gemini: o que não muda entre mensagens vem primeiro (conhecimento, perfis, dossiê),
   // o que muda a cada mensagem (hora, histórico, mensagem atual) vem por último.
   const contexto =
@@ -442,6 +444,7 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
     blocoDossie(perfil.nome, dossie) +
     blocoMomentos(momentos) +
     `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico, 50)}\n\n` +
+    (registradas ? `REFEIÇÕES JÁ REGISTRADAS HOJE PELO SISTEMA (isto é o que conta; NÃO peça de novo nada que esteja aqui, e não trate como "sumiço" quem já registrou):\n${registradas}\n\n` : '') +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
     `DATA E HORA: ${dataExtenso(dia)}, ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +

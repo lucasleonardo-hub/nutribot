@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resumirHoje, compilarMes } from '../resumo.js';
+import { resumirHoje, compilarMes, registradasHojeParaPrompt } from '../resumo.js';
 import { duracaoDe } from '../comandos.js';
 
 const perfis = [
@@ -47,4 +47,14 @@ test('duracaoDe entende 2h, 30m, 1h30 e minutos soltos', () => {
   assert.equal(duracaoDe('90'), 90 * 60_000);
   assert.equal(duracaoDe('abc'), null);
   assert.equal(duracaoDe(''), null);
+});
+
+test('registradasHojeParaPrompt: uma linha por pessoa', () => {
+  const refeicoes = [
+    { jid: 'a@s', dia: '2026-09-23', horaLocal: '06:20', minutos: 380, slot: 'lanche_manha', estimativa: { kcal: 270 } },
+    { jid: 'a@s', dia: '2026-09-23', horaLocal: '08:34', minutos: 514, slot: 'cafe', estimativa: { kcal: 470 } },
+  ];
+  const t = registradasHojeParaPrompt(refeicoes, perfis, '2026-09-23');
+  assert.match(t, /- Lucas Leonardo: Lanche da manhã 06:20 \(~270 kcal\); Café da manhã 08:34 \(~470 kcal\)/);
+  assert.match(t, /- Ale: nada registrado ainda hoje/);
 });

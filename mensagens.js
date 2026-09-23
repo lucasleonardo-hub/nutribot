@@ -3,13 +3,13 @@
 
 import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
-import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao } from './resumo.js';
+import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt } from './resumo.js';
 import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
@@ -182,6 +182,17 @@ export function citacaoDe(conteudo, perfis) {
   return trecho ? { autor, texto: trecho.slice(0, 300) } : null;
 }
 
+/** A mensagem marca (@) ou responde outra pessoa do grupo, sem marcar a bot? */
+export function dirigidaAOutro(conteudo) {
+  const ctx = conteudo?.extendedTextMessage?.contextInfo || conteudo?.imageMessage?.contextInfo;
+  const meus = meusJids();
+  const mencionados = (ctx?.mentionedJid || []).map((j) => jidNormalizedUser(j));
+  if (mencionados.some((j) => meus.includes(j))) return false;
+  if (mencionados.length) return true;
+  if (ctx?.participant && !meus.includes(jidNormalizedUser(ctx.participant)) && !(ctx?.stanzaId && enviadosPeloBot.has(ctx.stanzaId))) return true;
+  return false;
+}
+
 export function prioridade({ texto, temImagem, temAudio, conteudo }) {
   if (temImagem || temAudio) return 'midia';
   if (/\?/.test(texto)) return 'pergunta';
@@ -336,6 +347,11 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   }
 
   const motivo = prioridade({ texto, temImagem, temAudio, conteudo });
+  // Conversa entre eles (marca ou responde outro membro, sem chamar a bot): ela só ouve, salvo foto
+  if (dirigidaAOutro(conteudo) && motivo !== 'midia' && motivo !== 'mencao' && motivo !== 'resposta-a-ela') {
+    await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
+    return;
+  }
   if (emLote && !temImagem && !temAudio) {
     // Mensagem atrasada de texto: entra no histórico; a resposta vai na última mensagem do lote, já sabendo desta
     await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
@@ -370,6 +386,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   const dossie = motivo ? await comTempo(dossieDe(eu), 20_000, 'leitura da pasta no Drive').catch((e) => (console.error('[pessoas]', e.message), '')) : '';
   const conhecimento = motivo ? docsPara(eu, { texto }) : '';
   const momentos = await comTempo(momentosRecentes(12), 8_000, 'momentos').catch(() => []);
+  const registradas = registradasHojeParaPrompt(await comTempo(refeicoesDoDia(dia), 8_000, 'refeições do dia').catch(() => []), perfis, dia);
   const citada = citacaoDe(conteudo, perfis);
   const marcaCitacao = citada ? `(respondendo a ${citada.autor}: "${citada.texto.slice(0, 80)}${citada.texto.length > 80 ? '…' : ''}") ` : '';
   const entradaTexto = `${marcaCitacao}${temImagem ? `📷 [foto]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto}`;
@@ -378,7 +395,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
 
   if (atrasadas >= 6) await avisarErro(jidGrupo, 'lenta'); // só quando foi atraso de verdade, não 2 ou 3 mensagens seguidas
   const citacao = citacaoDe(conteudo, perfis);
-  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao };
+  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas };
   let resposta;
   let atualizacao = null;
   try {

@@ -214,3 +214,17 @@ export function lerTipoRefeicao(texto) {
   const achado = TIPO_POR_PALAVRA.find(([re]) => re.test(m[1]));
   return achado ? achado[1] : null;
 }
+
+// ============================================================
+// Pro prompt: o que o sistema já registrou hoje, por pessoa, em uma linha cada (ela não pode pedir de novo)
+// ============================================================
+export function registradasHojeParaPrompt(refeicoes, perfis, dia) {
+  return perfis
+    .map((p) => {
+      const minhas = refeicoes.filter((r) => r.dia === dia && ((p.jids || []).includes(r.jid) || r.nome === p.nome)).sort((a, b) => a.minutos - b.minutos);
+      if (!minhas.length) return `- ${p.nome}: nada registrado ainda hoje`;
+      const itens = minhas.map((r) => `${(NOME_SLOT[r.slot] || r.slot).replace(/^\S+\s/, '')} ${r.horaLocal || r.hora}${r.estimativa?.kcal ? ` (~${Math.round(r.estimativa.kcal)} kcal)` : ''}`);
+      return `- ${p.nome}: ${itens.join('; ')}`;
+    })
+    .join('\n');
+}
