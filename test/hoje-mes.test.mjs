@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { resumirHoje, compilarMes, registradasHojeParaPrompt } from '../resumo.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
-import { interpretarAbas, resumoSaude, ehPlanilhaSaude } from '../saude.js';
+import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
 
 const perfis = [
   { nome: 'Lucas Leonardo', jids: ['a@s'], peso: 73, objetivo: 'hipertrofia' },
@@ -103,4 +103,10 @@ test('saude: interpreta as 3 abas do Health Data Export e resume', () => {
   assert.match(r, /deita em média 00:13/);
   assert.equal(ehPlanilhaSaude({ name: 'Saude-Galaxy-Watch', mimeType: 'application/vnd.google-apps.spreadsheet' }), true);
   assert.equal(ehPlanilhaSaude({ name: 'Orçamento', mimeType: 'application/vnd.google-apps.spreadsheet' }), false);
+  const ind = indicadoresRelogio(d, { hoje: '2026-09-17' });
+  assert.equal(ind.peso, 75.2);
+  assert.deepEqual(ind.ultimaNoite, { dia: '2026-09-17', min: 327, deitou: '00:13', levantou: '05:50' });
+  assert.equal(ind.passosMedia, 9412);
+  assert.equal(ind.treinos7d, 1); // Body Pump; caminhada não conta
+  assert.match(ind.linha, /^peso 75,2 kg com 19,3% de gordura em 17\/09; última noite \(17\/09\) 5h27 dormindo, deitou 00:13 e levantou 05:50; ~9\.412 passos\/dia e 1 treino/);
 });

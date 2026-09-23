@@ -274,6 +274,51 @@ export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha =
   return linhas.join('\n').trim();
 }
 
+/**
+ * Indicadores curtos pro PERFIL (entram em TODA resposta, até no papo aleatório que não carrega o dossiê):
+ * última noite, média de sono, horário que costuma deitar/levantar, passos/dia, peso e gordura mais recentes.
+ */
+export function indicadoresRelogio({ pesos, sonos, atividades }, { hoje } = {}) {
+  hoje ||= [...pesos, ...sonos, ...atividades].map((x) => x.dia).sort().pop();
+  if (!hoje) return null;
+  const minutosDeHora = (t, madrugada = false) => {
+    const [h, m] = horaDe(t).split(':').map(Number);
+    if (!Number.isFinite(h)) return null;
+    return (madrugada && h < 12 ? h + 24 : h) * 60 + m;
+  };
+  const hhmm = (min) => `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(Math.round(min % 60)).padStart(2, '0')}`;
+  const r = { atualizado: hoje };
+  const partes = [];
+
+  const ultimoPeso = pesos[pesos.length - 1];
+  if (ultimoPeso) {
+    Object.assign(r, { peso: ultimoPeso.peso, gordura: ultimoPeso.gordura, pesoEm: ultimoPeso.dia });
+    partes.push(`peso ${kg(ultimoPeso.peso)}${ultimoPeso.gordura ? ` com ${pct(ultimoPeso.gordura)} de gordura` : ''} em ${dm(ultimoPeso.dia)}`);
+  }
+  const ultimaNoite = sonos[sonos.length - 1];
+  if (ultimaNoite) {
+    Object.assign(r, { ultimaNoite: { dia: ultimaNoite.dia, min: ultimaNoite.total, deitou: horaDe(ultimaNoite.inicio), levantou: horaDe(ultimaNoite.fim) } });
+    partes.push(`última noite (${dm(ultimaNoite.dia)}) ${hm(ultimaNoite.total)} dormindo, deitou ${horaDe(ultimaNoite.inicio)} e levantou ${horaDe(ultimaNoite.fim)}${ultimaNoite.total < 180 ? ' (parcial)' : ''}`);
+  }
+  const noites = sonos.filter((s) => s.dia >= diasAtras(hoje, 13) && s.total >= 180);
+  if (noites.length >= 2) {
+    const mSono = media(noites.map((s) => s.total));
+    const mDeita = media(noites.map((s) => minutosDeHora(s.inicio, true)).filter((x) => x != null));
+    const mLevanta = media(noites.map((s) => minutosDeHora(s.fim)).filter((x) => x != null));
+    Object.assign(r, { sonoMedioMin: Math.round(mSono), deitaMedia: hhmm(mDeita), levantaMedia: hhmm(mLevanta) });
+    partes.push(`média ${hm(mSono)}/noite nas últimas ${noites.length} noites, costuma deitar ~${hhmm(mDeita)} e levantar ~${hhmm(mLevanta)}`);
+  }
+  const dias = atividades.filter((a) => a.dia >= diasAtras(hoje, 6));
+  const mPassos = media(dias.map((a) => a.passos).filter(Boolean));
+  const treinos = dias.reduce((n, a) => n + a.treinos.filter((t) => !/walk|caminh/i.test(t.nome)).length, 0);
+  if (mPassos) {
+    Object.assign(r, { passosMedia: Math.round(mPassos), treinos7d: treinos });
+    partes.push(`~${milhar(mPassos)} passos/dia e ${treinos} treino(s) de musculação/esporte nos últimos 7 dias`);
+  }
+  r.linha = partes.join('; ');
+  return r;
+}
+
 // ============================================================
 // Sincronização (chamada pelo dossiê quando a planilha mudou)
 // ============================================================
@@ -310,6 +355,11 @@ export async function sincronizarSaude(perfil, arq, { pastaId, hoje } = {}) {
       await salvarPerfil({ jids: perfil.jids, peso: ultimo.peso, atualizacoes: { ...(perfil.atualizacoes || {}), peso: ultimo.dia } }).catch((e) => console.error('[saude] perfil:', e.message));
       console.log(`[saude] peso de ${perfil.nome} no perfil: ${perfil.peso} -> ${ultimo.peso} kg (relógio, ${ultimo.dia})`);
     }
+  }
+  // indicadores curtos no perfil: valem em toda resposta, inclusive no papo que não carrega o dossiê
+  if (jid) {
+    const relogio = indicadoresRelogio(dados, { hoje });
+    if (relogio?.linha) await salvarPerfil({ jids: perfil.jids, relogio }).catch((e) => console.error('[saude] indicadores no perfil:', e.message));
   }
   if (pastaId) {
     const md = `---\ntipo: saude\npessoa: ${perfil.nome}\natualizado: ${hoje || new Date().toISOString().slice(0, 10)}\nfonte: "${arq.name}"\ntags: [nutribot, pessoa, saude, galaxy-watch]\n---\n\n# Saúde de ${perfil.nome} (relógio)\n\n${texto}\n`;
