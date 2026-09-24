@@ -30,6 +30,7 @@ import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, nor
 import { avisarAdmin } from './avisos.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { revisarPendentes } from './revisao.js';
+import { garantirIndiceVetorial } from './memoria_semantica.js';
 import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
 
 // ============================================================
@@ -129,6 +130,7 @@ if (KEEPALIVE_URL) {
   try {
     await conectarMongo();
     await garantirIndices();
+    await garantirIndiceVetorial(); // memória de longo prazo por significado (Atlas Vector Search, grátis no M0)
     iniciarDrive();
     await carregarConhecimento().catch((e) => console.error('[conhecimento] falha ao carregar:', e.message));
     // Pré-carrega a pasta de cada pessoa (transcreve PDFs novos agora, não na primeira mensagem do dia)

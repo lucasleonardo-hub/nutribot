@@ -152,7 +152,11 @@ export function paraWhatsApp(texto, { manterColchetes = MANTER_COLCHETES } = {})
 }
 
 /** Tira a linha "ATUALIZAR: {...}" do fim de um texto (nunca pode ir pro grupo nem pro Drive). */
-export const semLinhaAtualizar = (texto) => String(texto || '').replace(/\n?\s*ATUALIZAR:\s*\{[\s\S]*\}\s*$/i, '').trim();
+export const semLinhaAtualizar = (texto) =>
+  String(texto || '')
+    .replace(/\n?\s*HABITO:\s*\{[^\n]*\}\s*/gi, '\n')
+    .replace(/\n?\s*ATUALIZAR:\s*\{[\s\S]*\}\s*$/i, '')
+    .trim();
 
 // ============================================================
 // Menção ao nome da bot

@@ -6,11 +6,14 @@ import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMom
 import * as ia from './gemini.js';
 import { atualizarConhecimento } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
-import { compilarRefeicoes, compilarSemana, compilarMes } from './resumo.js';
+import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
+import { indexarDia } from './memoria_semantica.js';
+import { sintetizar } from './voz.js';
+import { configGrafico, renderizar } from './graficos.js';
 import { agora, semanaISO, diaSeguinte, diasAnteriores, ehDomingo, minutosDe } from './util.js';
 import { estado } from './estado.js';
-import { enviar } from './whatsapp.js';
+import { enviar, enviarImagem, enviarAudio } from './whatsapp.js';
 import { enriquecerPerfis } from './perfis.js';
 import { avisarErro } from './avisos.js';
 
@@ -131,6 +134,13 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       const refeicoesTexto = compilado.texto + (resultados ? `\n\nACOMPANHAMENTO POR PESSOA (7/30 dias e balanço energético, calculados pelo sistema):\n${resultados}` : '');
       const resumo = ia.separarAtualizacao(await ia.resumoDiario({ dia, perfis, historico, persona: estado.persona, refeicoes: refeicoesTexto })).texto || '(sem resumo)';
       await enviar(grupo, `📋 *RESUMO DO DIA ${dia}*\n\n${resumo}`);
+      if (perfis.some((p) => p.voz)) {
+        try {
+          await enviarAudio(grupo, await sintetizar(resumo));
+        } catch (e) {
+          console.warn('[voz] resumo sem áudio:', e.message);
+        }
+      }
       await salvarMarkdown(
         'Resumos',
         `${dia}.md`,
@@ -139,8 +149,10 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       );
 
       // Momentos memoráveis do dia -> memória de longo prazo (Mongo + Perfis/Nutri-Momentos.md, só acrescenta)
+      let momentosDoDia = [];
       try {
         const momentos = await ia.extrairMomentos({ dia, perfis, historico });
+        momentosDoDia = momentos;
         if (momentos.length) {
           await registrarMomentos(momentos);
           const atual = (await lerMarkdown('Perfis', 'Nutri-Momentos.md').catch(() => null)) || frontmatter({ tipo: 'momentos', tags: ['nutribot', 'momentos'] }) + `\n# Momentos memoráveis\n`;
@@ -188,8 +200,10 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       }
 
       // Diário pessoal dela (só acrescenta): Mongo + Perfis/Nutri-Diario.md
+      let entradaDiario = '';
       try {
         const entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona, resultados }))?.trim();
+        entradaDiario = entrada || '';
         if (entrada) {
           await registrarDiarioNutri({ dia, texto: entrada });
           const atual = (await lerMarkdown('Perfis', 'Nutri-Diario.md').catch(() => null)) || frontmatter({ tipo: 'diario-nutri', tags: ['nutribot', 'diario-nutri'] }) + `\n# Diário da ${ia.nomeDaBot()}\n`;
@@ -199,6 +213,9 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       } catch (e) {
         console.error('[diario-nutri] falha:', e.message);
       }
+
+      // Memória de longo prazo por significado (Atlas Vector Search): o que cada um disse, o resumo, os momentos e o diário
+      await indexarDia({ dia, perfis, historico, resumo, momentos: momentosDoDia, diario: entradaDiario, falasDe: ia.falasDe }).catch((e) => console.error('[memoria]', e.message));
 
       // A Nutri revisa quem ela é: apelidos, favoritos, implicâncias, padrões, opiniões e o que afiar amanhã
       try {
@@ -265,6 +282,19 @@ export async function fecharSemana({ dia, perfis, grupo }) {
   console.log(`[semana] tabela:\n${tabela}`);
   const resumo = ia.separarAtualizacao(await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona: estado.persona, tabela })).texto || '(sem resumo)';
   await enviar(grupo, `📆 *RESUMO DA SEMANA ${semana}*\n\n${resumo}`);
+  // Gráfico de 30 dias por pessoa (calorias, gasto do relógio, meta e peso), pra quem já tem registro
+  for (const p of perfis) {
+    try {
+      const desde = diasAnteriores(dia, 30)[0];
+      const [refs, pes] = await Promise.all([refeicoesDesde(p.jids || [], desde).catch(() => []), pesagensDesde(p.jids || [], desde).catch(() => [])]);
+      if (refs.length + pes.length < 5) continue;
+      const alvo = gastoAdaptativo({ refeicoes: refs, pesagens: pes, perfil: p, dia, gastos: p.relogio?.gastos }).alvo;
+      const png = await renderizar(configGrafico({ nome: p.nome, refeicoes: refs, pesagens: pes, gastos: p.relogio?.gastos, alvo, dia }));
+      if (png) await enviarImagem(grupo, png, `📈 *${p.apelido || p.nome.split(' ')[0]}* · últimos 30 dias${alvo ? ` · meta ${alvo.min} a ${alvo.max} kcal/dia` : ''}`);
+    } catch (e) {
+      console.error('[semana] gráfico:', e.message);
+    }
+  }
   await salvarMarkdown(
     'Resumos',
     `Semana-${semana}.md`,

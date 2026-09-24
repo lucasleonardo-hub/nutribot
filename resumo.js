@@ -147,9 +147,12 @@ export function compilarSemana(refeicoes, perfis, dias) {
 // ============================================================
 // !hoje: totais do dia por pessoa a partir dos registros (sem IA)
 // ============================================================
-export function resumirHoje(refeicoes, perfis, dia) {
+export function resumirHoje(refeicoes, perfis, dia, habitos = []) {
   const blocos = [];
   for (const p of perfis) {
+    const h = habitos.find((x) => (p.jids || []).includes(x.jid));
+    const agua = h?.agua_ml ? `\n💧 Água: ${(h.agua_ml / 1000).toFixed(1).replace('.', ',')} L` : '';
+    const alcool = h?.alcool_doses ? `\n🍺 Álcool: ${h.alcool_doses} dose(s)` : '';
     const minhas = refeicoes.filter((r) => r.dia === dia && ((p.jids || []).includes(r.jid) || r.nome === p.nome)).sort((a, b) => a.minutos - b.minutos);
     const primeiro = p.apelido || p.nome.split(' ')[0];
     if (!minhas.length) {
@@ -160,7 +163,7 @@ export function resumirHoje(refeicoes, perfis, dia) {
     const comEst = minhas.filter((r) => r.estimativa?.kcal);
     const tot = comEst.reduce((a, r) => soma(a, r.estimativa), { kcal: 0, p: 0, c: 0, g: 0 });
     const meta = p.peso ? ` · meta de proteína ${Math.round(p.peso * 1.6)} a ${Math.round(p.peso * 2.2)} g` : '';
-    blocos.push(`*${primeiro}* (${minhas.length} ${minhas.length === 1 ? 'refeição' : 'refeições'})\n${linhas.join('\n')}\n📊 ${comEst.length ? formatarEstimativa(tot) : 'sem estimativas'}${meta}`);
+    blocos.push(`*${primeiro}* (${minhas.length} ${minhas.length === 1 ? 'refeição' : 'refeições'})\n${linhas.join('\n')}\n📊 ${comEst.length ? formatarEstimativa(tot) : 'sem estimativas'}${meta}${agua}${alcool}`);
   }
   return blocos.join('\n\n');
 }

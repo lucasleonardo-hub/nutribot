@@ -3,7 +3,7 @@
 
 import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, registrarHabito } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
@@ -13,7 +13,9 @@ import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojePara
 import { visaoDe } from './acompanhamento.js';
 import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
-import { enviar, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
+import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
+import { sintetizar } from './voz.js';
+import { lembrancasPara } from './memoria_semantica.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
@@ -417,13 +419,17 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
 
   // Visão de 7/30 dias + balanço energético da PESSOA ATUAL (código, sem IA); só nas respostas completas
   const visao = motivo ? await comTempo(visaoDe(eu, dia), 8_000, 'acompanhamento').catch(() => '') : '';
+  // Memória de longo prazo por significado: lembranças de dias anteriores parecidas com a mensagem (só na via completa)
+  const citados = perfis.filter((p) => p.nome !== eu.nome && mencionaNome(texto, p.nome)).map((p) => p.nome);
+  const lembrancas = motivo && texto ? await comTempo(lembrancasPara({ consulta: texto, pessoa: eu.nome, outros: citados, excluirDia: dia }), 6_000, 'lembranças').catch(() => '') : '';
   const citacao = citacaoDe(conteudo, perfis);
-  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao };
+  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas };
   let resposta;
   let atualizacao = null;
+  let habito = null;
   try {
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
-    ({ texto: resposta, atualizacao } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
+    ({ texto: resposta, atualizacao, habito } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
   } catch (e) {
     // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -448,6 +454,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     });
     resposta = r2.texto;
     atualizacao = r2.atualizacao || atualizacao;
+    habito = r2.habito || habito;
     origemExterna = ia.ultimaFoiExterna();
     if (fontes.length) {
       ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
@@ -487,6 +494,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     enviado = await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
+    // quem ligou !voz e mandou áudio recebe a resposta também em áudio (texto fica como registro)
+    if (temAudio && eu.voz) sintetizar(resposta).then((ogg) => enviarAudio(jidGrupo, ogg, msg)).catch((e) => console.warn('[voz] resposta sem áudio:', e.message));
+  }
+  // água/álcool ditos agora (linha oculta HABITO da IA) -> somados no dia; aparecem no !hoje
+  if (habito && typeof habito === 'object') {
+    registrarHabito({ jid: jids[0], nome: perfil.nome, dia, agua_ml: Number(habito.agua_ml) || 0, alcool_doses: Number(habito.alcool_doses) || 0 }).catch((e) => console.error('[habitos]', e.message));
   }
 
   const resumoRefeicao = texto || (temImagem ? '[foto]' : temAudio ? '[áudio]' : '');

@@ -2,6 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, metaBalanco, gastoAdaptativo, sequenciaDe, placarSemana } from '../resumo.js';
 import { ancorasDe, blocoAncoras } from '../taco.js';
+import { configGrafico } from '../graficos.js';
+import { textoParaFala } from '../voz.js';
+import { separarAtualizacao } from '../gemini.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
@@ -206,4 +209,38 @@ test('sequenciaDe e placarSemana', () => {
   const placar = placarSemana(refs, perfis, ['2026-09-18', '2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24']);
   assert.match(placar, /🥇 Lucas: 4 de 7 dias registrados por completo · proteína batida em 4 dia\(s\) · sequência atual 4 dia\(s\)/);
   assert.match(placar, /🥈 Alezinha: 0 de 7/);
+});
+
+test('configGrafico: barras de kcal, linha de peso, faixa da meta e gasto do relógio', () => {
+  const cfg = configGrafico({
+    nome: 'Lucas Leonardo',
+    refeicoes: [{ dia: '2026-09-23', estimativa: { kcal: 1500, p: 100 } }, { dia: '2026-09-23', estimativa: { kcal: 800, p: 40 } }, { dia: '2026-09-22', estimativa: { kcal: 2000, p: 120 } }],
+    pesagens: [{ dia: '2026-09-22', peso: 75.7 }, { dia: '2026-09-24', peso: 75.5 }],
+    gastos: { '2026-09-23': 2400 },
+    alvo: { min: 2700, max: 2950 },
+    dia: '2026-09-24',
+    dias: 7,
+  });
+  assert.equal(cfg.data.labels.length, 7);
+  assert.equal(cfg.data.datasets.length, 5); // kcal, gasto, meta mín, meta máx, peso
+  assert.deepEqual(cfg.data.datasets[0].data.slice(-3), [2000, 2300, null]);
+  assert.equal(cfg.data.datasets[4].data[6], 75.5);
+  assert.match(cfg.options.title.text, /Lucas · últimos 7 dias · 2 dias com registro · proteína média 130 g\/dia/);
+  const semPeso = configGrafico({ nome: 'Ale', refeicoes: [{ dia: '2026-09-24', estimativa: { kcal: 300 } }], dia: '2026-09-24', dias: 7 });
+  assert.equal(semPeso.data.datasets.length, 1);
+});
+
+test('textoParaFala: tira markdown, emojis e fala números', () => {
+  const f = textoParaFala('*Almoço* top! 🏐\n🔥 *Estimativa:* ~950 kcal · [[Proteína]] 60 g\n💡 Dica: dormiu 5h03?');
+  assert.equal(f, 'Almoço top!\nEstimativa: ~950 calorias · Proteína 60 gramas\nDica: dormiu 5 horas e 03?');
+});
+
+test('separarAtualizacao: linha HABITO oculta é extraída e some do texto', () => {
+  const r = separarAtualizacao('Boa, hidratação em dia! 💧\nHABITO: {"agua_ml": 500}\nATUALIZAR: {"peso_kg": 75.5}');
+  assert.equal(r.texto, 'Boa, hidratação em dia! 💧');
+  assert.deepEqual(r.habito, { agua_ml: 500 });
+  assert.deepEqual(r.atualizacao, { peso_kg: 75.5 });
+  const s = separarAtualizacao('Tudo certo.\nHABITO: {"alcool_doses": 2}');
+  assert.equal(s.texto, 'Tudo certo.');
+  assert.deepEqual(s.habito, { alcool_doses: 2 });
 });

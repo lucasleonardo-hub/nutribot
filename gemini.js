@@ -94,6 +94,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - TABELA TACO: quando vier o bloco "ÂNCORAS DA TABELA TACO", os itens com porção declarada já estão calculados: copie esses números, some o que a pessoa não declarou (molho, óleo, acompanhamento visível na foto) e diga o total. Não "arredonde" arroz de 200 g para 350 kcal se a âncora diz 257. Sem âncora, estime como sempre, usando os valores por 100 g quando vierem.
 - NÚMEROS DO RELÓGIO E DO ACOMPANHAMENTO: cite como estão (5h03 de sono, 77,0 kg, −380 kcal), sem "pouco mais de" nem "quase". Não repita o mesmo dado do relógio em mensagens seguidas do mesmo dia; ele já foi dito uma vez.
 - SÓ O NOME DA REFEIÇÃO: se a pessoa mandar apenas "lanche da tarde", "era o almoço", "café" logo depois de uma foto ou relato já analisado, é rótulo, não refeição nova: confirme em uma linha, sem bloco e sem estimativa.
+- ÁGUA E ÁLCOOL: se a pessoa disser AGORA que bebeu água ("tomei 500 ml", "já bebi 2 litros hoje") ou álcool ("2 cervejas", "uma taça de vinho"), acrescente no FIM da resposta a linha oculta HABITO: {"agua_ml": 500, "alcool_doses": 2} (só o que foi dito nesta mensagem; 1 dose = 1 lata de cerveja, 1 taça de vinho ou 1 shot). Não escreva essa linha em outra situação.
 - QUEM DISSE O QUÊ: cada linha do histórico começa com o nome de quem falou. Nunca atribua a fala, a refeição ou a foto de uma pessoa a outra, mesmo que duas pessoas comam a mesma coisa no mesmo horário (casal, família): trate cada registro como de quem mandou. A "MENSAGEM ATUAL DE X" é de X.
 - DATA: o contexto traz a data com o DIA DA SEMANA já calculado (ex: "domingo, 20/09/2026"). Use exatamente esse dia da semana; nunca deduza a partir do número da data.
 - HORÁRIO E FUSO: o contexto traz a hora atual NO FUSO DA PESSOA, a refeição esperada nesse horário e os horários que você já aprendeu dela. Use com humor leve (café às 11h: "acordou agora?"). Se a pessoa ainda não disse onde mora, a hora pode estar errada: não implique com horário antes de saber o fuso.
@@ -497,7 +498,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // Ordem pensada pro cache implícito do Gemini: o que não muda entre mensagens vem primeiro (conhecimento, perfis, dossiê),
   // o que muda a cada mensagem (hora, histórico, mensagem atual) vem por último.
@@ -506,6 +507,7 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
     `PERFIS DO GRUPO:\n${blocoPerfis(perfis)}\n\n` +
     blocoDossie(perfil.nome, dossie) +
     blocoMomentos(momentos) +
+    (lembrancas ? `LEMBRANÇAS DE DIAS ANTERIORES (memória de longo prazo, achadas por parecerem com a mensagem atual; use se ajudar, como quem lembra de uma conversa, sem citar como "registro"):\n${lembrancas}\n\n` : '') +
     `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico, 50)}\n\n` +
     (registradas ? `REFEIÇÕES JÁ REGISTRADAS HOJE PELO SISTEMA (isto é o que conta; NÃO peça de novo nada que esteja aqui, e não trate como "sumiço" quem já registrou):\n${registradas}\n\n` : '') +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
@@ -531,6 +533,17 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
 export function separarAtualizacao(resposta) {
   let texto = String(resposta || '').trim();
   let atualizacao = null;
+  let habito = null;
+  // linha oculta HABITO: {"agua_ml": 500, "alcool_doses": 2} (pode vir antes da ATUALIZAR)
+  const h = texto.match(/\n?\s*HABITO:\s*(\{[^\n]*\})\s*/i);
+  if (h) {
+    try {
+      habito = JSON.parse(h[1]);
+    } catch {
+      habito = null;
+    }
+    texto = `${texto.slice(0, h.index)}\n${texto.slice(h.index + h[0].length)}`.trim();
+  }
   const m = texto.match(/\n?\s*ATUALIZAR:\s*(\{[\s\S]*\})\s*$/i);
   if (m) {
     try {
@@ -541,7 +554,7 @@ export function separarAtualizacao(resposta) {
     texto = texto.slice(0, m.index).trim();
   }
   if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
-  return { texto, atualizacao };
+  return { texto, atualizacao, habito };
 }
 
 // ============================================================
@@ -1021,5 +1034,44 @@ export async function reagirAoNome({ nome, quem, persona }) {
   return gerar({
     contents: `${quem} acabou de te batizar de "${nome}". Reaja no seu personagem em até 50 palavras: aceite (ou finja reclamar e aceite), já assine com o nome novo, e lembre quem ainda não se cadastrou de mandar nome, peso, altura e objetivo. Emojis.`,
     config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200, leve: true },
+  });
+}
+
+
+// ============================================================
+// Embeddings (memória semântica): gemini-embedding-001, 768 dimensões, grátis. Tenta cada chave; null se todas falharem.
+// ============================================================
+export async function embutir(texto, taskType = 'RETRIEVAL_DOCUMENT') {
+  const t = String(texto || '').trim();
+  if (!t) return null;
+  let erro;
+  for (let ci = 0; ci < CHAVES.length; ci++) {
+    try {
+      const r = await cliente(ci).models.embedContent({ model: process.env.GEMINI_EMBEDDING || 'gemini-embedding-001', contents: t, config: { outputDimensionality: 768, taskType } });
+      const v = r.embeddings?.[0]?.values;
+      if (v?.length) return v;
+    } catch (e) {
+      erro = e;
+    }
+  }
+  if (erro) console.warn('[embedding] falhou em todas as chaves:', String(erro.message).slice(0, 120));
+  return null;
+}
+
+/** Plano da semana + lista de compras, a partir do que a pessoa já come, do objetivo e da meta calculada. Uma chamada Flash. */
+export async function planoSemanal({ perfil, visao, conhecimento, persona, dia }) {
+  return gerar({
+    contents:
+      blocoConhecimento(conhecimento) +
+      `PESSOA: ${perfil.nome} · ${perfil.peso || '?'} kg · ${perfil.altura || '?'} cm · objetivo: ${perfil.objetivo || '?'} · dieta: ${perfil.dieta || 'onívora'}${perfil.restricoes ? ` · restrições: ${perfil.restricoes}` : ''}${perfil.cidade ? ` · mora em ${perfil.cidade}` : ''}\n` +
+      (perfil.rotina ? `ROTINA OBSERVADA (o que ela(e) já come e em que horários; o plano parte DAQUI, não de uma dieta de revista):\n${perfil.rotina}\n\n` : '') +
+      (perfil.notas ? `SUAS NOTAS SOBRE A PESSOA (preferências, aversões, treino):\n${String(perfil.notas).slice(0, 1500)}\n\n` : '') +
+      (visao ? `NÚMEROS ATUAIS (calculados pelo sistema; a meta calórica e de proteína vêm daqui):\n${visao}\n\n` : '') +
+      `Hoje é ${dataExtenso(dia)}. Monte o *PLANO DA SEMANA* de ${perfil.nome.split(' ')[0]}, no seu personagem, formato WhatsApp (negrito com UM asterisco, sem cabeçalho #, sem tabela), até 450 palavras:\n` +
+      `1) Uma linha com a meta diária (calorias e proteína) que o plano persegue.\n` +
+      `2) Sete dias (Seg a Dom), cada um em 1 a 2 linhas: café, almoço, lanche e jantar em poucas palavras, com porções (g, unidades, colheres), variando pouco o que a pessoa já come e corrigindo o que falta pro objetivo. Respeite a dieta e as aversões. Treino e fim de semana contam.\n` +
+      `3) *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas.\n` +
+      `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.`,
+    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 3000, temperature: 0.7 },
   });
 }

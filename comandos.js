@@ -1,23 +1,26 @@
 // comandos.js - Comandos do grupo (!id, !nome, !perfil, !dossie, !fontes, !estudar, !persona, !status, !reset, !resumo, !ajuda).
 
-import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao } from './mongo.js';
+import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao, refeicoesDesde, pesagensDesde, habitosDoDia } from './mongo.js';
+import { configGrafico, renderizar } from './graficos.js';
+import { salvarEmPasta } from './drive.js';
+import { pastaDe } from './pessoas.js';
 import * as ia from './gemini.js';
-import { listarDocs } from './conhecimento.js';
+import { listarDocs, docsPara } from './conhecimento.js';
 import { notasDe, listarDocumentosDe } from './pessoas.js';
 import { reservasDisponiveis } from './reservas.js';
-import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS } from './util.js';
-import { resumirHoje, formatarEstimativa, lerTipoRefeicao } from './resumo.js';
+import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS, diasAnteriores } from './util.js';
+import { resumirHoje, formatarEstimativa, lerTipoRefeicao, gastoAdaptativo } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
 import { lembrar } from './dia.js';
 import { estado } from './estado.js';
-import { enviar } from './whatsapp.js';
+import { enviar, enviarImagem } from './whatsapp.js';
 import { fecharDia, estudar } from './dia.js';
 import { enriquecerPerfis } from './perfis.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !hoje (seus totais do dia; !hoje todos = grupo inteiro), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !plano (plano da semana + lista de compras, salvo na sua pasta do Drive), !voz (liga/desliga minha resposta em áudio quando você manda áudio), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -120,9 +123,10 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       return true;
     }
     const refeicoes = await refeicoesDoDia(dia).catch(() => []);
-    // só pra uma pessoa: junta a visão de 7/30 dias e o balanço energético (quem tem relógio), em linguagem de WhatsApp
-    const visao = todos ? '' : (await visaoDe(alvo[0], dia)).replace(/^(ÚLTIMOS \d+ DIAS|BALANÇO ENERGÉTICO)([^:]*):/gm, '*$1$2:*');
-    await enviar(jidGrupo, `📊 *${todos ? 'Hoje, todo mundo' : 'Seu dia'} (${dia})*\n\n${resumirHoje(refeicoes, alvo, dia)}${visao ? `\n\n${visao}` : ''}${todos ? '' : '\n\n_(!hoje todos mostra o grupo inteiro)_'}`, msg, { rapido: true });
+    const habitos = await habitosDoDia(dia).catch(() => []);
+    // só pra uma pessoa: junta a visão de 7/30 dias, meta e balanço energético (quem tem relógio), em linguagem de WhatsApp
+    const visao = todos ? '' : (await visaoDe(alvo[0], dia)).replace(/^(ÚLTIMOS \d+ DIAS|BALANÇO ENERGÉTICO|META ADAPTATIVA|META \(provisória, pelo relógio\)|SEQUÊNCIA)([^:]*):/gm, '*$1$2:*');
+    await enviar(jidGrupo, `📊 *${todos ? 'Hoje, todo mundo' : 'Seu dia'} (${dia})*\n\n${resumirHoje(refeicoes, alvo, dia, habitos)}${visao ? `\n\n${visao}` : ''}${todos ? '' : '\n\n_(!hoje todos mostra o grupo inteiro · !grafico mostra em imagem)_'}`, msg, { rapido: true });
     return true;
   }
   if (cmd === '!refeicao' || cmd === '!refeição') {
@@ -198,6 +202,66 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     await enviar(jidGrupo, `Anotado: você agora é *${valor}*. Vou respeitar (na maioria das vezes 😏).`, msg);
     return true;
   }
+  if (cmd === '!grafico' || cmd === '!gráfico') {
+    const todos = /\btodos?\b|\bgeral\b/i.test(texto.slice(cmd.length));
+    const perfis = await listarPerfis();
+    const alvo = todos ? perfis : perfis.filter((p) => p.jids?.some((j) => jids.includes(j)));
+    if (!alvo.length) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    const desde = diasAnteriores(dia, 30)[0];
+    for (const p of alvo) {
+      const [refs, pes] = await Promise.all([refeicoesDesde(p.jids || [], desde).catch(() => []), pesagensDesde(p.jids || [], desde).catch(() => [])]);
+      if (refs.length + pes.length < 3) {
+        await enviar(jidGrupo, `${p.apelido || p.nome.split(' ')[0]}: ainda tem pouco registro pra virar gráfico. Manda as refeições que eu desenho. 📈`, msg, { rapido: true });
+        continue;
+      }
+      const alvoKcal = gastoAdaptativo({ refeicoes: refs, pesagens: pes, perfil: p, dia, gastos: p.relogio?.gastos }).alvo;
+      const png = await renderizar(configGrafico({ nome: p.nome, refeicoes: refs, pesagens: pes, gastos: p.relogio?.gastos, alvo: alvoKcal, dia }));
+      if (png) await enviarImagem(jidGrupo, png, `📈 *${p.apelido || p.nome.split(' ')[0]}* · últimos 30 dias${alvoKcal ? ` · meta ${alvoKcal.min} a ${alvoKcal.max} kcal/dia` : ''}`, msg);
+      else await enviar(jidGrupo, 'O desenhista do gráfico não respondeu agora 🫠 Tenta de novo daqui a pouco.', msg, { rapido: true });
+    }
+    return true;
+  }
+
+  if (cmd === '!plano') {
+    const perfis = await listarPerfis();
+    const perfil = perfis.find((p) => p.jids?.some((j) => jids.includes(j)));
+    if (!perfil) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    await enviar(jidGrupo, 'Montando teu plano da semana com o que você já come e a tua meta. Um minutinho. 📝', msg, { rapido: true });
+    try {
+      const visao = await visaoDe(perfil, dia);
+      const plano = ia.separarAtualizacao(await ia.planoSemanal({ perfil, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia })).texto;
+      if (!plano) throw new Error('plano vazio');
+      await enviar(jidGrupo, plano, msg, { rapido: true });
+      await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(plano da semana de ${perfil.nome} enviado)`, tipo: 'bot' });
+      const pastaId = await pastaDe(perfil);
+      await salvarEmPasta(pastaId, 'Nutri-Plano.md', `---\ntipo: plano-semanal\npessoa: ${perfil.nome}\ngerado: ${dia}\ntags: [nutribot, pessoa, plano]\n---\n\n# Plano da semana de ${perfil.nome} (${dia})\n\n${plano}\n`).catch((e) => console.error('[plano] Drive:', e.message));
+    } catch (e) {
+      console.error('[plano]', e.message);
+      await enviar(jidGrupo, 'Não consegui fechar o plano agora (a IA engasgou). Tenta de novo em alguns minutos. 🫠', msg, { rapido: true });
+    }
+    return true;
+  }
+
+  if (cmd === '!voz') {
+    const perfis = await listarPerfis();
+    const perfil = perfis.find((p) => p.jids?.some((j) => jids.includes(j)));
+    if (!perfil) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    const arg = texto.slice(cmd.length).trim().toLowerCase();
+    const ligar = /^(on|liga|ligar|sim|1)$/.test(arg) ? true : /^(off|desliga|desligar|n[ãa]o|0)$/.test(arg) ? false : !perfil.voz;
+    await salvarPerfil({ jids: perfil.jids, voz: ligar });
+    await enviar(jidGrupo, ligar ? 'Voz ligada 🎙️ Quando você me mandar áudio, eu respondo em áudio também (e o resumo do dia sai falado).' : 'Voz desligada. Volto a responder só em texto. 🤐', msg, { rapido: true });
+    return true;
+  }
+
   if (cmd === '!ajuda') {
     await enviar(jidGrupo, AJUDA, msg);
     return true;

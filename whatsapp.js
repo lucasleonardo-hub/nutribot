@@ -60,6 +60,26 @@ export async function enviar(jid, texto, quoted, { rapido = false } = {}) {
   return r; // a mensagem enviada (key + message), pra quem quiser citá-la depois
 }
 
+/** Manda uma imagem (Buffer PNG/JPEG) com legenda opcional. */
+export async function enviarImagem(jid, buffer, legenda, quoted) {
+  const sock = estado.sock;
+  if (!sock) throw new Error('WhatsApp ainda não conectado');
+  const r = await sock.sendMessage(jid, { image: buffer, caption: legenda ? paraWhatsApp(legenda) : undefined }, quoted ? { quoted } : undefined);
+  if (r?.key?.id) enviadosPeloBot.add(r.key.id);
+  return r;
+}
+
+/** Manda uma nota de voz (Buffer ogg/opus). */
+export async function enviarAudio(jid, buffer, quoted) {
+  const sock = estado.sock;
+  if (!sock) throw new Error('WhatsApp ainda não conectado');
+  await sock.sendPresenceUpdate('recording', jid).catch(() => {});
+  const r = await sock.sendMessage(jid, { audio: buffer, mimetype: 'audio/ogg; codecs=opus', ptt: true }, quoted ? { quoted } : undefined);
+  await sock.sendPresenceUpdate('paused', jid).catch(() => {});
+  if (r?.key?.id) enviadosPeloBot.add(r.key.id);
+  return r;
+}
+
 /** Baixa a mídia (foto/áudio) de uma mensagem como Buffer. */
 export function baixarMidia(msg) {
   return downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: estado.sock.updateMediaMessage });

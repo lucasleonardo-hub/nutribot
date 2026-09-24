@@ -279,6 +279,20 @@ export async function apagarRevisaoPendente(id) {
   await colecao('revisoes_pendentes').deleteOne({ _id: id });
 }
 
+// ---------- Hábitos do dia (água em ml, álcool em doses), somados por pessoa e dia ----------
+
+export async function registrarHabito({ jid, nome, dia, agua_ml = 0, alcool_doses = 0 }) {
+  const inc = {};
+  if (agua_ml > 0) inc.agua_ml = Math.min(agua_ml, 5000);
+  if (alcool_doses > 0) inc.alcool_doses = Math.min(alcool_doses, 20);
+  if (!Object.keys(inc).length) return;
+  await colecao('habitos').updateOne({ jid, dia }, { $inc: inc, $set: { nome, atualizadoEm: new Date() }, $setOnInsert: { criadoEm: new Date() } }, { upsert: true });
+}
+
+export async function habitosDoDia(dia) {
+  return colecao('habitos').find({ dia }).toArray();
+}
+
 // ---------- Configuração do bot (nome escolhido pelo grupo, apresentações feitas) ----------
 
 export async function lerConfig() {
