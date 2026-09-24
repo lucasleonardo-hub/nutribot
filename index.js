@@ -26,7 +26,7 @@ import { reservasDisponiveis } from './reservas.js';
 import { TZ, agora } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin } from './whatsapp.js';
-import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes } from './dia.js';
+import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes, falaProgramada } from './dia.js';
 import { avisarAdmin } from './avisos.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { revisarPendentes } from './revisao.js';
@@ -191,6 +191,9 @@ if (KEEPALIVE_URL) {
 
     // Domingo 09:00: pesagem semanal (sem IA), a tempo do resumo da semana. Dia 1 às 08:00: relatório do mês anterior.
     cron.schedule('0 9 * * 0', () => naFila('pesagem', pedirPesagem), { timezone: TZ });
+    // Notas de voz dela: segunda 08:00 abre a semana, sexta 18:00 fecha (desligáveis com !voz off)
+    cron.schedule('0 8 * * 1', () => naFila('voz-segunda', () => falaProgramada('segunda')), { timezone: TZ });
+    cron.schedule('0 18 * * 5', () => naFila('voz-sexta', () => falaProgramada('sexta')), { timezone: TZ });
     cron.schedule('0 8 1 * *', () => naFila('mes', fecharMes), { timezone: TZ });
     console.log('[cron] pesagem todo domingo 09:00; relatório mensal dia 1 às 08:00');
 

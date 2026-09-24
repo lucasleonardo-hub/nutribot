@@ -1,6 +1,6 @@
 // comandos.js - Comandos do grupo (!id, !nome, !perfil, !dossie, !fontes, !estudar, !persona, !status, !reset, !resumo, !ajuda).
 
-import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao, refeicoesDesde, pesagensDesde, habitosDoDia } from './mongo.js';
+import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao, refeicoesDesde, pesagensDesde, habitosDoDia, salvarConfig } from './mongo.js';
 import { configGrafico, renderizar } from './graficos.js';
 import { salvarEmPasta } from './drive.js';
 import { pastaDe } from './pessoas.js';
@@ -20,7 +20,7 @@ import { enriquecerPerfis } from './perfis.js';
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !plano (plano da semana + lista de compras, salvo na sua pasta do Drive), !voz (liga/desliga minha resposta em áudio quando você manda áudio), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !plano (plano da semana + lista de compras, salvo na sua pasta do Drive), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -249,16 +249,12 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
   }
 
   if (cmd === '!voz') {
-    const perfis = await listarPerfis();
-    const perfil = perfis.find((p) => p.jids?.some((j) => jids.includes(j)));
-    if (!perfil) {
-      await enviar(jidGrupo, SEM_CADASTRO, msg);
-      return true;
-    }
+    // chave do grupo: liga/desliga as notas de voz que ELA decide mandar (segunda, sexta e as espontâneas). Pedido explícito sempre funciona.
     const arg = texto.slice(cmd.length).trim().toLowerCase();
-    const ligar = /^(on|liga|ligar|sim|1)$/.test(arg) ? true : /^(off|desliga|desligar|n[ãa]o|0)$/.test(arg) ? false : !perfil.voz;
-    await salvarPerfil({ jids: perfil.jids, voz: ligar });
-    await enviar(jidGrupo, ligar ? 'Voz ligada 🎙️ Quando você me mandar áudio, eu respondo em áudio também (e o resumo do dia sai falado).' : 'Voz desligada. Volto a responder só em texto. 🤐', msg, { rapido: true });
+    const atual = estado.config.vozLigada !== false;
+    const ligar = /^(on|liga|ligar|sim|1)$/.test(arg) ? true : /^(off|desliga|desligar|n[ãa]o|0)$/.test(arg) ? false : !atual;
+    estado.config = await salvarConfig({ vozLigada: ligar });
+    await enviar(jidGrupo, ligar ? 'Voz ligada 🎙️ Vou mandar nota de voz na segunda de manhã, na sexta à tarde e, de vez em quando, quando o momento merecer (no máximo 2 por semana). Se pedirem "em áudio", eu falo na hora.' : 'Voz programada desligada 🤐 Só falo em áudio quando alguém pedir ("manda em áudio").', msg, { rapido: true });
     return true;
   }
 

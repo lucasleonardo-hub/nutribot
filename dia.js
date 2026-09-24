@@ -6,7 +6,7 @@ import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMom
 import * as ia from './gemini.js';
 import { atualizarConhecimento } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
-import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo } from './resumo.js';
+import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo, placarSemana } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
@@ -134,13 +134,6 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       const refeicoesTexto = compilado.texto + (resultados ? `\n\nACOMPANHAMENTO POR PESSOA (7/30 dias e balanço energético, calculados pelo sistema):\n${resultados}` : '');
       const resumo = ia.separarAtualizacao(await ia.resumoDiario({ dia, perfis, historico, persona: estado.persona, refeicoes: refeicoesTexto })).texto || '(sem resumo)';
       await enviar(grupo, `📋 *RESUMO DO DIA ${dia}*\n\n${resumo}`);
-      if (perfis.some((p) => p.voz)) {
-        try {
-          await enviarAudio(grupo, await sintetizar(resumo));
-        } catch (e) {
-          console.warn('[voz] resumo sem áudio:', e.message);
-        }
-      }
       await salvarMarkdown(
         'Resumos',
         `${dia}.md`,
@@ -301,6 +294,39 @@ export async function fecharSemana({ dia, perfis, grupo }) {
     frontmatter({ tipo: 'resumo-semanal', semana, tags: ['nutribot', 'resumo', 'semanal'] }) +
       `\n# Semana ${semana}\n\n${resumo}\n\n---\nDias: ${resumosDiarios.map((r) => `[[Resumos/${r.dia}|${r.dia}]]`).join(' · ')}\n`
   );
+}
+
+// ============================================================
+// Notas de voz programadas: segunda de manhã (abrir a semana) e sexta à tarde (fechar a semana), no personagem.
+// Se a síntese falhar, vai em texto. Desligáveis com !voz off.
+// ============================================================
+export async function falaProgramada(tipo) {
+  const grupo = estado.memoria.grupo;
+  if (!grupo || estado.statusConexao !== 'conectado' || estado.config.vozLigada === false) return;
+  const dia = agora().dia;
+  const perfis = await enriquecerPerfis(await listarPerfis().catch(() => []), dia);
+  if (!perfis.length) return;
+  const dias = diasAnteriores(dia, 7);
+  const registros = await refeicoesDesde(perfis.flatMap((p) => p.jids || []), dias[0]).catch(() => []);
+  // comidas que apareceram na semana, por pessoa (descrições distintas, curtas), pra ela citar pratos de verdade
+  const comidas = perfis
+    .map((p) => {
+      const minhas = registros.filter((r) => (p.jids || []).includes(r.jid));
+      const vistas = [...new Set(minhas.map((r) => String(r.descricao || r.resumo || '').split(/[,;(]/)[0].trim().toLowerCase()).filter((t) => t && t.length > 3 && !t.startsWith('[')))].slice(0, 10);
+      return `${p.nome.split(' ')[0]}: ${vistas.join(', ') || 'nada registrado'}`;
+    })
+    .join('\n');
+  const dados = `${compilarSemana(registros, perfis, dias)}\n\nCOMIDAS QUE APARECERAM:\n${comidas}\n\nPLACAR:\n${placarSemana(registros, perfis, dias)}`;
+  const texto = ia.separarAtualizacao(await ia.falaProgramada({ tipo, perfis, dados, persona: estado.persona, dia })).texto;
+  if (!texto) return;
+  try {
+    await enviarAudio(grupo, await sintetizar(texto));
+    console.log(`[voz] nota de voz de ${tipo} enviada (${texto.length} chars)`);
+  } catch (e) {
+    console.warn(`[voz] ${tipo} sem áudio, indo em texto:`, e.message);
+    await enviar(grupo, texto);
+  }
+  await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(nota de voz) ${texto}`, tipo: 'bot' });
 }
 
 // ============================================================

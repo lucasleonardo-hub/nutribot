@@ -5,6 +5,7 @@ import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
 import { textoParaFala } from '../voz.js';
 import { separarAtualizacao } from '../gemini.js';
+import { pedidoDeAudio, semLinhaAtualizar } from '../util.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
@@ -243,4 +244,17 @@ test('separarAtualizacao: linha HABITO oculta é extraída e some do texto', () 
   const s = separarAtualizacao('Tudo certo.\nHABITO: {"alcool_doses": 2}');
   assert.equal(s.texto, 'Tudo certo.');
   assert.deepEqual(s.habito, { alcool_doses: 2 });
+});
+
+test('voz: pedido explícito de áudio e linha AUDIO oculta', () => {
+  assert.equal(pedidoDeAudio('me dá o resumo de hoje em áudio'), true);
+  assert.equal(pedidoDeAudio('manda um audio explicando'), true);
+  assert.equal(pedidoDeAudio('responde falando pra mim'), true);
+  assert.equal(pedidoDeAudio('comi arroz e feijão'), false);
+  assert.equal(pedidoDeAudio('ouvi um áudio do heitor'), false);
+  const r = separarAtualizacao('Hoje você mandou bem demais.\nAUDIO: sim');
+  assert.equal(r.texto, 'Hoje você mandou bem demais.');
+  assert.equal(r.audio, true);
+  assert.equal(separarAtualizacao('Só texto mesmo.').audio, false);
+  assert.equal(semLinhaAtualizar('Bora.\nAUDIO: sim\nHABITO: {"agua_ml": 300}'), 'Bora.');
 });

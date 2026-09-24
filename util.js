@@ -152,8 +152,12 @@ export function paraWhatsApp(texto, { manterColchetes = MANTER_COLCHETES } = {})
 }
 
 /** Tira a linha "ATUALIZAR: {...}" do fim de um texto (nunca pode ir pro grupo nem pro Drive). */
+/** A pessoa pediu resposta em áudio? ("manda em áudio", "me dá o resumo de hoje em áudio", "responde falando") */
+export const pedidoDeAudio = (t) => /\b(em|por|no|via|de)\s+[áa]udio\b|\bmanda\s+(um\s+)?[áa]udio\b|\b(responde|fala|conta|explica)\s+(falando|em voz|por voz)\b|\bnota de voz\b|\bem voz\b/i.test(String(t || ''));
+
 export const semLinhaAtualizar = (texto) =>
   String(texto || '')
+    .replace(/\n?\s*AUDIO:\s*(sim|n[ãa]o|true|false)\s*/gi, '\n')
     .replace(/\n?\s*HABITO:\s*\{[^\n]*\}\s*/gi, '\n')
     .replace(/\n?\s*ATUALIZAR:\s*\{[\s\S]*\}\s*$/i, '')
     .trim();

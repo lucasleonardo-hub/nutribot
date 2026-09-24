@@ -11,7 +11,7 @@ import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
 import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
-import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao } from './util.js';
+import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pedidoDeAudio } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
 import { sintetizar } from './voz.js';
@@ -26,6 +26,20 @@ const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood a
 const PAPO_INTERVALO_MIN = Number(process.env.PAPO_INTERVALO_MIN) || 10; // papo aleatório: ela entra no máximo 1x a cada N min
 
 const gruposIgnoradosLogados = new Set();
+
+// Áudio espontâneo (ela achou que o momento merecia): no máximo 1 por dia e 2 por semana, e só com a voz ligada (!voz)
+function podeAudioEspontaneo() {
+  if (estado.config.vozLigada === false) return false;
+  const lista = (estado.config.audiosEspontaneos || []).filter((iso) => Date.now() - new Date(iso).getTime() < 7 * 86400_000);
+  const hoje = agora().dia;
+  if (lista.some((iso) => agora(undefined, new Date(iso)).dia === hoje)) return false;
+  return lista.length < 2;
+}
+async function marcarAudioEspontaneo() {
+  const lista = (estado.config.audiosEspontaneos || []).filter((iso) => Date.now() - new Date(iso).getTime() < 7 * 86400_000);
+  lista.push(new Date().toISOString());
+  estado.config = await salvarConfig({ audiosEspontaneos: lista }).catch(() => estado.config);
+}
 
 // ============================================================
 // Entrada: o que o whatsapp.js chama
@@ -427,9 +441,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   let resposta;
   let atualizacao = null;
   let habito = null;
+  let querAudio = false;
   try {
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
-    ({ texto: resposta, atualizacao, habito } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
+    ({ texto: resposta, atualizacao, habito, audio: querAudio } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
   } catch (e) {
     // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -455,6 +470,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     resposta = r2.texto;
     atualizacao = r2.atualizacao || atualizacao;
     habito = r2.habito || habito;
+    querAudio = r2.audio || querAudio;
     origemExterna = ia.ultimaFoiExterna();
     if (fontes.length) {
       ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
@@ -494,8 +510,16 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     enviado = await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
-    // quem ligou !voz e mandou áudio recebe a resposta também em áudio (texto fica como registro)
-    if (temAudio && eu.voz) sintetizar(resposta).then((ogg) => enviarAudio(jidGrupo, ogg, msg)).catch((e) => console.warn('[voz] resposta sem áudio:', e.message));
+    // Nota de voz: sempre quando a pessoa pediu; fora de pedido só quando ela marcou AUDIO: sim, com teto (1 por dia, 2 por semana)
+    const pediu = pedidoDeAudio(texto);
+    if ((pediu || querAudio) && (pediu || podeAudioEspontaneo())) {
+      sintetizar(resposta)
+        .then(async (ogg) => {
+          await enviarAudio(jidGrupo, ogg, msg);
+          if (!pediu) await marcarAudioEspontaneo();
+        })
+        .catch((e) => console.warn('[voz] resposta sem áudio:', e.message));
+    }
   }
   // água/álcool ditos agora (linha oculta HABITO da IA) -> somados no dia; aparecem no !hoje
   if (habito && typeof habito === 'object') {

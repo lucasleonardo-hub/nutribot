@@ -94,6 +94,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - TABELA TACO: quando vier o bloco "ÂNCORAS DA TABELA TACO", os itens com porção declarada já estão calculados: copie esses números, some o que a pessoa não declarou (molho, óleo, acompanhamento visível na foto) e diga o total. Não "arredonde" arroz de 200 g para 350 kcal se a âncora diz 257. Sem âncora, estime como sempre, usando os valores por 100 g quando vierem.
 - NÚMEROS DO RELÓGIO E DO ACOMPANHAMENTO: cite como estão (5h03 de sono, 77,0 kg, −380 kcal), sem "pouco mais de" nem "quase". Não repita o mesmo dado do relógio em mensagens seguidas do mesmo dia; ele já foi dito uma vez.
 - SÓ O NOME DA REFEIÇÃO: se a pessoa mandar apenas "lanche da tarde", "era o almoço", "café" logo depois de uma foto ou relato já analisado, é rótulo, não refeição nova: confirme em uma linha, sem bloco e sem estimativa.
+- NOTA DE VOZ: você pode mandar a resposta também em áudio, acrescentando no FIM a linha oculta AUDIO: sim. Faça isso SEMPRE que a pessoa pedir áudio ("manda em áudio", "me dá o resumo de hoje em áudio", "responde falando"). Fora de pedido, só raramente, quando o momento for seu de verdade (comemoração de meta, puxão de orelha carinhoso, desabafo, sexta-feira à noite): no máximo umas 2 vezes por semana, nunca em análise de prato, nunca em dois dias seguidos (o sistema corta o excesso). Quando marcar AUDIO: sim, escreva a resposta pra ser FALADA: frases curtas, sem bloco de refeição, sem emoji, sem lista, até 90 palavras.
 - ÁGUA E ÁLCOOL: se a pessoa disser AGORA que bebeu água ("tomei 500 ml", "já bebi 2 litros hoje") ou álcool ("2 cervejas", "uma taça de vinho"), acrescente no FIM da resposta a linha oculta HABITO: {"agua_ml": 500, "alcool_doses": 2} (só o que foi dito nesta mensagem; 1 dose = 1 lata de cerveja, 1 taça de vinho ou 1 shot). Não escreva essa linha em outra situação.
 - QUEM DISSE O QUÊ: cada linha do histórico começa com o nome de quem falou. Nunca atribua a fala, a refeição ou a foto de uma pessoa a outra, mesmo que duas pessoas comam a mesma coisa no mesmo horário (casal, família): trate cada registro como de quem mandou. A "MENSAGEM ATUAL DE X" é de X.
 - DATA: o contexto traz a data com o DIA DA SEMANA já calculado (ex: "domingo, 20/09/2026"). Use exatamente esse dia da semana; nunca deduza a partir do número da data.
@@ -534,6 +535,13 @@ export function separarAtualizacao(resposta) {
   let texto = String(resposta || '').trim();
   let atualizacao = null;
   let habito = null;
+  let audio = false;
+  // linha oculta AUDIO: sim -> a resposta sai também como nota de voz (pedido da pessoa ou momento que ela julgou merecer)
+  const au = texto.match(/\n?\s*AUDIO:\s*(sim|n[ãa]o|true|false)\s*/i);
+  if (au) {
+    audio = /sim|true/i.test(au[1]);
+    texto = `${texto.slice(0, au.index)}\n${texto.slice(au.index + au[0].length)}`.trim();
+  }
   // linha oculta HABITO: {"agua_ml": 500, "alcool_doses": 2} (pode vir antes da ATUALIZAR)
   const h = texto.match(/\n?\s*HABITO:\s*(\{[^\n]*\})\s*/i);
   if (h) {
@@ -554,7 +562,7 @@ export function separarAtualizacao(resposta) {
     texto = texto.slice(0, m.index).trim();
   }
   if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
-  return { texto, atualizacao, habito };
+  return { texto, atualizacao, habito, audio };
 }
 
 // ============================================================
@@ -1073,5 +1081,24 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia }
       `3) *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas.\n` +
       `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.`,
     config: { systemInstruction: montarSystem(persona), maxOutputTokens: 3000, temperature: 0.7 },
+  });
+}
+
+
+/**
+ * Fala programada da Nutri (segunda de manhã / sexta à tarde), pra virar nota de voz: texto curto, falado, no personagem.
+ * dados = números da semana compilados em código (compilarSemana/placar); nunca inventa.
+ */
+export async function falaProgramada({ tipo, perfis, dados, persona, dia }) {
+  const roteiro =
+    tipo === 'segunda'
+      ? `É segunda-feira de manhã. Abra a semana do grupo: dê bom dia, retome em uma frase como foi a semana passada (números abaixo, sem listar tudo), diga o que você espera de cada um nesta semana (uma coisa concreta por pessoa, ligada ao objetivo dela) e feche com um empurrão no seu estilo.`
+      : `É sexta-feira no fim da tarde. Feche a semana do grupo: comente como foi (números e as comidas que apareceram abaixo, com humor e opinião, citando 2 ou 3 pratos marcantes), diga quem mandou bem e quem deve, e solte o aviso de fim de semana (sem proibir, mas cobrando bom senso).`;
+  return gerar({
+    contents:
+      `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
+      `NÚMEROS E COMIDAS DA SEMANA (calculados pelo sistema; use só o que está aqui):\n${dados || '(sem registros na semana)'}\n\n` +
+      `${roteiro}\n\nEsse texto vai virar NOTA DE VOZ: escreva pra ser falado, em primeira pessoa, frases curtas, tom de conversa, 90 a 140 palavras, sem emoji, sem asterisco, sem lista, sem cabeçalho, sem [[links]]. Nada de linha ATUALIZAR.`,
+    config: { systemInstruction: montarSystem(persona), temperature: 0.9, pensar: false, maxOutputTokens: 900, estrito: true },
   });
 }
