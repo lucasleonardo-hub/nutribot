@@ -140,6 +140,7 @@ export function compilarSemana(refeicoes, perfis, dias) {
         (media ? `MÉDIA nos ${diasComEstimativa} dia(s) com estimativa: ${media}${metaP}` : `MÉDIA: sem estimativas registradas${metaP}`)
     );
   }
+  blocos.push(`PLACAR DA SEMANA (calculado pelo sistema):\n${placarSemana(refeicoes, perfis, dias)}`);
   return blocos.join('\n\n');
 }
 
@@ -261,6 +262,7 @@ export function metaBalanco(objetivo) {
   if (/emagre|perd|reduz|defin|secar|cutting|gordura/.test(o)) return { min: -600, max: -300, rotulo: 'déficit de 300 a 600 kcal/dia' };
   return { min: -150, max: 150, rotulo: 'equilíbrio (entre -150 e +150 kcal/dia)' };
 }
+const media = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 const _kcal = (n) => `${Math.round(n).toLocaleString('pt-BR')} kcal`;
 const _sinal = (n) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(Math.round(n)).toLocaleString('pt-BR')}`;
 const _dm = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
@@ -308,6 +310,9 @@ export function visaoPeriodo({ refeicoes = [], pesagens = [], perfil = {}, dia, 
     return `ÚLTIMOS ${n} DIAS: ${com.length} de ${n} dias com registro · média nos dias registrados ${_kcal(kcal)} e proteína ${Math.round(prot)} g/dia${metaP}${alerta}${peso}`;
   };
   linhas.push(periodo(7), periodo(30));
+  const seq = sequenciaDe(refeicoes, dia);
+  if (seq >= 2) linhas.push(`SEQUÊNCIA: ${seq} dia(s) seguidos registrando o dia completo.`);
+  linhas.push(gastoAdaptativo({ refeicoes, pesagens, perfil, dia, gastos }).texto);
 
   // Balanço energético (só com relógio): comparação nos dias em que existem os dois dados
   if (gastos && Object.keys(gastos).length) {
@@ -333,4 +338,104 @@ export function visaoPeriodo({ refeicoes = [], pesagens = [], perfil = {}, dia, 
     linhas.push(`BALANÇO ENERGÉTICO (relógio; vale se registrou todas as refeições): ${partes.join(' · ')}.`);
   }
   return linhas.join('\n');
+}
+
+// ============================================================
+// Meta calórica adaptativa (estilo MacroFactor): gasto real = ingestão média nos dias completos - variação de peso x 7700.
+// Precisa de dias "completos" (>= 3 refeições ou >= 1.200 kcal) e de pesagens que cubram pelo menos 7 dias.
+// Enquanto não há dados, usa o gasto do relógio (se houver) e deixa claro que está calibrando.
+// ============================================================
+const DIA_COMPLETO_MIN_REF = 3;
+const DIA_COMPLETO_MIN_KCAL = 1200;
+export function gastoAdaptativo({ refeicoes = [], pesagens = [], perfil = {}, dia, gastos } = {}) {
+  const dias = _diasAte(dia, 29).slice(0, 28); // 28 dias fechados antes de hoje
+  const porDia = new Map();
+  for (const r of refeicoes) {
+    if (!r.estimativa?.kcal || !dias.includes(r.dia)) continue;
+    const t = porDia.get(r.dia) || { kcal: 0, n: 0 };
+    t.kcal += r.estimativa.kcal;
+    t.n += 1;
+    porDia.set(r.dia, t);
+  }
+  const completos = [...porDia.entries()].filter(([, t]) => t.n >= DIA_COMPLETO_MIN_REF || t.kcal >= DIA_COMPLETO_MIN_KCAL).map(([d, t]) => ({ dia: d, kcal: t.kcal }));
+  const pesos = pesagens.filter((p) => p.peso && (dias.includes(p.dia) || p.dia === dia)).sort((a, b) => a.dia.localeCompare(b.dia));
+  const meta = metaBalanco(perfil.objetivo);
+  const alvo = (gasto) => ({ min: Math.round((gasto + meta.min) / 10) * 10, max: Math.round((gasto + meta.max) / 10) * 10 });
+  const gastoRelogio = gastos ? media(Object.entries(gastos).filter(([d]) => dias.includes(d)).map(([, k]) => k).filter(Boolean)) : null;
+
+  const spanDias = pesos.length >= 2 ? (new Date(`${pesos[pesos.length - 1].dia}T12:00:00Z`) - new Date(`${pesos[0].dia}T12:00:00Z`)) / 86400000 : 0;
+  if (completos.length >= 10 && pesos.length >= 4 && spanDias >= 7) {
+    // tendência do peso por regressão linear (kg/dia) sobre as pesagens do período
+    const x0 = new Date(`${pesos[0].dia}T12:00:00Z`).getTime();
+    const xs = pesos.map((p) => (new Date(`${p.dia}T12:00:00Z`).getTime() - x0) / 86400000);
+    const ys = pesos.map((p) => p.peso);
+    const mx = media(xs);
+    const my = media(ys);
+    const inclinacao = xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / (xs.reduce((a, x) => a + (x - mx) ** 2, 0) || 1);
+    const ingestao = media(completos.map((c) => c.kcal));
+    const gasto = Math.round(ingestao - inclinacao * 7700);
+    const a = alvo(gasto);
+    const tend = Math.round(inclinacao * 7 * 100) / 100;
+    return {
+      status: 'calibrado',
+      gasto,
+      ingestao: Math.round(ingestao),
+      tendenciaKgSemana: tend,
+      diasCompletos: completos.length,
+      alvo: a,
+      texto: `META ADAPTATIVA: gasto real estimado ~${_kcal(gasto)}/dia (ingestão média ${_kcal(ingestao)} em ${completos.length} dias completos, peso ${Math.abs(tend) < 0.05 ? 'estável' : `${tend > 0 ? '+' : ''}${String(tend).replace('.', ',')} kg/semana`}${gastoRelogio ? `; relógio dizia ~${_kcal(gastoRelogio)}` : ''}). Objetivo "${perfil.objetivo || '?'}": comer entre ${_kcal(a.min)} e ${_kcal(a.max)} por dia.`,
+    };
+  }
+  const faltam = [];
+  if (completos.length < 10) faltam.push(`${10 - completos.length} dia(s) completo(s) de registro (tem ${completos.length})`);
+  if (pesos.length < 4 || spanDias < 7) faltam.push(`pesagens cobrindo 7 dias (tem ${pesos.length})`);
+  if (gastoRelogio) {
+    const a = alvo(gastoRelogio);
+    return { status: 'relogio', gasto: Math.round(gastoRelogio), diasCompletos: completos.length, alvo: a, texto: `META (provisória, pelo relógio): gasto ~${_kcal(gastoRelogio)}/dia; objetivo "${perfil.objetivo || '?'}" -> comer entre ${_kcal(a.min)} e ${_kcal(a.max)} por dia. A meta adaptativa pela tendência do peso entra quando houver ${faltam.join(' e ')}.` };
+  }
+  return { status: 'calibrando', diasCompletos: completos.length, alvo: null, texto: `META ADAPTATIVA: ainda calibrando; falta ${faltam.join(' e ')}.` };
+}
+
+// ============================================================
+// Sequências (dias seguidos registrando tudo) e placar da semana, em código
+// ============================================================
+export const diaCompleto = (regs) => regs.length >= DIA_COMPLETO_MIN_REF || regs.reduce((a, r) => a + (r.estimativa?.kcal || 0), 0) >= DIA_COMPLETO_MIN_KCAL;
+
+/** Dias consecutivos, terminando hoje ou ontem, em que a pessoa registrou o dia completo. */
+export function sequenciaDe(refeicoes, dia) {
+  const porDia = new Map();
+  for (const r of refeicoes) {
+    if (!porDia.has(r.dia)) porDia.set(r.dia, []);
+    porDia.get(r.dia).push(r);
+  }
+  let d = dia;
+  let n = 0;
+  // hoje ainda pode estar em andamento: se hoje não está completo, começa a contar de ontem
+  if (!diaCompleto(porDia.get(d) || [])) d = _diasAte(d, 2)[0];
+  while (diaCompleto(porDia.get(d) || [])) {
+    n++;
+    d = _diasAte(d, 2)[0];
+  }
+  return n;
+}
+
+/** Placar da semana: dias completos, dias com proteína batida (>= 1,6 g/kg) e sequência atual, por pessoa. */
+export function placarSemana(refeicoes, perfis, dias) {
+  const linhas = perfis.map((p) => {
+    const minhas = refeicoes.filter((r) => (p.jids || []).includes(r.jid) || r.nome === p.nome);
+    const porDia = new Map();
+    for (const r of minhas) {
+      if (!dias.includes(r.dia)) continue;
+      if (!porDia.has(r.dia)) porDia.set(r.dia, []);
+      porDia.get(r.dia).push(r);
+    }
+    const completos = [...porDia.values()].filter(diaCompleto).length;
+    const metaP = p.peso ? p.peso * 1.6 : null;
+    const proteina = metaP ? [...porDia.values()].filter((regs) => regs.reduce((a, r) => a + (r.estimativa?.p || 0), 0) >= metaP).length : 0;
+    const seq = sequenciaDe(minhas, dias[dias.length - 1]);
+    return { nome: p.apelido || p.nome.split(' ')[0], completos, proteina, seq, pontos: completos * 2 + proteina };
+  });
+  linhas.sort((a, b) => b.pontos - a.pontos);
+  const medalha = ['🥇', '🥈', '🥉'];
+  return linhas.map((l, i) => `${medalha[i] || '•'} ${l.nome}: ${l.completos} de ${dias.length} dias registrados por completo · proteína batida em ${l.proteina} dia(s) · sequência atual ${l.seq} dia(s)`).join('\n');
 }

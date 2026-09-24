@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, metaBalanco } from '../resumo.js';
+import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, metaBalanco, gastoAdaptativo, sequenciaDe, placarSemana } from '../resumo.js';
+import { ancorasDe, blocoAncoras } from '../taco.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
@@ -158,4 +159,51 @@ test('falasDe: falas da pessoa + só as respostas da bot dirigidas a ela', () =>
   ];
   assert.deepEqual(falasDe(h, 'Heitor').map((m) => m.texto), ['falafel', 'análise do Heitor: falafel', 'valeu']);
   assert.deepEqual(falasDe(h, 'Ale').map((m) => m.texto), ['iogurte', 'análise da Ale']);
+});
+
+test('taco: reconhece porções declaradas e devolve valores oficiais', () => {
+  const a = ancorasDe('almocei 200g de arroz, 150 g de feijão preto, 2 ovos cozidos e uma sobrecoxa de 100g, com salada');
+  const nomes = a.map((x) => `${x.nome}|${x.gramas}`);
+  assert.ok(nomes.includes('Arroz, tipo 1, cozido|200'), nomes.join(' ; '));
+  assert.ok(nomes.includes('Feijão, preto, cozido|150'), nomes.join(' ; '));
+  assert.ok(nomes.includes('Ovo, de galinha, inteiro, cozido/10minutos|100'), nomes.join(' ; '));
+  assert.ok(nomes.includes('Frango, sobrecoxa, com pele, assada|100'), nomes.join(' ; '));
+  const arroz = a.find((x) => x.nome.startsWith('Arroz'));
+  assert.equal(arroz.kcal, 257);
+  const b = ancorasDe('3 fatias de pão integral com hommus e 1 scoop de whey');
+  assert.ok(b.some((x) => x.nome.startsWith('Pão, trigo, forma, integral') && x.gramas === 75));
+  assert.ok(b.some((x) => /Whey protein concentrado/.test(x.nome) && x.gramas === 30 && x.p === 23.4));
+  assert.equal(ancorasDe('bom dia, como você está?').length, 0);
+  assert.match(blocoAncoras('200 g de arroz'), /Arroz, tipo 1, cozido, 200 g: 257 kcal · P 5 g · C 56,2 g/);
+  assert.match(blocoAncoras('um prato de arroz'), /por 100 g, porção NÃO informada/);
+});
+
+test('gastoAdaptativo: calibrado com 10 dias completos e peso em queda', () => {
+  const perfil = { objetivo: 'emagrecer', peso: 80 };
+  const refeicoes = [];
+  const pesagens = [];
+  // 14 dias fechados antes de 2026-09-24 (10 a 23/09): 2.000 kcal/dia em 3 refeições; peso caindo 0,5 kg/semana
+  for (let i = 0; i < 14; i++) {
+    const d = `2026-09-${String(10 + i).padStart(2, '0')}`;
+    for (let k = 0; k < 3; k++) refeicoes.push({ dia: d, estimativa: { kcal: 2000 / 3, p: 40 } });
+    pesagens.push({ dia: d, peso: 80 - (0.5 / 7) * i });
+  }
+  const g = gastoAdaptativo({ refeicoes, pesagens, perfil, dia: '2026-09-24' });
+  assert.equal(g.status, 'calibrado');
+  assert.ok(Math.abs(g.gasto - 2550) <= 5, `gasto ${g.gasto}`); // 2000 + 0,5/7*7700 ≈ 2550
+  assert.deepEqual(g.alvo, { min: 1950, max: 2250 });
+  const c = gastoAdaptativo({ refeicoes: refeicoes.slice(0, 9), pesagens, perfil, dia: '2026-09-24', gastos: { '2026-09-20': 2400, '2026-09-21': 2600 } });
+  assert.equal(c.status, 'relogio');
+  assert.match(c.texto, /gasto ~2\.500 kcal\/dia/);
+});
+
+test('sequenciaDe e placarSemana', () => {
+  const refs = [];
+  for (const d of ['2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23']) for (let k = 0; k < 3; k++) refs.push({ jid: 'a@s', dia: d, estimativa: { kcal: 600, p: 45 } });
+  refs.push({ jid: 'a@s', dia: '2026-09-24', estimativa: { kcal: 500, p: 20 } }); // hoje incompleto
+  assert.equal(sequenciaDe(refs, '2026-09-24'), 4);
+  refs.push({ jid: 'b@s', dia: '2026-09-23', estimativa: { kcal: 400, p: 30 } });
+  const placar = placarSemana(refs, perfis, ['2026-09-18', '2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24']);
+  assert.match(placar, /🥇 Lucas: 4 de 7 dias registrados por completo · proteína batida em 4 dia\(s\) · sequência atual 4 dia\(s\)/);
+  assert.match(placar, /🥈 Alezinha: 0 de 7/);
 });

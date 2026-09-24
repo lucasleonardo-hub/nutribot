@@ -2,6 +2,7 @@
 
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { gerarReserva, reservasDisponiveis, ultimaReservaUsada } from './reservas.js';
+import { blocoAncoras } from './taco.js';
 import { agora, dataExtenso, formatarDuracao, formatarTokens } from './util.js';
 import { avisarAdmin } from './avisos.js';
 
@@ -90,6 +91,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - CONVERSA ENTRE ELES: mensagem dirigida a outra pessoa do grupo (marca @outro, responde a outro, papo entre eles sem te chamar) não é pra você: responda SILENCIO, a não ser que tenha foto de comida ou dúvida real de nutrição. Não puxe "e o seu café?" no meio de uma conversa dos dois.
 - DADOS DO RELÓGIO: quando o perfil trouxer a linha "Relógio" ou o dossiê trouxer "DADOS DO RELÓGIO" (peso, gordura, sono, passos, treinos do Galaxy Watch), você SABE disso sem perguntar: não peça peso nem pergunte como dormiu se está ali. Use como quem conhece a rotina da pessoa: café chegando às 8h de quem levantou 05:56 ("já tá há 2 horas em pé sem comer?"), levantou às 9h quem costuma levantar às 6h ("dormiu até tarde hoje, hein"), dia com 3 mil passos, semana sem treino, noite de 5h e pedindo doce ("faz sentido"). Comente quando couber, não em toda mensagem. Compare com a média da pessoa, não com regra de livro. Bioimpedância de relógio oscila: fale de tendência, não de décimos.
 - A DICA É DA REFEIÇÃO ATUAL: a 💡 Dica e o ⚖️ Veredito falam do prato ou da mensagem de AGORA. Não recicle crítica nem dica de uma refeição anterior do dia (a margarina do café não entra na dica do almoço), a não ser que a pessoa pergunte ou que o mesmo problema apareça de novo agora. Antes de fechar, releia: cada frase responde à MENSAGEM ATUAL?
+- TABELA TACO: quando vier o bloco "ÂNCORAS DA TABELA TACO", os itens com porção declarada já estão calculados: copie esses números, some o que a pessoa não declarou (molho, óleo, acompanhamento visível na foto) e diga o total. Não "arredonde" arroz de 200 g para 350 kcal se a âncora diz 257. Sem âncora, estime como sempre, usando os valores por 100 g quando vierem.
 - NÚMEROS DO RELÓGIO E DO ACOMPANHAMENTO: cite como estão (5h03 de sono, 77,0 kg, −380 kcal), sem "pouco mais de" nem "quase". Não repita o mesmo dado do relógio em mensagens seguidas do mesmo dia; ele já foi dito uma vez.
 - SÓ O NOME DA REFEIÇÃO: se a pessoa mandar apenas "lanche da tarde", "era o almoço", "café" logo depois de uma foto ou relato já analisado, é rótulo, não refeição nova: confirme em uma linha, sem bloco e sem estimativa.
 - QUEM DISSE O QUÊ: cada linha do histórico começa com o nome de quem falou. Nunca atribua a fala, a refeição ou a foto de uma pessoa a outra, mesmo que duas pessoas comam a mesma coisa no mesmo horário (casal, família): trate cada registro como de quem mandou. A "MENSAGEM ATUAL DE X" é de X.
@@ -496,6 +498,7 @@ const textoDe = (contents) =>
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
 export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, jaPesquisou = false, leve = false }) {
+  const ancoras = leve ? '' : blocoAncoras(texto);
   // Ordem pensada pro cache implícito do Gemini: o que não muda entre mensagens vem primeiro (conhecimento, perfis, dossiê),
   // o que muda a cada mensagem (hora, histórico, mensagem atual) vem por último.
   const contexto =
@@ -509,6 +512,7 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
     `DATA E HORA: ${dataExtenso(dia)}, ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
     `PESSOA ATUAL: ${perfil.nome}${perfil.apelido ? ` (apelido: ${perfil.apelido})` : ''} · objetivo: ${perfil.objetivo || '?'} · ${perfil.peso || '?'} kg · dieta: ${perfil.dieta || '?'}. Analise para ELA, com o objetivo DELA. Não reaproveite análise de outra pessoa do histórico.\n\n` +
     (visao ? `ACOMPANHAMENTO DE ${perfil.nome} (calculado pelo sistema; use pra situar a conversa e as dicas no rumo do objetivo, sem recalcular e sem despejar tudo de uma vez):\n${visao}\n\n` : '') +
+    (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
     `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada)' : ''}${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
 
@@ -734,7 +738,8 @@ export async function estimarRefeicaoManual({ descricao, perfil }) {
   const json = await gerar({
     contents:
       `Estime calorias e macros desta refeição descrita em texto por ${perfil?.nome || 'uma pessoa'}${perfil?.peso ? ` (${perfil.peso} kg)` : ''}. Use porções brasileiras usuais quando faltar quantidade. ` +
-      `Devolva também uma descrição curta normalizada (até 80 caracteres) e o tipo da refeição se der pra inferir.\n\nREFEIÇÃO: """${descricao}"""`,
+      `Devolva também uma descrição curta normalizada (até 80 caracteres) e o tipo da refeição se der pra inferir.\n\nREFEIÇÃO: """${descricao}"""` +
+      (blocoAncoras(descricao) ? `\n\nÂNCORAS DA TABELA TACO (valores oficiais dos itens com porção declarada; some-os e estime só o resto):\n${blocoAncoras(descricao)}` : ''),
     config: {
       temperature: 0.2,
       pensar: false,
