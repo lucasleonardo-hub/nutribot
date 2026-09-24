@@ -154,6 +154,25 @@ function blocoPerfis(perfis) {
     .join('\n');
 }
 
+/**
+ * Só o que é DESSA pessoa: as falas dela e as respostas da bot que vieram logo depois de uma fala dela.
+ * Antes entravam TODAS as respostas da bot (análises do prato dos outros), e a ficha de rotina do Heitor
+ * acabou com hipercalórico, frango e "foco na hipertrofia" que eram do Lucas.
+ */
+export function falasDe(historico, nome) {
+  const saida = [];
+  let ultimoHumano = null;
+  for (const m of historico || []) {
+    if (m.tipo !== 'bot') {
+      ultimoHumano = m.nome;
+      if (m.nome === nome) saida.push(m);
+    } else if (ultimoHumano === nome) {
+      saida.push(m);
+    }
+  }
+  return saida;
+}
+
 function blocoConhecimento(texto) {
   if (!texto?.trim()) return '';
   return (
@@ -854,15 +873,16 @@ export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, co
 // ============================================================
 export async function atualizarRotina({ perfil, refeicoes, historico, dia }) {
   const lista = refeicoes.length
-    ? refeicoes.map((r) => `${r.dia} ${r.hora} [${r.slot}] ${r.resumo}`).join('\n')
+    ? refeicoes.map((r) => `${r.dia} ${r.horaLocal || r.hora} [${r.slot}] ${r.descricao || r.resumo}`).join('\n')
     : '(nenhuma refeição registrada ainda)';
   return gerar({
     contents:
-      `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Você acompanha ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n` +
-      `ROTINA QUE VOCÊ JÁ TINHA ANOTADO:\n${perfil.rotina || '(nada ainda)'}\n\n` +
-      `REFEIÇÕES REGISTRADAS NOS ÚLTIMOS DIAS (data hora [refeição] descrição):\n${lista}\n\n` +
-      `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico.filter((m) => m.nome === perfil.nome || m.tipo === 'bot'), 120)}\n\n` +
-      `Reescreva a ficha de rotina dessa pessoa em até 150 palavras, em terceira pessoa, direto e concreto, cobrindo: horários em que costuma comer cada refeição; o que costuma comer em cada uma (recorrências); refeições que costuma pular; dias/horários de fraqueza (ex: sexta à noite); treino/sono se souber; o que melhorou ou piorou recentemente. Só fatos observados, nada inventado. Sem markdown, sem emojis, sem #.`,
+      `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Você acompanha ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}${perfil.dieta ? `, dieta ${perfil.dieta}` : ''}${perfil.cidade ? `, mora em ${perfil.cidade}` : ''}).\n` +
+      `ROTINA QUE VOCÊ JÁ TINHA ANOTADO (pode conter erro; o que não bater com as refeições registradas abaixo deve SAIR):\n${perfil.rotina || '(nada ainda)'}\n\n` +
+      `REFEIÇÕES REGISTRADAS DELA NOS ÚLTIMOS DIAS (fonte da verdade; horários já no fuso da pessoa; formato data hora [refeição] descrição):\n${lista}\n\n` +
+      `TRANSCRIÇÃO DE HOJE (só falas dela e suas respostas a ela; nada de outras pessoas do grupo):\n${blocoHistorico(falasDe(historico, perfil.nome), 120)}\n\n` +
+      `Reescreva a ficha de rotina DESSA pessoa em até 150 palavras, em terceira pessoa, direto e concreto, cobrindo: horários em que costuma comer cada refeição (no fuso dela); o que costuma comer em cada uma (recorrências); refeições que costuma pular; dias/horários de fraqueza (ex: sexta à noite); treino/sono se souber; o que melhorou ou piorou recentemente. ` +
+      `Só fatos observados NAS REFEIÇÕES DELA e nas falas dela: alimento que não aparece na lista dela não entra; o objetivo é o dela (${perfil.objetivo}), não use objetivo de outra pessoa; se a dieta é vegetariana, carne não existe na rotina dela. Nada inventado. Sem markdown, sem emojis, sem #.`,
     config: { temperature: 0.3, pensar: false, maxOutputTokens: 500, leve: true },
   });
 }
@@ -930,14 +950,14 @@ export async function descreverImagemDocumento(buffer, mimeType) {
 }
 
 export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historico, dia }) {
-  const falas = historico.filter((m) => m.nome === perfil.nome || m.tipo === 'bot');
+  const falas = falasDe(historico, perfil.nome);
   if (!falas.length) return notasAtuais || '';
   return gerar({
     contents:
       `Você é a ${nomeDaBot()}, nutricionista. Hoje é ${dataExtenso(dia)}. Reescreva SUAS NOTAS sobre ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n\n` +
       `NOTAS ATUAIS:\n${notasAtuais?.trim() || '(nenhuma ainda)'}\n\n` +
       `DOCUMENTOS QUE A PESSOA DEIXOU NA PASTA (você NÃO precisa repetir isso nas notas, só complementar ou registrar mudanças):\n${(dossieDocs || '(nenhum)').slice(0, 6000)}\n\n` +
-      `TRANSCRIÇÃO DE HOJE (falas dela e suas):\n${blocoHistorico(falas, 150)}\n\n` +
+      `TRANSCRIÇÃO DE HOJE (só falas dela e suas respostas a ela; NÃO há nada de outras pessoas do grupo aqui, e nada delas deve entrar nas notas):\n${blocoHistorico(falas, 150)}\n\n` +
       `Escreva as notas atualizadas em até 300 palavras, em tópicos curtos (linhas começando com "- "), terceira pessoa, só FATOS que a pessoa disse ou que você observou, SEMPRE com data quando for medida, meta ou dado que muda (ex: "- 2026-09-16: pesou 73,2 kg"; "- 2026-09-18: mora em Curitiba"). Dado novo SUBSTITUI o antigo (mantenha só o mais recente de peso, cidade, dieta, objetivo; pode registrar a evolução como "peso: 73,2 (09-16) -> 74,5 (09-18)"). Cubra o que importa pro seu trabalho: idade, cidade/fuso, dieta e restrições, trabalho/estudo e horários, treinos/esportes e dias, preferências e aversões alimentares, sono, álcool, metas numéricas, respostas a perguntas que você fez, e detalhes pessoais que ajudam a brincar com carinho. Corte o irrelevante. Se não houver nada novo, devolva as notas atuais. Sem markdown de cabeçalho (#), sem emojis.`,
     config: { temperature: 0.3, pensar: false, maxOutputTokens: 900, estrito: true, leve: true },
   });

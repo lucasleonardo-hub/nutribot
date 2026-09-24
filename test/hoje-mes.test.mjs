@@ -4,6 +4,7 @@ import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao,
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
+import { falasDe } from '../gemini.js';
 
 const perfis = [
   { nome: 'Lucas Leonardo', jids: ['a@s'], peso: 73, objetivo: 'hipertrofia' },
@@ -143,4 +144,18 @@ test('visaoPeriodo: 7/30 dias, peso e balanço energético contra o objetivo', (
   assert.match(v, /média dos últimos 2 dias com os dois dados: −399 kcal\/dia; objetivo "hipertrofia" pede superávit de 250 a 500 kcal\/dia -> ABAIXO do alvo/);
   assert.equal(visaoPeriodo({ refeicoes: [], pesagens: [], perfil, dia: '2026-09-24' }), '');
   assert.deepEqual(metaBalanco('emagrecer e reduzir medidas').rotulo, 'déficit de 300 a 600 kcal/dia');
+});
+
+test('falasDe: falas da pessoa + só as respostas da bot dirigidas a ela', () => {
+  const h = [
+    { nome: 'Lucas', tipo: 'foto', texto: 'meu almoço' },
+    { nome: 'Dona Benta', tipo: 'bot', texto: 'análise do Lucas: frango e hipercalórico' },
+    { nome: 'Heitor', tipo: 'texto', texto: 'falafel' },
+    { nome: 'Dona Benta', tipo: 'bot', texto: 'análise do Heitor: falafel' },
+    { nome: 'Ale', tipo: 'texto', texto: 'iogurte' },
+    { nome: 'Dona Benta', tipo: 'bot', texto: 'análise da Ale' },
+    { nome: 'Heitor', tipo: 'texto', texto: 'valeu' },
+  ];
+  assert.deepEqual(falasDe(h, 'Heitor').map((m) => m.texto), ['falafel', 'análise do Heitor: falafel', 'valeu']);
+  assert.deepEqual(falasDe(h, 'Ale').map((m) => m.texto), ['iogurte', 'análise da Ale']);
 });
