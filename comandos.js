@@ -7,6 +7,7 @@ import { notasDe, listarDocumentosDe } from './pessoas.js';
 import { reservasDisponiveis } from './reservas.js';
 import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS } from './util.js';
 import { resumirHoje, formatarEstimativa, lerTipoRefeicao } from './resumo.js';
+import { visaoDe } from './acompanhamento.js';
 import { lembrar } from './dia.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
@@ -119,7 +120,9 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       return true;
     }
     const refeicoes = await refeicoesDoDia(dia).catch(() => []);
-    await enviar(jidGrupo, `📊 *${todos ? 'Hoje, todo mundo' : 'Seu dia'} (${dia})*\n\n${resumirHoje(refeicoes, alvo, dia)}${todos ? '' : '\n\n_(!hoje todos mostra o grupo inteiro)_'}`, msg, { rapido: true });
+    // só pra uma pessoa: junta a visão de 7/30 dias e o balanço energético (quem tem relógio), em linguagem de WhatsApp
+    const visao = todos ? '' : (await visaoDe(alvo[0], dia)).replace(/^(ÚLTIMOS \d+ DIAS|BALANÇO ENERGÉTICO)([^:]*):/gm, '*$1$2:*');
+    await enviar(jidGrupo, `📊 *${todos ? 'Hoje, todo mundo' : 'Seu dia'} (${dia})*\n\n${resumirHoje(refeicoes, alvo, dia)}${visao ? `\n\n${visao}` : ''}${todos ? '' : '\n\n_(!hoje todos mostra o grupo inteiro)_'}`, msg, { rapido: true });
     return true;
   }
   if (cmd === '!refeicao' || cmd === '!refeição') {

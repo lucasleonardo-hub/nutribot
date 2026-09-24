@@ -7,6 +7,7 @@ import * as ia from './gemini.js';
 import { atualizarConhecimento } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
 import { compilarRefeicoes, compilarSemana, compilarMes } from './resumo.js';
+import { visaoDe } from './acompanhamento.js';
 import { agora, semanaISO, diaSeguinte, diasAnteriores, ehDomingo, minutosDe } from './util.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
@@ -124,7 +125,11 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
     if (grupo && (perfis.length || forcado)) {
       const compilado = compilarRefeicoes(historico, perfis);
       console.log(`[resumo] refeições compiladas:\n${compilado.texto}`);
-      const resumo = ia.separarAtualizacao(await ia.resumoDiario({ dia, perfis, historico, persona: estado.persona, refeicoes: compilado.texto })).texto || '(sem resumo)';
+      // Visão de 7/30 dias e balanço energético por pessoa (código): vai pro resumo do dia e pra reflexão da Nutri
+      const acompanhamentos = await Promise.all(perfis.map(async (p) => ({ nome: p.nome, texto: await visaoDe(p, dia) })));
+      const resultados = acompanhamentos.filter((a) => a.texto).map((a) => `${a.nome}:\n${a.texto}`).join('\n\n');
+      const refeicoesTexto = compilado.texto + (resultados ? `\n\nACOMPANHAMENTO POR PESSOA (7/30 dias e balanço energético, calculados pelo sistema):\n${resultados}` : '');
+      const resumo = ia.separarAtualizacao(await ia.resumoDiario({ dia, perfis, historico, persona: estado.persona, refeicoes: refeicoesTexto })).texto || '(sem resumo)';
       await enviar(grupo, `📋 *RESUMO DO DIA ${dia}*\n\n${resumo}`);
       await salvarMarkdown(
         'Resumos',
@@ -184,7 +189,7 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
 
       // Diário pessoal dela (só acrescenta): Mongo + Perfis/Nutri-Diario.md
       try {
-        const entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona }))?.trim();
+        const entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona, resultados }))?.trim();
         if (entrada) {
           await registrarDiarioNutri({ dia, texto: entrada });
           const atual = (await lerMarkdown('Perfis', 'Nutri-Diario.md').catch(() => null)) || frontmatter({ tipo: 'diario-nutri', tags: ['nutribot', 'diario-nutri'] }) + `\n# Diário da ${ia.nomeDaBot()}\n`;

@@ -315,6 +315,10 @@ export function indicadoresRelogio({ pesos, sonos, atividades }, { hoje } = {}) 
     Object.assign(r, { passosMedia: Math.round(mPassos), treinos7d: treinos });
     partes.push(`~${milhar(mPassos)} passos/dia e ${treinos} treino(s) de musculação/esporte nos últimos 7 dias`);
   }
+  // gasto total por dia (últimos 30 dias) pro balanço energético em código (resumo.js visaoPeriodo)
+  const gastos = {};
+  for (const a of atividades.filter((x) => x.dia >= diasAtras(hoje, 29) && x.calorias)) gastos[a.dia] = a.calorias;
+  if (Object.keys(gastos).length) r.gastos = gastos;
   r.linha = partes.join('; ');
   return r;
 }

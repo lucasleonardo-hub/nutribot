@@ -3,13 +3,14 @@
 
 import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
-import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt } from './resumo.js';
+import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot } from './resumo.js';
+import { visaoDe } from './acompanhamento.js';
 import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
@@ -397,8 +398,27 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : temAudio ? 'audio' : 'texto' });
 
   if (atrasadas >= 6) await avisarErro(jidGrupo, 'lenta'); // só quando foi atraso de verdade, não 2 ou 3 mensagens seguidas
+  // "Lanche da tarde" / "era o almoço" logo depois de uma foto já analisada: só rótulo. Ajusta o tipo do registro
+  // anterior e confirma em uma linha, sem gastar chamada de IA e sem análise (nem registro) em dobro.
+  const rotulo = !temImagem && !temAudio && lerRotuloRefeicao(texto, horaLocal);
+  if (rotulo && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 45) {
+    if (minhaUltima.slot !== rotulo) {
+      await atualizarRefeicao(minhaUltima._id, { slot: rotulo }).catch((e) => console.error('[refeicoes] falha ao ajustar tipo:', e.message));
+      for (let i = estado.memoria.mensagens.length - 1; i >= 0; i--) {
+        if (estado.memoria.mensagens[i].refeicao === minhaUltima.slot) { estado.memoria.mensagens[i].refeicao = rotulo; break; }
+      }
+    }
+    const confirmacao = acaso([`Anotado como ${nomeDoSlot(rotulo)} ✅`, `Fechou, ficou como ${nomeDoSlot(rotulo)} 📝`, `Tá marcado: ${nomeDoSlot(rotulo)} 👍`]);
+    await enviar(jidGrupo, confirmacao, msg, { rapido: true });
+    await lembrar({ hora, jid: null, nome: ia.nomeDaBot(), texto: confirmacao, tipo: 'bot' });
+    console.log(`[refeicoes] rótulo "${texto}" de ${perfil.nome}: registro das ${minhaUltima.horaLocal || minhaUltima.hora} -> ${rotulo}`);
+    return;
+  }
+
+  // Visão de 7/30 dias + balanço energético da PESSOA ATUAL (código, sem IA); só nas respostas completas
+  const visao = motivo ? await comTempo(visaoDe(eu, dia), 8_000, 'acompanhamento').catch(() => '') : '';
   const citacao = citacaoDe(conteudo, perfis);
-  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas };
+  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao };
   let resposta;
   let atualizacao = null;
   try {

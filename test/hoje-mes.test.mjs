@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resumirHoje, compilarMes, registradasHojeParaPrompt } from '../resumo.js';
+import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, metaBalanco } from '../resumo.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
@@ -109,4 +109,38 @@ test('saude: interpreta as 3 abas do Health Data Export e resume', () => {
   assert.equal(ind.passosMedia, 9412);
   assert.equal(ind.treinos7d, 1); // Body Pump; caminhada não conta
   assert.match(ind.linha, /^peso 75,2 kg com 19,3% de gordura em 17\/09; última noite \(17\/09\) 5h27 dormindo, deitou 00:13 e levantou 05:50; ~9\.412 passos\/dia e 1 treino/);
+});
+
+test('lerRotuloRefeicao: só o nome da refeição vira rótulo; frase de comida não', () => {
+  assert.equal(lerRotuloRefeicao('Lanche da tarde'), 'lanche');
+  assert.equal(lerRotuloRefeicao('era o almoço!'), 'almoco');
+  assert.equal(lerRotuloRefeicao('isso foi meu café da manhã'), 'cafe');
+  assert.equal(lerRotuloRefeicao('janta'), 'jantar');
+  assert.equal(lerRotuloRefeicao('pré treino'), 'lanche_manha');
+  assert.equal(lerRotuloRefeicao('pós-treino', '07:10'), 'lanche_manha');
+  assert.equal(lerRotuloRefeicao('pós-treino', '19:10'), 'lanche');
+  assert.equal(lerRotuloRefeicao('almocei arroz e feijão'), null);
+  assert.equal(lerRotuloRefeicao('o lanche foi um iogurte'), null);
+  assert.equal(lerRotuloRefeicao('qual o melhor lanche?'), null);
+});
+
+test('visaoPeriodo: 7/30 dias, peso e balanço energético contra o objetivo', () => {
+  const perfil = { nome: 'Lucas', peso: 77, objetivo: 'hipertrofia' };
+  const refeicoes = [
+    { dia: '2026-09-22', estimativa: { kcal: 1800, p: 100 } },
+    { dia: '2026-09-22', estimativa: { kcal: 400, p: 30 } },
+    { dia: '2026-09-23', estimativa: { kcal: 1650, p: 90 } },
+    { dia: '2026-09-24', estimativa: { kcal: 620, p: 18 } },
+    { dia: '2026-09-01', estimativa: { kcal: 2500, p: 150 } },
+  ];
+  const pesagens = [{ dia: '2026-09-17', peso: 75.2 }, { dia: '2026-09-23', peso: 77 }];
+  const gastos = { '2026-09-22': 2618, '2026-09-23': 2030 };
+  const v = visaoPeriodo({ refeicoes, pesagens, perfil, dia: '2026-09-24', gastos });
+  assert.match(v, /ÚLTIMOS 7 DIAS: 3 de 7 dias com registro · média nos dias registrados 1\.490 kcal e proteína 79 g\/dia \(meta 123 a 169 g\) · peso 77 kg \(23\/09\)/);
+  assert.match(v, /ÚLTIMOS 30 DIAS: 4 de 30 dias com registro .* · peso 75,2 kg \(17\/09\) -> 77 kg \(23\/09\)/);
+  assert.match(v, /hoje até agora comeu 620 kcal \(o gasto de hoje só chega quando o relógio sincronizar\)/);
+  assert.match(v, /último dia completo \(23\/09\): comeu 1\.650 kcal, gastou 2\.030 kcal -> −380 kcal/);
+  assert.match(v, /média dos últimos 2 dias com os dois dados: −399 kcal\/dia; objetivo "hipertrofia" pede superávit de 250 a 500 kcal\/dia -> ABAIXO do alvo/);
+  assert.equal(visaoPeriodo({ refeicoes: [], pesagens: [], perfil, dia: '2026-09-24' }), '');
+  assert.deepEqual(metaBalanco('emagrecer e reduzir medidas').rotulo, 'déficit de 300 a 600 kcal/dia');
 });

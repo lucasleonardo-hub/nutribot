@@ -228,3 +228,109 @@ export function registradasHojeParaPrompt(refeicoes, perfis, dia) {
     })
     .join('\n');
 }
+
+// ============================================================
+// Rótulo de refeição: mensagem que só diz QUAL refeição foi ("Lanche da tarde", "era o almoço", "café")
+// logo depois de uma foto/relato já analisado. Não é refeição nova: só ajusta o tipo do registro anterior.
+// ============================================================
+const RE_ROTULO = /^(?:(?:isso|esse|essa|aquilo|foi|era|é|eh|o|a|meu|minha|esse foi|essa foi|foi o|foi a|foi meu|foi minha)\s+)*(caf[eé](?:\s+da\s+manh[ãa])?|lanche(?:\s+da\s+(?:manh[ãa]|tarde))?|lanchinho|almo[cç]o|janta(?:r)?|ceia|pr[ée][\s-]?treino|p[óo]s[\s-]?treino)\s*(?:de hoje|de agora|agora)?\s*[.!😋🙂👍]*\s*$/i;
+export function lerRotuloRefeicao(texto, horaLocal = '12:00') {
+  const t = String(texto || '').trim();
+  if (!t || t.length > 40) return null;
+  const m = t.match(RE_ROTULO);
+  if (!m) return null;
+  const r = m[1].toLowerCase();
+  if (/^caf/.test(r)) return 'cafe';
+  if (/manh/.test(r) || /^pr[ée]/.test(r)) return 'lanche_manha';
+  if (/^p[óo]s/.test(r)) return minutosDe(horaLocal) < 12 * 60 ? 'lanche_manha' : 'lanche';
+  if (/^lanch/.test(r)) return 'lanche';
+  if (/^almo/.test(r)) return 'almoco';
+  if (/^jant/.test(r)) return 'jantar';
+  if (/^ceia/.test(r)) return 'ceia';
+  return null;
+}
+export const nomeDoSlot = (slot) => (NOME_SLOT[slot] || slot).replace(/^\S+\s/, '');
+
+// ============================================================
+// Visão de período (7 e 30 dias) + balanço energético, em código. Entra no prompt, no !hoje e na reflexão noturna.
+// ============================================================
+/** Faixa de balanço diário (kcal comidas - gastas) que o objetivo pede. */
+export function metaBalanco(objetivo) {
+  const o = String(objetivo || '').toLowerCase();
+  if (/hipertrof|ganh|massa|bulk|engord|for[çc]a/.test(o)) return { min: 250, max: 500, rotulo: 'superávit de 250 a 500 kcal/dia' };
+  if (/emagre|perd|reduz|defin|secar|cutting|gordura/.test(o)) return { min: -600, max: -300, rotulo: 'déficit de 300 a 600 kcal/dia' };
+  return { min: -150, max: 150, rotulo: 'equilíbrio (entre -150 e +150 kcal/dia)' };
+}
+const _kcal = (n) => `${Math.round(n).toLocaleString('pt-BR')} kcal`;
+const _sinal = (n) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(Math.round(n)).toLocaleString('pt-BR')}`;
+const _dm = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+const _kg = (n) => `${String(n).replace('.', ',')} kg`;
+const _diasAte = (dia, n) => {
+  const base = new Date(`${dia}T12:00:00Z`);
+  return Array.from({ length: n }, (_, i) => {
+    const d = new Date(base);
+    d.setUTCDate(d.getUTCDate() - (n - 1 - i));
+    return d.toISOString().slice(0, 10);
+  });
+};
+
+/**
+ * @param {object} p
+ * @param {Array}  p.refeicoes   registros da pessoa (últimos 30 dias)
+ * @param {Array}  p.pesagens    pesagens da pessoa (últimos 30 dias)
+ * @param {object} p.perfil
+ * @param {string} p.dia         hoje (YYYY-MM-DD)
+ * @param {object} [p.gastos]    { 'YYYY-MM-DD': kcal gastas segundo o relógio } (perfil.relogio.gastos)
+ */
+export function visaoPeriodo({ refeicoes = [], pesagens = [], perfil = {}, dia, gastos }) {
+  if (!refeicoes.length && !pesagens.length) return '';
+  const porDia = new Map();
+  for (const r of refeicoes) {
+    if (!r.estimativa?.kcal) continue;
+    const t = porDia.get(r.dia) || { kcal: 0, p: 0, n: 0 };
+    t.kcal += r.estimativa.kcal;
+    t.p += r.estimativa.p || 0;
+    t.n += 1;
+    porDia.set(r.dia, t);
+  }
+  const metaP = perfil.peso ? ` (meta ${Math.round(perfil.peso * 1.6)} a ${Math.round(perfil.peso * 2.2)} g)` : '';
+  const linhas = [];
+  const periodo = (n) => {
+    const dias = _diasAte(dia, n);
+    const com = dias.filter((d) => porDia.has(d));
+    if (!com.length) return `ÚLTIMOS ${n} DIAS: nenhuma refeição registrada.`;
+    const kcal = com.reduce((a, d) => a + porDia.get(d).kcal, 0) / com.length;
+    const prot = com.reduce((a, d) => a + porDia.get(d).p, 0) / com.length;
+    const pes = pesagens.filter((x) => dias.includes(x.dia)).sort((a, b) => a.dia.localeCompare(b.dia));
+    const peso = pes.length >= 2 ? ` · peso ${_kg(pes[0].peso)} (${_dm(pes[0].dia)}) -> ${_kg(pes[pes.length - 1].peso)} (${_dm(pes[pes.length - 1].dia)})` : pes.length === 1 ? ` · peso ${_kg(pes[0].peso)} (${_dm(pes[0].dia)})` : '';
+    // média muito baixa quase sempre é refeição que não foi mandada, não jejum: a IA não pode ler como "comeu só isso"
+    const alerta = kcal < 1000 ? ' (média baixa assim indica refeições NÃO registradas, não que a pessoa comeu só isso)' : '';
+    return `ÚLTIMOS ${n} DIAS: ${com.length} de ${n} dias com registro · média nos dias registrados ${_kcal(kcal)} e proteína ${Math.round(prot)} g/dia${metaP}${alerta}${peso}`;
+  };
+  linhas.push(periodo(7), periodo(30));
+
+  // Balanço energético (só com relógio): comparação nos dias em que existem os dois dados
+  if (gastos && Object.keys(gastos).length) {
+    const meta = metaBalanco(perfil.objetivo);
+    const hoje = porDia.get(dia);
+    const diasGasto = Object.keys(gastos).filter((d) => d <= dia).sort();
+    const ultimoGasto = diasGasto[diasGasto.length - 1];
+    const partes = [];
+    if (hoje) partes.push(`hoje até agora comeu ${_kcal(hoje.kcal)}${gastos[dia] ? `; o relógio já estima ${_kcal(gastos[dia])} gastas (${_sinal(hoje.kcal - gastos[dia])} kcal, dia ainda incompleto)` : ' (o gasto de hoje só chega quando o relógio sincronizar)'}`);
+    if (ultimoGasto && ultimoGasto !== dia && porDia.has(ultimoGasto)) {
+      const c = porDia.get(ultimoGasto).kcal;
+      partes.push(`último dia completo (${_dm(ultimoGasto)}): comeu ${_kcal(c)}, gastou ${_kcal(gastos[ultimoGasto])} -> ${_sinal(c - gastos[ultimoGasto])} kcal`);
+    }
+    const sete = _diasAte(dia, 8).slice(0, 7).filter((d) => porDia.has(d) && gastos[d]); // 7 dias fechados antes de hoje
+    if (sete.length) {
+      const m = sete.reduce((a, d) => a + (porDia.get(d).kcal - gastos[d]), 0) / sete.length;
+      const dentro = m >= meta.min && m <= meta.max;
+      const lado = m < meta.min ? 'ABAIXO do alvo (comendo de menos pro objetivo)' : m > meta.max ? 'ACIMA do alvo (comendo além do objetivo)' : 'dentro do alvo';
+      partes.push(`média dos últimos ${sete.length} dias com os dois dados: ${_sinal(m)} kcal/dia; objetivo "${perfil.objetivo || '?'}" pede ${meta.rotulo} -> ${dentro ? 'no rumo' : lado}`);
+    } else {
+      partes.push(`objetivo "${perfil.objetivo || '?'}" pede ${meta.rotulo}`);
+    }
+    linhas.push(`BALANÇO ENERGÉTICO (relógio; vale se registrou todas as refeições): ${partes.join(' · ')}.`);
+  }
+  return linhas.join('\n');
+}

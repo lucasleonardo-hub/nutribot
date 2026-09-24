@@ -189,12 +189,20 @@ export async function registrarRefeicao(r) {
     } else {
       // complemento ("a vitamina tem whey"): soma
       set.resumo = ([ultima.resumo, r.resumo].filter((t) => t && t !== '[foto]').join(' + ') || ultima.resumo || r.resumo || '').slice(0, 200);
-      if (r.descricao && r.descricao !== ultima.descricao) set.descricao = `${ultima.descricao || ''}${ultima.descricao ? ' (+ ' : ''}${r.descricao}${ultima.descricao ? ')' : ''}`.slice(0, 220);
+      const contem = (a, b) => a && b && a.toLowerCase().includes(b.toLowerCase().slice(0, 40));
+      if (r.descricao && r.descricao !== ultima.descricao && !contem(ultima.descricao, r.descricao) && !contem(r.descricao, ultima.descricao)) {
+        set.descricao = `${ultima.descricao || ''}${ultima.descricao ? ' (+ ' : ''}${r.descricao}${ultima.descricao ? ')' : ''}`.slice(0, 220);
+      }
     }
     await col.updateOne({ _id: ultima._id }, { $set: set });
     return;
   }
   await col.insertOne({ ...r, criadoEm: new Date() });
+}
+
+/** Ajusta campos de um registro (ex.: tipo da refeição quando a pessoa diz "era o lanche da tarde"). */
+export async function atualizarRefeicao(id, set) {
+  await colecao('refeicoes').updateOne({ _id: id }, { $set: { ...set, atualizadoEm: new Date() } });
 }
 
 /** Apaga o registro de uma refeição específica (revisão descobriu que não era comida consumida). Devolve quantos apagou. */
