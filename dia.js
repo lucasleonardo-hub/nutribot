@@ -195,7 +195,12 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       // Diário pessoal dela (só acrescenta): Mongo + Perfis/Nutri-Diario.md
       let entradaDiario = '';
       try {
-        const entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona, resultados }))?.trim();
+        let entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona, resultados }))?.trim();
+        // rede de segurança: nenhum texto gravado pode ser a palavra de silêncio do papo (já aconteceu com o modelo leve)
+        if (entrada && /^sil[êe]ncio\W*$/i.test(entrada)) {
+          console.warn('[diario-nutri] modelo devolveu "SILENCIO" no lugar do diário; descartado');
+          entrada = '';
+        }
         entradaDiario = entrada || '';
         if (entrada) {
           await registrarDiarioNutri({ dia, texto: entrada });

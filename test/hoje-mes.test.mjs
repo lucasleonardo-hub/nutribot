@@ -4,7 +4,7 @@ import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao,
 import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
 import { textoParaFala } from '../voz.js';
-import { separarAtualizacao } from '../gemini.js';
+import { separarAtualizacao, montarSystem } from '../gemini.js';
 import { pedidoDeAudio, semLinhaAtualizar } from '../util.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
@@ -257,4 +257,13 @@ test('voz: pedido explícito de áudio e linha AUDIO oculta', () => {
   assert.equal(r.audio, true);
   assert.equal(separarAtualizacao('Só texto mesmo.').audio, false);
   assert.equal(semLinhaAtualizar('Bora.\nAUDIO: sim\nHABITO: {"agua_ml": 300}'), 'Bora.');
+});
+
+test('montarSystem: texto gravado (documento) proíbe a palavra de silêncio do papo', () => {
+  const conversa = montarSystem('');
+  const documento = montarSystem('', { documento: true });
+  assert.match(conversa, /responda EXATAMENTE a palavra SILENCIO/);
+  assert.ok(!/NUNCA responda SILENCIO aqui/.test(conversa));
+  assert.match(documento, /NUNCA responda SILENCIO aqui/);
+  assert.match(documento, /NÃO É CONVERSA DE GRUPO/);
 });

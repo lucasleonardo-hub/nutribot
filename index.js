@@ -184,9 +184,9 @@ if (KEEPALIVE_URL) {
 
     // A cada 10 min: alguém pulou a refeição do horário de costume? Cobra.
     cron.schedule('*/10 * * * *', () => naFila('cobranca', verificarCobrancas), { timezone: TZ });
-    // Revisão das respostas que saíram por reserva externa: quando o Gemini volta, ela confere e corrige no grupo se errou
-    cron.schedule('5-59/10 * * * *', () => naFila('revisao', revisarPendentes), { timezone: TZ });
-    console.log('[cron] revisão de respostas de reserva a cada 10 min');
+    // Conferência por amostragem das respostas que saíram por reserva externa (poucas por semana, em hora aleatória)
+    cron.schedule('37 * * * *', () => naFila('revisao', revisarPendentes), { timezone: TZ });
+    console.log('[cron] conferência por amostragem das respostas de reserva (de hora em hora, no máximo 2 por semana)');
     console.log(`[cron] cobrança de refeições a cada 10 min (atraso tolerado: ${ATRASO_COBRANCA_MIN} min)`);
 
     // Domingo 09:00: pesagem semanal (sem IA), a tempo do resumo da semana. Dia 1 às 08:00: relatório do mês anterior.

@@ -128,8 +128,15 @@ export function definirNomeBot(nome) {
 export const nomeDaBot = () => nomeBot || 'Nutri';
 
 /** System prompt + nome escolhido + memória de personalidade acumulada (evolui a cada fechamento de dia). */
-export function montarSystem(persona) {
+export function montarSystem(persona, { documento = false } = {}) {
   let sys = SYSTEM_PROMPT;
+  // Pedido que NÃO é conversa de grupo (diário, resumo, plano, relatório, apresentação): as regras de papo não valem.
+  // Sem isto, o modelo leve às vezes aplicava a regra do papo aleatório e devolvia "SILENCIO" como se fosse o diário.
+  if (documento) {
+    sys +=
+      '\n\nATENÇÃO - ESTE PEDIDO NÃO É CONVERSA DE GRUPO: é um texto SEU (diário, resumo, relatório, plano, notas, apresentação, cobrança). ' +
+      'Escreva por inteiro o texto pedido, sempre. NUNCA responda SILENCIO aqui, nunca devolva vazio e não use o formato de resposta de conversa.';
+  }
   if (nomeBot) sys += `\n\nSEU NOME: o grupo te batizou de "${nomeBot}". Você responde por esse nome, se refere a si mesma assim e assina piadas com ele quando cabe. "Nutri" é só a sua profissão.`;
   if (persona?.trim()) sys += `\n\nSUA MEMÓRIA DE PERSONALIDADE (você construiu isso ao longo dos dias; use pra ser consistente, puxar piadas internas, apelidos e cobrar padrões):\n${persona.trim()}`;
   return sys;
@@ -571,7 +578,7 @@ export function separarAtualizacao(resposta) {
 export async function pedirOnboarding(nomeContato, persona) {
   return gerar({
     contents: `Uma pessoa nova (contato do WhatsApp: "${nomeContato || 'desconhecido'}") mandou a primeira mensagem no grupo. Você AINDA não tem o cadastro dela. Em até 70 palavras, no seu personagem (simpática e com humor), peça que ela responda em UMA mensagem: nome, peso (kg), altura (cm), objetivo (ex: secar, melhorar o salto, ganhar força), cidade onde mora e se é vegetariana/vegana ou tem alguma restrição alimentar. Explique que sem isso você não consegue analisar direito.`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 300, leve: true },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 300, leve: true },
   });
 }
 
@@ -613,14 +620,14 @@ export async function extrairDadosOnboarding(texto) {
 export async function boasVindas(perfil, persona, dossie) {
   return gerar({
     contents: `Cadastro concluído: ${perfil.nome}, ${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}${perfil.cidade ? `, mora em ${perfil.cidade}` : ''}${perfil.dieta ? `, dieta ${perfil.dieta}` : ''}${perfil.restricoes ? `, restrições: ${perfil.restricoes}` : ''}. Calcule o IMC mentalmente e comente com leveza. Dê as boas-vindas no seu personagem em até 90 palavras, avise que vai acompanhar TUDO que a pessoa comer (foto ou texto) e dê a primeira 💡 Dica alinhada ao objetivo e à dieta. Use os [[links]] e emojis. Já invente um apelido carinhoso pra pessoa.${dossie ? ` Você já leu a pasta dela no Drive; mostre que leu (cite 1 ou 2 coisas concretas de lá) e combine metas a partir do que está ali.\n\n${blocoDossie(perfil.nome, dossie)}` : ''}`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 400 },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 400 },
   });
 }
 
 export async function cobrarDadosFaltando(faltando, persona) {
   return gerar({
     contents: `A pessoa tentou se cadastrar mas esqueceu: ${faltando.join(', ')}. Em até 40 palavras, no seu personagem (simpática, com humor), peça SÓ o que falta.`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200, leve: true },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 200, leve: true },
   });
 }
 
@@ -645,7 +652,7 @@ export async function resumoDiario({ dia, perfis, historico, persona, refeicoes 
       `Feche com UMA linha: "🏆 Placar do dia:" com o ranking com humor leve.\n` +
       `Se o bloco trouxer ACOMPANHAMENTO de alguém (balanço energético do relógio, média de 7 dias), a frase dessa pessoa pode dizer em meia linha se está no rumo do objetivo.\n` +
       `REGRAS: números copiados do bloco (não recalcule, não invente refeição); nutrientes por extenso; no máximo 1 emoji por linha; sem [[links]] neste resumo; sem lista de refeições, sem dica de amanhã, sem nota.`,
-    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 2000 },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 2000 },
   });
 }
 
@@ -664,7 +671,7 @@ export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, t
       `NÚMEROS DA SEMANA, POR PESSOA (compilados pelo sistema; use ESTES valores, sem recalcular):\n${tabela}\n\n` +
       `RESUMOS DIÁRIOS DA SEMANA (contexto de acertos, derrapadas e momentos):\n${corpo}\n\n` +
       `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), a média diária do bloco de números escrita por extenso ("~X kcal · Proteína X g · Carboidratos X g · Gorduras X g") e se bate a meta de proteína, os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Dias sem registro contam como sumiço: cobre com carinho. Feche com o "🏆 Placar da semana" (todo mundo do grupo) e um incentivo final com humor. Nutrientes sempre por extenso, nunca P/C/G. Use os [[links]] e poucos emojis.`,
-    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 4000 },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 4000 },
   });
 }
 
@@ -723,7 +730,7 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico, mom
       blocoMomentos(momentos) +
       diarioTxt +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 400)}`,
-    config: { systemInstruction: montarSystem(''), temperature: 0.8, maxOutputTokens: 3600, estrito: true },
+    config: { systemInstruction: montarSystem('', { documento: true }), temperature: 0.8, maxOutputTokens: 3600, estrito: true },
   });
 }
 
@@ -739,7 +746,7 @@ export async function diarioDaNutri({ dia, perfis, historico, personaAtual, resu
       `PERFIS:\n${blocoPerfis(perfis)}\n\nSUA MEMÓRIA DE PERSONALIDADE:\n${personaAtual?.trim() || '(vazia)'}\n\n` +
       (resultados ? `RESULTADOS (calculados pelo sistema: 7 e 30 dias, peso, balanço energético de quem tem relógio):\n${resultados}\n\n` : '') +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 300)}`,
-    config: { systemInstruction: montarSystem(''), temperature: 0.9, pensar: false, maxOutputTokens: 600, leve: true },
+    config: { systemInstruction: montarSystem('', { documento: true }), temperature: 0.9, pensar: false, maxOutputTokens: 600, leve: true },
   });
 }
 
@@ -750,7 +757,7 @@ export async function resumoMensal({ mes, perfis, tabela, persona }) {
       `Mês ${mes}. PERFIS:\n${blocoPerfis(perfis)}\n\nNÚMEROS DO MÊS, POR PESSOA (compilados pelo sistema; use ESTES valores, sem recalcular):\n${tabela}\n\n` +
       `Escreva o *RELATÓRIO DO MÊS* (formato WhatsApp, sem cabeçalhos #, até 350 palavras), no seu personagem. Para cada pessoa: evolução do peso (se houver pesagens), tendência das médias de calorias e proteína semana a semana escritas por extenso, ` +
       `quantos dias ficou sem registrar, se está no caminho do objetivo, o que mais atrapalhou e uma 💡 Meta pro próximo mês (mensurável). Feche com um "🏆 Placar do mês" e um incentivo. Nutrientes por extenso, poucos emojis, [[links]] nos termos-chave.`,
-    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 3600 },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 3600 },
   });
 }
 
@@ -801,6 +808,7 @@ export async function revisarRespostaReserva({ perfil, texto, imagem, mimeType, 
     `DATA E HORA DA MENSAGEM: ${dataExtenso(dia)}, ${hora || '?'}\n\n` +
     `MENSAGEM DA PESSOA${imagem ? ' (a FOTO dela está anexada: olhe a foto)' : ''}:\n"""${texto || '(sem legenda)'}"""\n\n` +
     `RESPOSTA QUE SAIU EM SEU NOME:\n"""${respostaReserva}"""\n\n` +
+    `motivo: no máximo 15 palavras.\n` +
     `A resposta está ERRADA se: (1) identificou errado a comida da foto ou da legenda; (2) calorias ou macros mais de 30% fora do que você estimaria; ` +
     `(3) usou objetivo, peso ou dados de outra pessoa; (4) deu orientação nutricional incorreta ou perigosa; (5) falou como se fosse outra pessoa, em terceira pessoa, ou ignorou a pergunta feita; ` +
     `(6) registrou como refeição algo que não era comida consumida (receita, rótulo, dúvida, pedido de sugestão). ` +
@@ -823,16 +831,22 @@ export async function revisarRespostaReserva({ perfil, texto, imagem, mimeType, 
         type: 'object',
         properties: {
           ok: { type: 'boolean' },
-          motivo: { type: 'string' },
+          motivo: { type: 'string', description: 'até 15 palavras' },
           resposta_corrigida: { type: 'string' },
           refeicao_consumida: { type: 'boolean' },
         },
         required: ['ok', 'motivo', 'refeicao_consumida'],
       },
-      maxOutputTokens: 700,
+      maxOutputTokens: 1600, // resposta corrigida inteira + motivo; com pouco espaço o JSON vinha cortado e a revisão repetia em loop
     },
   });
-  const d = JSON.parse(json);
+  let d;
+  try {
+    d = JSON.parse(json);
+  } catch (e) {
+    // o Gemini RESPONDEU (só veio JSON quebrado/cortado): não adianta repetir daqui a pouco
+    throw Object.assign(new Error(`revisão devolveu JSON ilegível: ${e.message}`), { jsonInvalido: true });
+  }
   return {
     ok: Boolean(d.ok),
     motivo: String(d.motivo || '').slice(0, 200),
@@ -890,7 +904,7 @@ export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, co
       blocoConhecimento(conhecimento) +
       blocoDossie(perfil.nome, dossie) +
       `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem (simpática, com humor leve): pergunte onde está a refeição (foto ou descrição), lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já falou algo hoje que explique o sumiço, acolha em vez de cobrar. Curta e direta, 1 ou 2 emojis. Não use "SILENCIO".`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 400, leve: true },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 400, leve: true },
   });
 }
 
@@ -1003,7 +1017,7 @@ export async function apresentacao({ grupoNome, membros, persona }) {
         : `2. Diga que ainda não tem nome e PERGUNTE como querem te chamar (dê 2 ou 3 sugestões debochadas). Avise que dá pra mudar depois com !nome.\n`) +
       `3. Peça que cada um se cadastre mandando em UMA mensagem: nome, peso, altura, objetivo, cidade onde mora e se é vegetariana/vegana ou tem restrição alimentar. Sem cadastro você não consegue analisar direito.\n` +
       `4. Feche com uma provocação leve e simpática. Formato WhatsApp (*negrito* com um asterisco), sem cabeçalho #.`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 600 },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 600 },
   });
 }
 
@@ -1011,7 +1025,7 @@ export async function apresentacao({ grupoNome, membros, persona }) {
 export async function boasVindasNovoMembro({ nomeContato, persona }) {
   return gerar({
     contents: `Uma pessoa nova acabou de ser adicionada ao grupo (contato: "${nomeContato || 'sem nome'}"). Em até 60 palavras, no seu personagem, dê boas-vindas, explique em uma frase o que você faz (analisa foto ou descrição de refeição, dá veredito e dica, cobra quem some) e peça que ela responda em UMA mensagem: nome, peso (kg), altura (cm), objetivo, cidade onde mora e se é vegetariana/vegana ou tem restrição alimentar. Emojis com moderação.`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 300, leve: true },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 300, leve: true },
   });
 }
 
@@ -1041,7 +1055,7 @@ export async function extrairNomeBot(texto) {
 export async function reagirAoNome({ nome, quem, persona }) {
   return gerar({
     contents: `${quem} acabou de te batizar de "${nome}". Reaja no seu personagem em até 50 palavras: aceite (ou finja reclamar e aceite), já assine com o nome novo, e lembre quem ainda não se cadastrou de mandar nome, peso, altura e objetivo. Emojis.`,
-    config: { systemInstruction: montarSystem(persona), pensar: false, maxOutputTokens: 200, leve: true },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 200, leve: true },
   });
 }
 
@@ -1080,7 +1094,7 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia }
       `2) Sete dias (Seg a Dom), cada um em 1 a 2 linhas: café, almoço, lanche e jantar em poucas palavras, com porções (g, unidades, colheres), variando pouco o que a pessoa já come e corrigindo o que falta pro objetivo. Respeite a dieta e as aversões. Treino e fim de semana contam.\n` +
       `3) *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas.\n` +
       `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.`,
-    config: { systemInstruction: montarSystem(persona), maxOutputTokens: 3000, temperature: 0.7 },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 3000, temperature: 0.7 },
   });
 }
 
@@ -1099,6 +1113,6 @@ export async function falaProgramada({ tipo, perfis, dados, persona, dia }) {
       `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
       `NÚMEROS E COMIDAS DA SEMANA (calculados pelo sistema; use só o que está aqui):\n${dados || '(sem registros na semana)'}\n\n` +
       `${roteiro}\n\nEsse texto vai virar NOTA DE VOZ: escreva pra ser falado, em primeira pessoa, frases curtas, tom de conversa, 90 a 140 palavras, sem emoji, sem asterisco, sem lista, sem cabeçalho, sem [[links]]. Nada de linha ATUALIZAR.`,
-    config: { systemInstruction: montarSystem(persona), temperature: 0.9, pensar: false, maxOutputTokens: 900, estrito: true },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.9, pensar: false, maxOutputTokens: 900, estrito: true },
   });
 }
