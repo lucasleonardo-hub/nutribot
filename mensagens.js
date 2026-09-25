@@ -49,6 +49,59 @@ async function marcarAudioEspontaneo() {
 // Fotos e áudios do lote continuam sendo analisados um a um. Comandos e cadastro também rodam normalmente.
 const pendentes = [];
 let processando = null; // mensagem em andamento (pra salvar no desligamento também)
+let processandoExtras = []; // fotos que entraram junto com ela (mesma análise)
+
+const MAX_FOTOS = Number(process.env.MAX_FOTOS_JUNTAS) || 6; // teto por análise (cada foto custa tokens de entrada)
+const JANELA_FOTOS_S = Number(process.env.JANELA_FOTOS_S) || 300; // fotos a mais de 5 min não são "o mesmo prato"
+
+const ehFoto = (m) => Boolean(extractMessageContent(m?.message)?.imageMessage);
+const remetenteDe = (m) => (jidsDoRemetente(m?.key || {})[0] || '');
+const segundosDe = (m) => Number(m?.messageTimestamp) || 0;
+
+/**
+ * Fotos seguidas da MESMA pessoa (ex.: 3 fotos do mesmo prato, ou prato + copo + sobremesa) viram UMA análise:
+ * a primeira mensagem leva as outras como `fotosExtras`. Texto solto no meio do bloco entra junto como legenda.
+ * Só agrupa a partir de 2 fotos; mensagem de outra pessoa, comando ou intervalo grande fecham o bloco.
+ * @returns {Array<{ msg: object, extras: object[] }>}
+ */
+export function agruparFotos(lote) {
+  const grupos = [];
+  for (let i = 0; i < lote.length; i++) {
+    const msg = lote[i];
+    if (!ehFoto(msg)) {
+      grupos.push({ msg, extras: [] });
+      continue;
+    }
+    const dono = remetenteDe(msg);
+    const extras = [];
+    let fotos = 1;
+    let ultimaFotoEm = segundosDe(msg);
+    let j = i + 1;
+    while (j < lote.length && fotos < MAX_FOTOS) {
+      const prox = lote[j];
+      const texto = (extractMessageContent(prox?.message)?.conversation || '').trim();
+      if (remetenteDe(prox) !== dono) break; // outra pessoa falou: fecha o bloco
+      if (texto.startsWith('!')) break; // comando não entra na análise
+      const foto = ehFoto(prox);
+      const quando = segundosDe(prox);
+      if (foto && ultimaFotoEm && quando && quando - ultimaFotoEm > JANELA_FOTOS_S) break;
+      if (!foto && !lote.slice(j + 1).some((m) => ehFoto(m) && remetenteDe(m) === dono)) break; // texto depois da última foto: fica pra ele
+      extras.push(prox);
+      if (foto) {
+        fotos++;
+        ultimaFotoEm = quando || ultimaFotoEm;
+      }
+      j++;
+    }
+    if (fotos >= 2) {
+      grupos.push({ msg, extras });
+      i = j - 1;
+    } else {
+      grupos.push({ msg, extras: [] });
+    }
+  }
+  return grupos;
+}
 
 // Janela de espera: quem manda 3 mensagens seguidas ("comi arroz", "e feijão", "e uma banana") não quer 3 respostas.
 // Cada mensagem nova reinicia a espera (até um teto), e aí o lote inteiro é lido de uma vez.
@@ -74,25 +127,33 @@ async function drenar() {
   if (!pendentes.length) return;
   const lote = pendentes.splice(0, pendentes.length);
   if (lote.length > 1) console.log(`[bot] ${lote.length} mensagens juntas: lendo tudo e respondendo de uma vez`);
-  for (let i = 0; i < lote.length; i++) {
-    processando = lote[i];
-    const ultima = i === lote.length - 1;
+  const grupos = agruparFotos(lote);
+  for (let i = 0; i < grupos.length; i++) {
+    const { msg, extras } = grupos[i];
+    processando = msg;
+    processandoExtras = extras;
+    const ultimo = i === grupos.length - 1;
     try {
       // cão de guarda: nenhuma mensagem pode prender a fila por mais de 4 min (IA, Drive, Mongo e reservas somados)
-      await comTempo(processar(lote[i], { emLote: !ultima, atrasadas: ultima ? lote.length - 1 : 0 }), 4 * 60_000, 'processamento da mensagem');
+      await comTempo(
+        processar(msg, { emLote: !ultimo, atrasadas: ultimo ? grupos.length - 1 : 0, fotosExtras: extras }),
+        4 * 60_000,
+        'processamento da mensagem'
+      );
     } catch (e) {
       console.error('[bot] erro ao processar:', e);
-      const jid = lote[i]?.key?.remoteJid;
+      const jid = msg?.key?.remoteJid;
       if (jid?.endsWith('@g.us')) await avisarErro(jid, 'interno', e?.message);
     } finally {
       processando = null;
+      processandoExtras = [];
     }
   }
 }
 
 /** Mensagens que ainda não foram processadas (pra salvar no desligamento). */
 export function mensagensPendentes() {
-  return [processando, ...pendentes].filter(Boolean);
+  return [processando, ...processandoExtras, ...pendentes].filter(Boolean);
 }
 
 const codificar = (msg) => Buffer.from(proto.WebMessageInfo.encode(proto.WebMessageInfo.fromObject(msg)).finish()).toString('base64');
@@ -226,7 +287,7 @@ export function prioridade({ texto, temImagem, temAudio, conteudo }) {
 // ============================================================
 // Lógica principal
 // ============================================================
-export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
+export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtras = [] } = {}) {
   if (!msg.message) return;
   if (msg.key.fromMe && enviadosPeloBot.has(msg.key.id)) return; // resposta do próprio bot
   const jidGrupo = msg.key.remoteJid;
@@ -245,7 +306,13 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
 
   const conteudo = extractMessageContent(msg.message);
   if (!conteudo) return;
-  const texto = (conteudo.conversation || conteudo.extendedTextMessage?.text || conteudo.imageMessage?.caption || '').trim();
+  const legendas = [conteudo.conversation || conteudo.extendedTextMessage?.text || conteudo.imageMessage?.caption || ''];
+  for (const extra of fotosExtras) {
+    const c = extractMessageContent(extra.message);
+    const t = (c?.conversation || c?.extendedTextMessage?.text || c?.imageMessage?.caption || '').trim();
+    if (t) legendas.push(t);
+  }
+  const texto = legendas.map((t) => String(t).trim()).filter(Boolean).join(' ');
   const temImagem = Boolean(conteudo.imageMessage);
   const temAudio = Boolean(conteudo.audioMessage);
   if (!texto && !temImagem && !temAudio) return; // sticker, vídeo, documento etc.
@@ -340,16 +407,28 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   // ---------- Fluxo normal: texto e/ou foto ----------
   let imagem = null;
   let mimeType = null;
+  const imagens = []; // todas as fotos que entram NESTA análise (a da mensagem + as que vieram juntas)
   if (temImagem) {
-    // aviso imediato: a análise da foto demora alguns segundos
+    // aviso imediato: a análise da foto demora alguns segundos (um aviso só, mesmo com várias fotos)
     enviar(jidGrupo, acaso(ACKS_FOTO), msg, { rapido: true }).catch(() => {});
     try {
       imagem = await baixarMidia(msg);
       mimeType = conteudo.imageMessage.mimetype || 'image/jpeg';
+      imagens.push({ data: imagem, mimeType });
     } catch (e) {
       console.error('[wa] falha ao baixar imagem:', e.message);
       return avisarErro(jidGrupo, 'midia');
     }
+    for (const extra of fotosExtras) {
+      const c = extractMessageContent(extra.message);
+      if (!c?.imageMessage) continue;
+      try {
+        imagens.push({ data: await baixarMidia(extra), mimeType: c.imageMessage.mimetype || 'image/jpeg' });
+      } catch (e) {
+        console.error('[wa] falha ao baixar foto do bloco (analiso com as que baixaram):', e.message);
+      }
+    }
+    if (imagens.length > 1) console.log(`[bot] ${imagens.length} fotos de ${nomeContato} analisadas juntas`);
   }
 
   let audio = null;
@@ -409,7 +488,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   const minhaUltima = refeicoesHoje.filter((r) => jids.includes(r.jid)).sort((a, b) => b.minutos - a.minutos)[0];
   const citada = citacaoDe(conteudo, perfis);
   const marcaCitacao = citada ? `(respondendo a ${citada.autor}: "${citada.texto.slice(0, 80)}${citada.texto.length > 80 ? '…' : ''}") ` : '';
-  const entradaTexto = `${marcaCitacao}${temImagem ? `📷 [foto]${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto}`;
+  const rotuloFoto = imagens.length > 1 ? `📷 [${imagens.length} fotos]` : '📷 [foto]';
+  const entradaTexto = `${marcaCitacao}${temImagem ? `${rotuloFoto}${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto}`;
   const historico = [...estado.memoria.mensagens];
   await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: entradaTexto, tipo: temImagem ? 'foto' : temAudio ? 'audio' : 'texto' });
 
@@ -437,7 +517,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
   const citados = perfis.filter((p) => p.nome !== eu.nome && mencionaNome(texto, p.nome)).map((p) => p.nome);
   const lembrancas = motivo && texto ? await comTempo(lembrancasPara({ consulta: texto, pessoa: eu.nome, outros: citados, excluirDia: dia }), 6_000, 'lembranças').catch(() => '') : '';
   const citacao = citacaoDe(conteudo, perfis);
-  const base = { texto, imagem, mimeType, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -526,7 +606,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0 } = {}) {
     registrarHabito({ jid: jids[0], nome: perfil.nome, dia, agua_ml: Number(habito.agua_ml) || 0, alcool_doses: Number(habito.alcool_doses) || 0 }).catch((e) => console.error('[habitos]', e.message));
   }
 
-  const resumoRefeicao = texto || (temImagem ? '[foto]' : temAudio ? '[áudio]' : '');
+  const resumoRefeicao = texto || (temImagem ? (imagens.length > 1 ? `[${imagens.length} fotos]` : '[foto]') : temAudio ? '[áudio]' : '');
   let refeicaoRegistrada = null; // { slot, minutos } do registro feito agora, pra revisão poder corrigi-lo
   if (foiRefeicao) {
     // O tipo da refeição vem do que a IA entendeu (a pessoa disse "café da manhã"); numa correção, o da refeição corrigida

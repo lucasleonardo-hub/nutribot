@@ -181,6 +181,7 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 - **Momentos memoráveis**: `Perfis/Nutri-Momentos.md` só cresce, nunca é reescrito: toda noite ela extrai até 4 momentos do dia (vexames, acertos, metas, frases) e usa os mais recentes nas respostas e na evolução da personalidade.
 - **Diário**: `Diario/YYYY-MM-DD.md` é uma daily note com toda a conversa do dia (wikilinks pra cada pessoa, `#refeicao/almoco` etc.), regerada a partir da memória do dia a cada 30 s.
 - **Reservas de IA** (só quando todos os Gemini falharem com 503 "alta demanda"): texto pelo Cohere → OpenRouter (Nemotron 3 Super 120B grátis, 50 pedidos/dia) → Groq → Hugging Face; **foto** pelo Cohere → Hugging Face (Gemma 3 27B, depois Qwen3-VL) → OpenRouter (Qwen3.8 27B). Áudio e PDF só o Gemini faz. Se tudo cair, ela avisa no grupo que travou em vez de ficar muda. As chaves são opcionais; sem elas o bot roda só com Gemini.
+- **Várias fotos de uma vez**: fotos seguidas da mesma pessoa (prato de vários ângulos, ou prato + copo + sobremesa) viram UMA análise só, com todas as imagens no mesmo pedido e as legendas juntas. Sai uma resposta e UM registro de refeição, em vez de uma análise por foto. Até 6 fotos por análise (`MAX_FOTOS_JUNTAS`), dentro de 5 min (`JANELA_FOTOS_S`); mensagem de outra pessoa ou comando fecham o bloco.
 - **Áudio**: mensagem de voz é entendida pelo Gemini direto (sem transcrição separada). Vale como relato de refeição.
 - **Velocidade**: texto responde em 1 a 3 s. Foto recebe um "deixa eu ver esse prato..." na hora e a análise vem em seguida.
 

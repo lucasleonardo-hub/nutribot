@@ -506,8 +506,10 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
+  // uma ou várias fotos (a pessoa mandou o prato de vários ângulos, ou prato + copo + sobremesa)
+  const fotos = imagens?.length ? imagens : imagem ? [{ data: imagem, mimeType }] : [];
   // Ordem pensada pro cache implícito do Gemini: o que não muda entre mensagens vem primeiro (conhecimento, perfis, dossiê),
   // o que muda a cada mensagem (hora, histórico, mensagem atual) vem por último.
   const contexto =
@@ -524,10 +526,16 @@ export async function responder({ texto, imagem, mimeType, audio, audioMime, per
     (visao ? `ACOMPANHAMENTO DE ${perfil.nome} (calculado pelo sistema; use pra situar a conversa e as dicas no rumo do objetivo, sem recalcular e sem despejar tudo de uma vez):\n${visao}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
-    `MENSAGEM ATUAL DE ${perfil.nome}${imagem ? ' (com FOTO anexada)' : ''}${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
+    `MENSAGEM ATUAL DE ${perfil.nome}${
+      fotos.length > 1
+        ? ` (com ${fotos.length} FOTOS anexadas, mandadas de uma vez pela mesma pessoa: olhe TODAS e faça UMA análise só. Se forem ângulos ou partes da MESMA refeição, some os itens sem contar o mesmo prato duas vezes; se forem coisas diferentes (prato + bebida + sobremesa), some tudo como uma refeição. Se alguma delas não for comida (rótulo, receita, print), comente à parte sem incluir na estimativa)`
+        : fotos.length === 1
+          ? ' (com FOTO anexada)'
+          : ''
+    }${audio ? ' (ÁUDIO anexado - ouça, entenda o que a pessoa disse e responda a isso; se for relato de comida, analise como refeição)' : ''}:\n${texto || (audio ? '(mensagem de voz)' : '(sem legenda)')}`;
 
   const parts = [{ text: contexto }];
-  if (imagem) parts.push({ inlineData: { mimeType: mimeType || 'image/jpeg', data: imagem.toString('base64') } });
+  for (const f of fotos) parts.push({ inlineData: { mimeType: f.mimeType || 'image/jpeg', data: f.data.toString('base64') } });
   if (audio) parts.push({ inlineData: { mimeType: audioMime || 'audio/ogg', data: audio.toString('base64') } });
 
   const bruto = await gerar({

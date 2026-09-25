@@ -8,6 +8,7 @@ import { separarAtualizacao, montarSystem } from '../gemini.js';
 import { pedidoDeAudio, semLinhaAtualizar } from '../util.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
+import { agruparFotos } from '../mensagens.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
 import { falasDe } from '../gemini.js';
 
@@ -266,4 +267,44 @@ test('montarSystem: texto gravado (documento) proíbe a palavra de silêncio do 
   assert.ok(!/NUNCA responda SILENCIO aqui/.test(conversa));
   assert.match(documento, /NUNCA responda SILENCIO aqui/);
   assert.match(documento, /NÃO É CONVERSA DE GRUPO/);
+});
+
+test('agruparFotos: fotos seguidas da mesma pessoa viram uma análise só', () => {
+  const foto = (id, quem, ts, legenda) => ({ key: { id, remoteJid: 'g@g.us', participant: quem }, messageTimestamp: ts, message: { imageMessage: { caption: legenda || '' } } });
+  const txt = (id, quem, ts, t) => ({ key: { id, remoteJid: 'g@g.us', participant: quem }, messageTimestamp: ts, message: { conversation: t } });
+  const A = '5548@s.whatsapp.net';
+  const B = '5549@s.whatsapp.net';
+
+  // 3 fotos seguidas do Lucas = 1 grupo com 2 extras
+  let g = agruparFotos([foto('1', A, 100), foto('2', A, 105), foto('3', A, 110)]);
+  assert.equal(g.length, 1);
+  assert.equal(g[0].extras.length, 2);
+
+  // foto do Lucas + foto do Heitor = dois grupos separados
+  g = agruparFotos([foto('1', A, 100), foto('2', B, 105)]);
+  assert.deepEqual(g.map((x) => x.extras.length), [0, 0]);
+
+  // texto ENTRE as fotos entra junto; texto DEPOIS da última fica de fora
+  g = agruparFotos([foto('1', A, 100), txt('2', A, 102, 'é meu almoço'), foto('3', A, 105), txt('4', A, 108, 'e aí?')]);
+  assert.equal(g.length, 2);
+  assert.deepEqual(g[0].extras.map((m) => m.key.id), ['2', '3']);
+  assert.equal(g[1].msg.key.id, '4');
+
+  // foto sozinha continua como antes
+  g = agruparFotos([foto('1', A, 100), txt('2', A, 102, 'oi')]);
+  assert.deepEqual(g.map((x) => [x.msg.key.id, x.extras.length]), [['1', 0], ['2', 0]]);
+
+  // comando fecha o bloco
+  g = agruparFotos([foto('1', A, 100), txt('2', A, 101, '!hoje'), foto('3', A, 102)]);
+  assert.equal(g.length, 3);
+
+  // fotos distantes (mais de 5 min) não são a mesma refeição
+  g = agruparFotos([foto('1', A, 100), foto('2', A, 100 + 400)]);
+  assert.deepEqual(g.map((x) => x.extras.length), [0, 0]);
+
+  // teto de 6 fotos por análise
+  g = agruparFotos(Array.from({ length: 9 }, (_, i) => foto(String(i), A, 100 + i)));
+  assert.equal(g[0].extras.length, 5); // 6 fotos na primeira análise
+  assert.equal(g.length, 2); // as 3 que sobraram viram uma segunda análise
+  assert.equal(g[1].extras.length, 2);
 });
