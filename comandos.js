@@ -20,7 +20,7 @@ import { enriquecerPerfis } from './perfis.js';
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !plano (plano da semana + lista de compras, salvo na sua pasta do Drive), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !plano (plano da semana + lista de compras, salvo na sua pasta do Drive), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -202,6 +202,18 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     await enviar(jidGrupo, `Anotado: você agora é *${valor}*. Vou respeitar (na maioria das vezes 😏).`, msg);
     return true;
   }
+  if (cmd === '!treino') {
+    const perfis = await enriquecerPerfis(await listarPerfis(), dia);
+    const alvo = /\btodos?\b/i.test(texto.slice(cmd.length)) ? perfis : perfis.filter((p) => p.jids?.some((j) => jids.includes(j)));
+    if (!alvo.length) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    const partes = alvo.map((p) => (p._treino?.bloco ? p._treino.bloco : `${p.nome.split(' ')[0]}: sem treino sincronizado (o Hevy só entra pra quem tem a chave configurada).`));
+    await enviar(jidGrupo, `🏋️ *Treino da semana*\n\n${partes.join('\n\n')}`, msg, { rapido: true });
+    return true;
+  }
+
   if (cmd === '!grafico' || cmd === '!gráfico') {
     const todos = /\btodos?\b|\bgeral\b/i.test(texto.slice(cmd.length));
     const perfis = await listarPerfis();

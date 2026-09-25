@@ -313,6 +313,7 @@ export async function fecharSemana({ dia, perfis, grupo }) {
     } catch (e) {
       console.error(`[previsao] falha para ${p.nome}:`, e.message);
     }
+    if (p._treino?.bloco) linhas.push(p._treino.bloco);
     if (linhas.length) previsoes.push(`${p.nome}:\n${linhas.join('\n')}`);
   }
   const blocoPrevisoes = previsoes.join('\n\n');

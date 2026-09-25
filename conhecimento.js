@@ -120,6 +120,9 @@ function focosDe(objetivo) {
   return achados.length ? achados : ['saude'];
 }
 
+// Assuntos que puxam o documento de treino (séries, carga, RPE, deload): ela precisa dele pra ler os números do Hevy
+const ASSUNTO_TREINO = /treino|treinei|academia|s[ée]rie|carga|peso morto|agachamento|supino|rosca|leg press|volume|rpe|falha|deload|hipertrof|musculac|muscula[çc][ãa]o|repeti[çc]|descanso|recupera|dor muscular|puxad|remada|desenvolvimento|panturr|gl[uú]teo|b[íi]ceps|tr[íi]ceps|perna|peito|costas|ombro/i;
+
 const ASSUNTO_ROTINA = /marmita|hor[aá]rio|pr[eé].?treino|p[oó]s.?treino|antes do treino|depois do treino|jejum|timing|janela|refei[cç][aã]o pulada|pular refei|ceia|caf[eé] da manh/i;
 
 /**
@@ -136,7 +139,9 @@ export function docsPara(perfilOuLista, { texto, soBase = false } = {}) {
   const focos = new Set(['base']);
   if (!soBase) {
     if (completo || ASSUNTO_ROTINA.test(texto || '')) focos.add('rotina');
+    if (completo || ASSUNTO_TREINO.test(texto || '')) focos.add('treino');
     for (const p of perfis) {
+      if (p?.treino) focos.add('treino'); // quem tem treino sincronizado do Hevy sempre leva o documento junto
       for (const f of focosDe(p?.objetivo)) focos.add(f);
       if (/vegetar|vegan/i.test(p?.dieta || '') || /vegetar|vegan/i.test(p?.restricoes || '')) focos.add('vegetariana');
     }

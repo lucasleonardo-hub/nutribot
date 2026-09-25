@@ -1,18 +1,30 @@
 // perfis.js - Perfis enriquecidos com horários habituais e atualização de dados vindos da conversa.
 
 import { refeicoesDesde } from './mongo.js';
+import { treinoDe } from './treino.js';
 import { diasAnteriores, horariosHabituais, descreverHorarios, fusoValido } from './util.js';
 
 export const DIAS_ROTINA = 21; // janela pra aprender horários
 
 /** Acrescenta a cada perfil os horários habituais aprendidos (_hab), a descrição deles e as refeições recentes (_refs). */
+const ultimaSync = new Map(); // nome -> ms (não bate na API do Hevy a cada mensagem)
+const INTERVALO_SYNC_MS = Number(process.env.HEVY_SYNC_MIN) * 60_000 || 60 * 60_000;
+function precisaSincronizar(p) {
+  const agoraMs = Date.now();
+  if (agoraMs - (ultimaSync.get(p.nome) || 0) < INTERVALO_SYNC_MS) return false;
+  ultimaSync.set(p.nome, agoraMs);
+  return true;
+}
+
 export async function enriquecerPerfis(perfis, dia) {
   const desde = diasAnteriores(dia, DIAS_ROTINA)[0];
   return Promise.all(
     perfis.map(async (p) => {
       const refs = await refeicoesDesde(p.jids, desde).catch(() => []);
       const hab = horariosHabituais(refs);
-      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs };
+      // treino de força (Hevy): sincroniza no máximo de hora em hora por pessoa, o resto vem do Mongo
+      const t = await treinoDe(p, dia, { sincronizar: precisaSincronizar(p) }).catch(() => null);
+      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t };
     })
   );
 }

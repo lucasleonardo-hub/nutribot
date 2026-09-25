@@ -9,6 +9,7 @@ import { google } from 'googleapis';
 import { autenticacaoGoogle, salvarEmPasta } from './drive.js';
 import { colecao, registrarPesagem, salvarPerfil } from './mongo.js';
 import { semanaISO } from './util.js';
+import { temHevy } from './treino.js';
 
 const DIAS_DETALHE = 14; // dias listados um a um (peso) / noites (sono)
 const DIAS_ATIVIDADE = 7;
@@ -175,7 +176,7 @@ const diasAtras = (dia, n) => {
 };
 
 /** Texto compacto pro dossiê da Nutri (e pro Nutri-Saude.md). `hoje` = dia de referência (YYYY-MM-DD). */
-export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha = 'planilha de saúde' } = {}) {
+export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha = 'planilha de saúde', comHevy = false } = {}) {
   hoje ||= [...pesos, ...sonos, ...atividades].map((x) => x.dia).sort().pop() || new Date().toISOString().slice(0, 10);
   const linhas = [];
   linhas.push(`Fonte: Galaxy Watch via Health Connect ("${nomePlanilha}", atualiza sozinha todo dia). Última leitura: ${dm(hoje)}/${hoje.slice(0, 4)}. Bioimpedância de relógio vale pra TENDÊNCIA, não pra valor absoluto.`);
@@ -251,10 +252,12 @@ export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha =
       const partes = [];
       if (a.passos) partes.push(`${milhar(a.passos)} passos`);
       if (a.calorias) partes.push(`gasto total ${milhar(a.calorias)} kcal`);
-      if (a.treinos.length) {
+      // com o Hevy ligado, a musculação vem de lá com série e carga: aqui fica só o resto (caminhada, vôlei, corrida)
+      const treinosAqui = comHevy ? a.treinos.filter((t) => !/hevy/i.test(t.fonte || '')) : a.treinos;
+      if (treinosAqui.length) {
         // mesma atividade várias vezes no dia (3 caminhadas) vira uma só, somando os minutos
         const porNome = new Map();
-        for (const t of a.treinos) {
+        for (const t of treinosAqui) {
           const g = porNome.get(t.nome) || { nome: t.nome, min: 0, vezes: 0 };
           g.min += t.min || 0;
           g.vezes += 1;
@@ -278,7 +281,7 @@ export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha =
  * Indicadores curtos pro PERFIL (entram em TODA resposta, até no papo aleatório que não carrega o dossiê):
  * última noite, média de sono, horário que costuma deitar/levantar, passos/dia, peso e gordura mais recentes.
  */
-export function indicadoresRelogio({ pesos, sonos, atividades }, { hoje } = {}) {
+export function indicadoresRelogio({ pesos, sonos, atividades }, { hoje, comHevy = false } = {}) {
   hoje ||= [...pesos, ...sonos, ...atividades].map((x) => x.dia).sort().pop();
   if (!hoje) return null;
   const minutosDeHora = (t, madrugada = false) => {
@@ -310,7 +313,8 @@ export function indicadoresRelogio({ pesos, sonos, atividades }, { hoje } = {}) 
   }
   const dias = atividades.filter((a) => a.dia >= diasAtras(hoje, 6));
   const mPassos = media(dias.map((a) => a.passos).filter(Boolean));
-  const treinos = dias.reduce((n, a) => n + a.treinos.filter((t) => !/walk|caminh/i.test(t.nome)).length, 0);
+  // treinos7d conta só o que NÃO vem do Hevy quando ele está ligado (senão a mesma sessão contaria duas vezes)
+  const treinos = dias.reduce((n, a) => n + a.treinos.filter((t) => !/walk|caminh/i.test(t.nome) && !(comHevy && /hevy/i.test(t.fonte || ''))).length, 0);
   if (mPassos) {
     Object.assign(r, { passosMedia: Math.round(mPassos), treinos7d: treinos });
     partes.push(`~${milhar(mPassos)} passos/dia e ${treinos} treino(s) de musculação/esporte nos últimos 7 dias`);
@@ -339,7 +343,8 @@ export async function sincronizarSaude(perfil, arq, { pastaId, hoje } = {}) {
   console.log(`[saude] lendo planilha "${arq.name}" de ${perfil.nome}...`);
   const abas = await lerAbas(arq.id);
   const dados = interpretarAbas(abas);
-  const texto = resumoSaude(dados, { hoje, nomePlanilha: arq.name });
+  const comHevy = temHevy(perfil);
+  const texto = resumoSaude(dados, { hoje, nomePlanilha: arq.name, comHevy });
   console.log(`[saude] ${perfil.nome}: ${dados.pesos.length} pesagens, ${dados.sonos.length} noites, ${dados.atividades.length} dias de atividade -> resumo de ${texto.length} chars`);
 
   await cache.replaceOne({ _id: chave }, { _id: chave, arquivoId: arq.id, nome: arq.name, texto, salvoEm: new Date() }, { upsert: true });
@@ -362,7 +367,7 @@ export async function sincronizarSaude(perfil, arq, { pastaId, hoje } = {}) {
   }
   // indicadores curtos no perfil: valem em toda resposta, inclusive no papo que não carrega o dossiê
   if (jid) {
-    const relogio = indicadoresRelogio(dados, { hoje });
+    const relogio = indicadoresRelogio(dados, { hoje, comHevy });
     if (relogio?.linha) await salvarPerfil({ jids: perfil.jids, relogio }).catch((e) => console.error('[saude] indicadores no perfil:', e.message));
   }
   if (pastaId) {

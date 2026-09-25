@@ -83,7 +83,8 @@ export function preverSemana({ perfil = {}, refeicoes = [], pesagens = [], gasto
   const kcalDe = (regs) => regs.reduce((a, r) => a + (r.estimativa?.kcal || 0), 0);
   const protDe = (regs) => regs.reduce((a, r) => a + (r.estimativa?.p || 0), 0);
   const proteinaPorKg = completos.length && perfil.peso ? media(completos.map(([, regs]) => protDe(regs))) / perfil.peso : null;
-  const treinos = perfil.relogio?.treinos7d ?? null;
+  // treinos da semana: Hevy (força, com carga) + o que o relógio registrou de outros esportes, sem duplicar
+  const treinos = perfil._treino?.analise?.sessoes != null ? perfil._treino.analise.sessoes + (perfil.relogio?.treinos7d || 0) : (perfil.relogio?.treinos7d ?? null);
   const alvoDia = somarDias(dia, horizonte);
   const ultima = pesagemPerto(pesagens, dia, 3);
 
@@ -130,7 +131,10 @@ export function preverSemana({ perfil = {}, refeicoes = [], pesagens = [], gasto
       : ganho
         ? `desse ganho, ~${gramas(magraKg)} tendem a ser massa magra e ~${gramas(gorduraKg)} gordura`
         : `dessa perda, ~${gramas(gorduraKg)} tendem a ser gordura e ~${gramas(magraKg)} massa magra`;
-  const porQue = `${detalhes}; proteína ${proteinaPorKg ? `${proteinaPorKg.toFixed(1).replace('.', ',')} g/kg` : 'sem dado'}, ${treinos != null ? `${treinos} treino(s) na semana` : 'treinos sem dado'}`;
+  const progresso = perfil._treino?.analise?.progressao || [];
+  const sobe = progresso.filter((x) => x.variacao > 0.02).length;
+  const carga = progresso.length ? `, carga subindo em ${sobe} de ${progresso.length} exercícios` : '';
+  const porQue = `${detalhes}; proteína ${proteinaPorKg ? `${proteinaPorKg.toFixed(1).replace('.', ',')} g/kg` : 'sem dado'}, ${treinos != null ? `${treinos} treino(s) na semana` : 'treinos sem dado'}${carga}`;
 
   const texto =
     `PREVISÃO PRA ${dm(alvoDia)} (calculada pelo sistema, base: ${base}, confiança ${confianca}): mantido o ritmo desta semana, ` +
