@@ -2,6 +2,7 @@
 
 import { refeicoesDesde } from './mongo.js';
 import { treinoDe } from './treino.js';
+import { agendaDe } from './agenda.js';
 import { diasAnteriores, horariosHabituais, descreverHorarios, fusoValido } from './util.js';
 
 export const DIAS_ROTINA = 21; // janela pra aprender horários
@@ -24,7 +25,9 @@ export async function enriquecerPerfis(perfis, dia) {
       const hab = horariosHabituais(refs);
       // treino de força (Hevy): sincroniza no máximo de hora em hora por pessoa, o resto vem do Mongo
       const t = await treinoDe(p, dia, { sincronizar: precisaSincronizar(p) }).catch(() => null);
-      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t };
+      // agenda do Google: só de quem é dono da credencial (AGENDA_DONO); nunca vira assunto com outra pessoa
+      const ag = await agendaDe(p).catch(() => null);
+      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t, _agenda: ag };
     })
   );
 }

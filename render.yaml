@@ -53,3 +53,5 @@ services:
         sync: false
       - key: HEVY_CHAVES
         sync: false
+      - key: AGENDA_DONO
+        sync: false

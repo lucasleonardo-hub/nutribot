@@ -17,7 +17,9 @@ import { google } from 'googleapis';
 import { Readable } from 'node:stream';
 import fs from 'node:fs';
 
-const SCOPES = ['https://www.googleapis.com/auth/drive'];
+// A mesma credencial serve pro Drive e pra Agenda (só leitura). Credencial antiga sem o escopo de agenda continua
+// funcionando pro Drive; o agenda.js se desliga sozinho nesse caso.
+const SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/calendar.readonly'];
 const ROOT_ID = process.env.DRIVE_FOLDER_ID;
 
 let drive;

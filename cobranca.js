@@ -9,6 +9,7 @@ import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
 import { lembrar, garantirDiaAtual } from './dia.js';
 import { enriquecerPerfis } from './perfis.js';
+import { ocupadoAgora } from './agenda.js';
 
 export const ATRASO_COBRANCA_MIN = Number(process.env.ATRASO_COBRANCA_MIN) || 75; // minutos depois do horário habitual
 export const JANELA_COBRANCA_MIN = Number(process.env.JANELA_COBRANCA_MIN) || 120; // depois disso não cobra mais (fica pro resumo do dia)
@@ -49,6 +50,12 @@ export async function verificarCobrancas() {
       .filter((r) => r && r !== '[foto]')
       .join('; ');
     try {
+      // no meio de aula, reunião ou trabalho a cobrança vira barulho: espera o intervalo
+      const ocupado = p._agenda?.lista ? ocupadoAgora(p._agenda.lista, { perfil: p }) : null;
+      if (ocupado && ['aula', 'reunião', 'trabalho', 'viagem', 'saúde'].includes(ocupado.tipo)) {
+        console.log(`[cobranca] ${p.nome} está em "${ocupado.titulo}" (${ocupado.tipo}) até ${ocupado.terminaEm}; não cobro agora`);
+        continue;
+      }
       const msg = await ia.cobrarRefeicao({
         perfil: p,
         dia,

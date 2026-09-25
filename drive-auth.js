@@ -25,7 +25,7 @@ const oauth2 = new google.auth.OAuth2(cfg.client_id, cfg.client_secret, redirect
 const url = oauth2.generateAuthUrl({
   access_type: 'offline',
   prompt: 'consent',
-  scope: ['https://www.googleapis.com/auth/drive'],
+  scope: ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/calendar.readonly'],
 });
 
 const servidor = http.createServer(async (req, res) => {

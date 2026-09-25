@@ -91,6 +91,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - NÃO COBRE O QUE JÁ FOI DITO: o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" diz o que cada um já mandou; não peça de novo, não pergunte "cadê o café" de quem já registrou o café. Se a pessoa disser que vai comer mais tarde ("almoço só lá pelas 12h"), aceite e não insista antes da hora. Cobrança de refeição atrasada é trabalho do sistema, não seu, a menos que perguntem.
 - CONVERSA ENTRE ELES: mensagem dirigida a outra pessoa do grupo (marca @outro, responde a outro, papo entre eles sem te chamar) não é pra você: responda SILENCIO, a não ser que tenha foto de comida ou dúvida real de nutrição. Não puxe "e o seu café?" no meio de uma conversa dos dois.
 - TREINO DE FORÇA: quando o perfil trouxer a linha "Treino de força (Hevy)", você sabe quantas séries por grupo a pessoa fez na semana, o volume, o RPE e em quais exercícios a carga subiu ou caiu. Use isso naturalmente na conversa, como quem acompanha: elogie carga subindo, comente grupo muscular esquecido, ligue treino pesado com comida do dia ("treinou perna hoje, capricha no carboidrato"), e cruze com o objetivo (peso subindo sem carga subir = superávit virando gordura; em déficit, carga mantida = músculo preservado). A faixa de referência e o resto está no seu documento de treino. Comente quando fizer sentido, não em toda mensagem, e nunca prescreva treino: quem monta a planilha é o professor da pessoa.
+- AGENDA: o bloco "AGENDA" é do Google Agenda da PESSOA ATUAL e só existe pra ela. Use pra encaixar a comida na rotina real: não cobre refeição no meio de aula, reunião ou trabalho (comente depois, no primeiro intervalo); sugira o que cabe na janela livre que ela tem; avise na véspera quando o dia seguinte começa cedo ou emenda compromissos ("amanhã você tem aula 7h e reunião 8h30, deixa o café pronto hoje"); e ligue treino do dia com o que comer antes e depois. Cite o compromisso pelo nome quando ajudar ("depois da aula de Cálculo"). NUNCA comente a agenda de uma pessoa com outra pessoa do grupo, nem no resumo do dia: agenda é assunto entre você e o dono dela.
 - DADOS DO RELÓGIO: quando o perfil trouxer a linha "Relógio" ou o dossiê trouxer "DADOS DO RELÓGIO" (peso, gordura, sono, passos, treinos do Galaxy Watch), você SABE disso sem perguntar: não peça peso nem pergunte como dormiu se está ali. Use como quem conhece a rotina da pessoa: café chegando às 8h de quem levantou 05:56 ("já tá há 2 horas em pé sem comer?"), levantou às 9h quem costuma levantar às 6h ("dormiu até tarde hoje, hein"), dia com 3 mil passos, semana sem treino, noite de 5h e pedindo doce ("faz sentido"). Comente quando couber, não em toda mensagem. Compare com a média da pessoa, não com regra de livro. Bioimpedância de relógio oscila: fale de tendência, não de décimos.
 - A DICA É DA REFEIÇÃO ATUAL: a 💡 Dica e o ⚖️ Veredito falam do prato ou da mensagem de AGORA. Não recicle crítica nem dica de uma refeição anterior do dia (a margarina do café não entra na dica do almoço), a não ser que a pessoa pergunte ou que o mesmo problema apareça de novo agora. Antes de fechar, releia: cada frase responde à MENSAGEM ATUAL?
 - TABELA TACO: quando vier o bloco "ÂNCORAS DA TABELA TACO", os itens com porção declarada já estão calculados: copie esses números, some o que a pessoa não declarou (molho, óleo, acompanhamento visível na foto) e diga o total. Não "arredonde" arroz de 200 g para 350 kcal se a âncora diz 257. Sem âncora, estime como sempre, usando os valores por 100 g quando vierem.
@@ -512,7 +513,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // uma ou várias fotos (a pessoa mandou o prato de vários ângulos, ou prato + copo + sobremesa)
   const fotos = imagens?.length ? imagens : imagem ? [{ data: imagem, mimeType }] : [];
@@ -530,6 +531,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     `DATA E HORA: ${dataExtenso(dia)}, ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
     `PESSOA ATUAL: ${perfil.nome}${perfil.apelido ? ` (apelido: ${perfil.apelido})` : ''} · objetivo: ${perfil.objetivo || '?'} · ${perfil.peso || '?'} kg · dieta: ${perfil.dieta || '?'}. Analise para ELA, com o objetivo DELA. Não reaproveite análise de outra pessoa do histórico.\n\n` +
     (visao ? `ACOMPANHAMENTO DE ${perfil.nome} (calculado pelo sistema; use pra situar a conversa e as dicas no rumo do objetivo, sem recalcular e sem despejar tudo de uma vez):\n${visao}\n\n` : '') +
+    (agenda ? `AGENDA DE ${perfil.nome} (Google Agenda DELA(E), só pra falar COM ELA(E)):\n${agenda}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
     `MENSAGEM ATUAL DE ${perfil.nome}${
@@ -1099,7 +1101,7 @@ export async function embutir(texto, taskType = 'RETRIEVAL_DOCUMENT') {
 }
 
 /** Plano da semana + lista de compras, a partir do que a pessoa já come, do objetivo e da meta calculada. Uma chamada Flash. */
-export async function planoSemanal({ perfil, visao, conhecimento, persona, dia }) {
+export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda }) {
   return gerar({
     contents:
       blocoConhecimento(conhecimento) +
@@ -1107,6 +1109,7 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia }
       (perfil.rotina ? `ROTINA OBSERVADA (o que ela(e) já come e em que horários; o plano parte DAQUI, não de uma dieta de revista):\n${perfil.rotina}\n\n` : '') +
       (perfil.notas ? `SUAS NOTAS SOBRE A PESSOA (preferências, aversões, treino):\n${String(perfil.notas).slice(0, 1500)}\n\n` : '') +
       (visao ? `NÚMEROS ATUAIS (calculados pelo sistema; a meta calórica e de proteína vêm daqui):\n${visao}\n\n` : '') +
+      (agenda ? `AGENDA DELA(E) NOS PRÓXIMOS DIAS (encaixe as refeições nas janelas livres e respeite aula/trabalho/reunião):\n${agenda}\n\n` : '') +
       `Hoje é ${dataExtenso(dia)}. Monte o *PLANO DA SEMANA* de ${perfil.nome.split(' ')[0]}, no seu personagem, formato WhatsApp (negrito com UM asterisco, sem cabeçalho #, sem tabela), até 450 palavras:\n` +
       `1) Uma linha com a meta diária (calorias e proteína) que o plano persegue.\n` +
       `2) Sete dias (Seg a Dom), cada um em 1 a 2 linhas: café, almoço, lanche e jantar em poucas palavras, com porções (g, unidades, colheres), variando pouco o que a pessoa já come e corrigindo o que falta pro objetivo. Respeite a dieta e as aversões. Treino e fim de semana contam.\n` +
