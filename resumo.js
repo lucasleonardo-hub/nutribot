@@ -227,8 +227,18 @@ export function registradasHojeParaPrompt(refeicoes, perfis, dia) {
     .map((p) => {
       const minhas = refeicoes.filter((r) => r.dia === dia && ((p.jids || []).includes(r.jid) || r.nome === p.nome)).sort((a, b) => a.minutos - b.minutos);
       if (!minhas.length) return `- ${p.nome}: nada registrado ainda hoje`;
-      const itens = minhas.map((r) => `${(NOME_SLOT[r.slot] || r.slot).replace(/^\S+\s/, '')} ${r.horaLocal || r.hora}${r.estimativa?.kcal ? ` (~${Math.round(r.estimativa.kcal)} kcal)` : ''}`);
-      return `- ${p.nome}: ${itens.join('; ')}`;
+      const itens = minhas.map(
+        (r) =>
+          `${(NOME_SLOT[r.slot] || r.slot).replace(/^\S+\s/, '')} ${r.horaLocal || r.hora}` +
+          (r.estimativa?.kcal ? ` (~${Math.round(r.estimativa.kcal)} kcal, ${Math.round(r.estimativa.p || 0)} g de proteína)` : '')
+      );
+      // o total vem rotulado pra não ser confundido com o valor de UMA refeição (já aconteceu: ela chamou o total do dia de "o almoço")
+      const soma = minhas.reduce((a, r) => a + (r.estimativa?.kcal || 0), 0);
+      const somaP = minhas.reduce((a, r) => a + (r.estimativa?.p || 0), 0);
+      const total = soma
+        ? ` >> somando TODAS essas ${minhas.length} refeições, o total do dia até agora é ~${Math.round(soma)} kcal e ${Math.round(somaP)} g de proteína (isto é o DIA, não uma refeição)`
+        : '';
+      return `- ${p.nome}: ${itens.join('; ')}${total}`;
     })
     .join('\n');
 }
@@ -324,7 +334,7 @@ export function visaoPeriodo({ refeicoes = [], pesagens = [], perfil = {}, dia, 
     const diasGasto = Object.keys(gastos).filter((d) => d <= dia).sort();
     const ultimoGasto = diasGasto[diasGasto.length - 1];
     const partes = [];
-    if (hoje) partes.push(`hoje até agora comeu ${_kcal(hoje.kcal)}${gastos[dia] ? `; o relógio já estima ${_kcal(gastos[dia])} gastas (${_sinal(hoje.kcal - gastos[dia])} kcal, dia ainda incompleto)` : ' (o gasto de hoje só chega quando o relógio sincronizar)'}`);
+    if (hoje) partes.push(`hoje até agora comeu ${_kcal(hoje.kcal)} no DIA INTEIRO (soma de ${hoje.n} refeição(ões), não o valor de uma delas)${gastos[dia] ? `; o relógio já estima ${_kcal(gastos[dia])} gastas (${_sinal(hoje.kcal - gastos[dia])} kcal, dia ainda incompleto)` : ' (o gasto de hoje só chega quando o relógio sincronizar)'}`);
     if (ultimoGasto && ultimoGasto !== dia && porDia.has(ultimoGasto)) {
       const c = porDia.get(ultimoGasto).kcal;
       partes.push(`último dia completo (${_dm(ultimoGasto)}): comeu ${_kcal(c)}, gastou ${_kcal(gastos[ultimoGasto])} -> ${_sinal(c - gastos[ultimoGasto])} kcal`);
@@ -390,7 +400,7 @@ export function gastoAdaptativo({ refeicoes = [], pesagens = [], perfil = {}, di
     };
   }
   const faltam = [];
-  if (completos.length < 10) faltam.push(`${10 - completos.length} dia(s) completo(s) de registro (tem ${completos.length})`);
+  if (completos.length < 10) faltam.push(`mais ${10 - completos.length} dia(s) completo(s) de registro (tem ${completos.length} de 10)`);
   if (pesos.length < 4 || spanDias < 7) faltam.push(`pesagens cobrindo 7 dias (tem ${pesos.length})`);
   if (gastoRelogio) {
     const a = alvo(gastoRelogio);

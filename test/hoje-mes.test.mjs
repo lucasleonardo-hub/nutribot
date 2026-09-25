@@ -64,7 +64,9 @@ test('registradasHojeParaPrompt: uma linha por pessoa', () => {
     { jid: 'a@s', dia: '2026-09-23', horaLocal: '08:34', minutos: 514, slot: 'cafe', estimativa: { kcal: 470 } },
   ];
   const t = registradasHojeParaPrompt(refeicoes, perfis, '2026-09-23');
-  assert.match(t, /- Lucas Leonardo: Lanche da manhã 06:20 \(~270 kcal\); Café da manhã 08:34 \(~470 kcal\)/);
+  assert.match(t, /- Lucas Leonardo: Lanche da manhã 06:20 \(~270 kcal, 0 g de proteína\); Café da manhã 08:34 \(~470 kcal, 0 g de proteína\)/);
+  // o total vem rotulado, pra ela não chamar o total do dia de "o seu almoço"
+  assert.match(t, /somando TODAS essas 2 refeições, o total do dia até agora é ~740 kcal e 0 g de proteína \(isto é o DIA, não uma refeição\)/);
   assert.match(t, /- Ale: nada registrado ainda hoje/);
 });
 
@@ -145,7 +147,7 @@ test('visaoPeriodo: 7/30 dias, peso e balanço energético contra o objetivo', (
   const v = visaoPeriodo({ refeicoes, pesagens, perfil, dia: '2026-09-24', gastos });
   assert.match(v, /ÚLTIMOS 7 DIAS: 3 de 7 dias com registro · média nos dias registrados 1\.490 kcal e proteína 79 g\/dia \(meta 123 a 169 g\) · peso 77 kg \(23\/09\)/);
   assert.match(v, /ÚLTIMOS 30 DIAS: 4 de 30 dias com registro .* · peso 75,2 kg \(17\/09\) -> 77 kg \(23\/09\)/);
-  assert.match(v, /hoje até agora comeu 620 kcal \(o gasto de hoje só chega quando o relógio sincronizar\)/);
+  assert.match(v, /hoje até agora comeu 620 kcal no DIA INTEIRO \(soma de 1 refeição\(ões\), não o valor de uma delas\) \(o gasto de hoje só chega quando o relógio sincronizar\)/);
   assert.match(v, /último dia completo \(23\/09\): comeu 1\.650 kcal, gastou 2\.030 kcal -> −380 kcal/);
   assert.match(v, /média dos últimos 2 dias com os dois dados: −399 kcal\/dia; objetivo "hipertrofia" pede superávit de 250 a 500 kcal\/dia -> ABAIXO do alvo/);
   assert.equal(visaoPeriodo({ refeicoes: [], pesagens: [], perfil, dia: '2026-09-24' }), '');
