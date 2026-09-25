@@ -52,6 +52,29 @@ export function iniciarDrive() {
   return drive;
 }
 
+/**
+ * Checagem de saúde da credencial do Google. O acesso ao Drive hoje usa o cliente OAuth do gcloud, e o Google avisou
+ * que vai bloquear o escopo de Drive pra esse cliente ("must provide your own client ID"). Quando isso acontecer, o bot
+ * perderia as anotações, os dossiês e a planilha do relógio de um dia pro outro, sem avisar. Esta função roda todo dia
+ * e devolve o problema em uma frase, pra quem chamou avisar o admin.
+ * @returns {Promise<string|null>} null = tudo certo; string = o que aconteceu
+ */
+export async function verificarCredencial() {
+  try {
+    iniciarDrive();
+    await drive.files.list({ pageSize: 1, fields: 'files(id)', q: `'${ROOT_ID}' in parents and trashed = false` });
+    return null;
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (/invalid_grant|invalid_rapt|token has been expired or revoked/i.test(msg)) return `a autorização do Google expirou ou foi revogada (${msg.slice(0, 80)}). Rode "npm run drive-auth" pra autorizar de novo.`;
+    if (/insufficient authentication scopes|blocked|access_denied|unauthorized_client|disallowed_useragent/i.test(msg)) {
+      return `o Google bloqueou o acesso desta credencial ao Drive (${msg.slice(0, 80)}). É o bloqueio do cliente padrão do gcloud que estávamos esperando: precisa de um cliente OAuth próprio.`;
+    }
+    if (/storageQuotaExceeded/i.test(msg)) return 'o Drive recusou escrita por cota (conta cheia ou credencial de Service Account).';
+    return `falha ao falar com o Drive: ${msg.slice(0, 120)}`;
+  }
+}
+
 /** Credencial já inicializada, pra outras APIs do Google (Sheets) usarem a mesma conta. */
 export function autenticacaoGoogle() {
   iniciarDrive();

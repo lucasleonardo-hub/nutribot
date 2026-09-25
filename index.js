@@ -18,7 +18,7 @@ import cron from 'node-cron';
 import QRCode from 'qrcode';
 
 import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemoria, persistirMemoria, carregarPersona, lerConfig, salvarConfig, refeicoesDoDia } from './mongo.js';
-import { iniciarDrive } from './drive.js';
+import { iniciarDrive, verificarCredencial } from './drive.js';
 import * as ia from './gemini.js';
 import { carregarConhecimento } from './conhecimento.js';
 import { dossieDe } from './pessoas.js';
@@ -128,6 +128,13 @@ if (KEEPALIVE_URL) {
   console.log('[keepalive] desligado (sem RENDER_EXTERNAL_URL/KEEPALIVE_URL). Local isso é normal.');
 }
 
+async function checarDrive() {
+  const problema = await verificarCredencial();
+  if (!problema) return;
+  console.error(`[drive] ${problema}`);
+  await avisarAdmin('drive', `o acesso ao Google Drive parou: ${problema}`).catch(() => {});
+}
+
 // ============================================================
 // Boot
 // ============================================================
@@ -205,6 +212,9 @@ if (KEEPALIVE_URL) {
     // Dia 1 de cada mês, 4h: a Nutri estuda o que saiu de novo e revisa a base de conhecimento.
     // Fora da fila de propósito: demora minutos, tem a própria guarda (estudando) e não mexe na memória do dia.
     cron.schedule('0 4 1 * *', () => estudar({ dia: agora().dia, motivo: 'revisão mensal' }).catch((e) => console.error('[conhecimento]', e.message)), { timezone: TZ });
+    // Saúde da credencial do Google: se o Drive parar (bloqueio do cliente do gcloud, autorização revogada), eu quero
+    // saber no mesmo dia, não quando faltar uma semana de anotações.
+    cron.schedule('20 7 * * *', () => checarDrive(), { timezone: TZ });
     console.log('[cron] revisão mensal da base de conhecimento (dia 1, 04:00)');
   } catch (e) {
     console.error('[boot] falha fatal:', e);
