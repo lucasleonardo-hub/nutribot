@@ -32,7 +32,9 @@ const RE = {
   refeicao: /almo[çc]o|jantar|caf[ée] da manh|lanche|churrasco|rod[íi]zio|happy hour|anivers|jantinha|pizza|boteco|bar\b/i,
   reuniao: /reuni|meeting|call\b|daily|1:1|alinhamento|kickoff|kick-off|apresenta[çc][ãa]o|entrevista|retro|planning|briefing/i,
   trabalho: /trabalho|expediente|escrit[óo]rio|obra|visita t[ée]cnica|vistoria|plant[ãa]o|servi[çc]o/i,
-  aula: /aula|curso|faculdade|universidade|prova|semin[áa]rio|laborat[óo]rio|monitoria|tcc|est[áa]gio/i,
+  aula: /aula|curso|faculdade|universidade|prova|semin[áa]rio|laborat[óo]rio|monitoria|tcc|est[áa]gio|estudar|estudo|revis[ãa]o d[ao]|gabaritar/i,
+  // "Trabalho - Topografia" / "Trabalho de Estatística" é trabalho da FACULDADE; "Trabalho" sozinho é expediente
+  trabalhoDeFaculdade: /^\s*trabalho\s*(?:[-–—:]|de\s|da\s|do\s)/i,
   saude: /consulta|m[ée]dic|dentista|exame|fisio|terapia|psic[óo]log|vacina|laborat[óo]rio de an[áa]lise/i,
   viagem: /viagem|voo|embarque|aeroporto|check-?in|hotel|rodovi[áa]ria/i,
 };
@@ -47,6 +49,7 @@ export function classificar(evento) {
   if (RE.saude.test(t)) return 'saúde';
   if (RE.viagem.test(t)) return 'viagem';
   if (RE.refeicao.test(t)) return 'refeição';
+  if (RE.trabalhoDeFaculdade.test(evento.titulo || '')) return 'aula'; // "Trabalho - Topografia" é estudo, não expediente
   if (RE.aula.test(t)) return 'aula';
   // "reunião de obra" é reunião, não trabalho: a palavra da reunião vem antes da palavra do trabalho
   if (RE.reuniao.test(t)) return 'reunião';

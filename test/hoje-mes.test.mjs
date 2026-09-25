@@ -437,6 +437,12 @@ test('agenda: classifica aula, trabalho, reunião e treino do jeito que a pessoa
   assert.equal(ev('Voo para Floripa'), 'viagem');
   assert.equal(ev('Aniversário da vó'), 'refeição');
   assert.equal(ev('Buscar encomenda'), 'compromisso');
+  // "Trabalho - <matéria>" é trabalho da faculdade; "Trabalho" sozinho é expediente
+  assert.equal(ev('Trabalho - Tópicos Especiais de Topografia'), 'aula');
+  assert.equal(ev('Trabalho de Estatística'), 'aula');
+  assert.equal(ev('Estudar Materiais'), 'aula');
+  assert.equal(ev('Bora gabaritar a prova de amanhã'), 'aula');
+  assert.equal(ev('Trabalho'), 'trabalho');
 });
 
 test('agenda: bloco do prompt e janelas livres', () => {

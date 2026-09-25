@@ -606,6 +606,16 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
         .catch((e) => console.warn('[voz] resposta sem áudio:', e.message));
     }
   }
+  // rede de segurança: se a resposta falar do objetivo de OUTRA pessoa, fica no log pra eu ver (não reescreve nada)
+  if (resposta && eu.objetivo) {
+    const querEmagrecer = /emagre|perd|reduz|defin|secar|gordura/i.test(eu.objetivo);
+    const querGanhar = /hipertrof|ganh|massa|bulk|for[çc]a/i.test(eu.objetivo);
+    const falouGanho = /hipertrofia|ganho de massa|super[áa]vit|bulking/i.test(resposta);
+    const falouPerda = /d[ée]ficit cal[óo]rico|emagrecimento|secar/i.test(resposta);
+    if ((querEmagrecer && falouGanho && !falouPerda) || (querGanhar && falouPerda && !falouGanho)) {
+      console.warn(`[objetivo] resposta pra ${eu.nome} (objetivo: ${eu.objetivo}) usou vocabulário do objetivo oposto`);
+    }
+  }
   // água/álcool ditos agora (linha oculta HABITO da IA) -> somados no dia; aparecem no !hoje
   if (habito && typeof habito === 'object') {
     registrarHabito({ jid: jids[0], nome: perfil.nome, dia, agua_ml: Number(habito.agua_ml) || 0, alcool_doses: Number(habito.alcool_doses) || 0 }).catch((e) => console.error('[habitos]', e.message));
