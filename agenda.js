@@ -163,7 +163,14 @@ async function eventosDoIcs(inicio, fim) {
     }
   }
   if (!resultados.some((r) => r.status === 'fulfilled')) throw new Error('nenhuma agenda respondeu');
-  return lista.sort((a, b) => a.inicio.localeCompare(b.inicio));
+
+  // A agenda pública devolve os eventos sem nome ("Busy"). Se o MESMO horário já tem um evento com nome de verdade
+  // (vindo da agenda secreta), o anônimo é ruído: sai. Sozinho, ele fica — saber que está ocupado já evita cobrança.
+  const anonimo = (e) => /^(busy|ocupado|sem t[íi]tulo|\(sem t[íi]tulo\)|reservado|private|particular)$/i.test(String(e.titulo || '').trim());
+  const comNome = lista.filter((e) => !anonimo(e));
+  const seSobrepoe = (a, b) => a.inicio < b.fim && b.inicio < a.fim;
+  const limpa = lista.filter((e) => !anonimo(e) || !comNome.some((n) => seSobrepoe(e, n)));
+  return limpa.sort((a, b) => a.inicio.localeCompare(b.inicio));
 }
 
 export async function eventos({ dias = 3, fuso } = {}) {
