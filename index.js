@@ -28,6 +28,7 @@ import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin } from './whatsapp.js';
 import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes, falaProgramada } from './dia.js';
 import { avisarAdmin } from './avisos.js';
+import { paginaInicial, paginaPrivacidade } from './paginas.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { revisarPendentes } from './revisao.js';
 import { garantirIndiceVetorial } from './memoria_semantica.js';
@@ -48,7 +49,11 @@ const KEEPALIVE_MIN = Number(process.env.KEEPALIVE_MINUTES) || 10; // Render fre
 const app = express();
 
 app.get('/ping', (_req, res) => res.send('pong'));
-app.get('/', (_req, res) =>
+// Página inicial e política de privacidade: o Google exige as duas URLs pra publicar o app OAuth (Drive + Agenda).
+// O status em JSON, que era a raiz, continua em /estado.
+app.get('/', (_req, res) => res.type('html').send(paginaInicial()));
+app.get('/privacidade', (_req, res) => res.type('html').send(paginaPrivacidade()));
+app.get('/estado', (_req, res) =>
   res.json({ status: estado.statusConexao, dia: estado.memoria.dia, mensagensHoje: estado.memoria.mensagens.length, grupo: estado.memoria.grupo })
 );
 app.get('/qr', async (_req, res) => {
@@ -108,7 +113,7 @@ app.get('/logout', async (req, res) => {
     res.status(500).send('erro: ' + e.message);
   }
 });
-app.listen(PORT, () => console.log(`[http] servidor na porta ${PORT} (GET /ping, GET /qr, GET /status?token=, GET /logout?token=)`));
+app.listen(PORT, () => console.log(`[http] servidor na porta ${PORT} (GET /, /privacidade, /ping, /qr, /estado, /status?token=, /logout?token=)`));
 
 // Anti-sleep interno: o próprio bot bate na URL pública. Combine com um monitor externo (UptimeRobot / cron-job.org)
 // pra cobrir o intervalo em que o processo está reiniciando.
