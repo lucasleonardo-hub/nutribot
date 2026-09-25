@@ -79,12 +79,28 @@ const minutosDoDia = (iso, fuso) => {
  * É uma URL só de leitura, não precisa de OAuth, de app publicado nem de domínio próprio. Trate como segredo.
  * Eventos semanais (aula) vêm como regra de repetição e são expandidos aqui pra janela pedida.
  */
-async function eventosDoIcs(inicio, fim) {
-  const url = (process.env.AGENDA_ICS_URL || '').trim();
-  if (!url) return null;
+export const urlsIcs = () =>
+  (process.env.AGENDA_ICS_URL || '')
+    .split(/[\s,]+/)
+    .map((u) => u.trim())
+    .filter((u) => /^https?:\/\//.test(u));
+
+/** Nome da agenda (X-WR-CALNAME) vira pista de tipo: evento da agenda "Faculdade" é aula, da "Trabalho" é trabalho. */
+export function tipoDaAgenda(nome) {
+  const n = semAcento(nome);
+  if (/faculdade|universidade|ufsc|udesc|aula|academic|escola|curso|semestre/.test(n)) return 'aula';
+  if (/trabalho|work|empresa|predialize|escritorio|job|obra/.test(n)) return 'trabalho';
+  if (/treino|academia|gym|esporte|volei/.test(n)) return 'treino';
+  return null;
+}
+
+async function umIcs(url, inicio, fim) {
   const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS), redirect: 'follow' });
   if (!res.ok) throw new Error(`ICS HTTP ${res.status}`);
-  const dados = ical.parseICS(await res.text());
+  const texto = await res.text();
+  const agendaNome = (texto.match(/X-WR-CALNAME:(.+)/) || [])[1]?.trim() || '';
+  const dica = tipoDaAgenda(agendaNome);
+  const dados = ical.parseICS(texto);
   const lista = [];
   const noIntervalo = (d) => d >= inicio && d <= fim;
   for (const e of Object.values(dados)) {
@@ -101,6 +117,7 @@ async function eventosDoIcs(inicio, fim) {
       convidados: e.attendee ? (Array.isArray(e.attendee) ? e.attendee.length : 1) : 0,
       recorrente: Boolean(e.rrule),
       local: String(override?.location || e.location || ''),
+      agenda: agendaNome,
     });
     if (e.rrule) {
       for (const ocorrencia of e.rrule.between(inicio, fim, true) || []) {
@@ -115,14 +132,42 @@ async function eventosDoIcs(inicio, fim) {
       lista.push(bruto(e.start, e.end || new Date(new Date(e.start).getTime() + duracaoMs)));
     }
   }
-  return lista.map((ev) => ({ ...ev, tipo: classificar(ev) })).sort((a, b) => a.inicio.localeCompare(b.inicio));
+  // o nome da agenda só entra quando o título não disse nada (classificar devolve "compromisso")
+  return lista.map((ev) => {
+    const tipo = classificar(ev);
+    return { ...ev, tipo: tipo === 'compromisso' && dica ? dica : tipo };
+  });
+}
+
+/** Junta todas as agendas configuradas (a principal e as compartilhadas), sem repetir o mesmo evento. */
+async function eventosDoIcs(inicio, fim) {
+  const urls = urlsIcs();
+  if (!urls.length) return null;
+  const resultados = await Promise.allSettled(urls.map((u) => umIcs(u, inicio, fim)));
+  const lista = [];
+  const vistos = new Set();
+  for (const [i, r] of resultados.entries()) {
+    if (r.status !== 'fulfilled') {
+      console.warn(`[agenda] agenda ${i + 1} de ${urls.length} falhou: ${String(r.reason?.message).slice(0, 100)}`);
+      continue;
+    }
+    for (const ev of r.value) {
+      // mesmo evento em duas agendas (compartilhada + principal) conta uma vez só
+      const chave = `${ev.inicio}|${semAcento(ev.titulo)}`;
+      if (vistos.has(chave)) continue;
+      vistos.add(chave);
+      lista.push(ev);
+    }
+  }
+  if (!resultados.some((r) => r.status === 'fulfilled')) throw new Error('nenhuma agenda respondeu');
+  return lista.sort((a, b) => a.inicio.localeCompare(b.inicio));
 }
 
 export async function eventos({ dias = 3, fuso } = {}) {
   if (desligada) return null;
   if (cache.eventos && Date.now() - cache.em < CACHE_MS) return cache.eventos;
-  // 1) endereço iCal secreto (não precisa de OAuth)
-  if ((process.env.AGENDA_ICS_URL || '').trim()) {
+  // 1) endereços iCal secretos (não precisa de OAuth); aceita várias agendas separadas por vírgula
+  if (urlsIcs().length) {
     try {
       const inicio = new Date();
       inicio.setHours(0, 0, 0, 0);
