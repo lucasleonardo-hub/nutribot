@@ -7,6 +7,7 @@
 // Se a credencial não tiver o escopo de Agenda (calendar.readonly), tudo aqui é desligado sozinho, sem quebrar nada.
 
 import { google } from 'googleapis';
+import ical from 'node-ical';
 
 import { autenticacaoGoogle } from './drive.js';
 import { agora, fusoDe } from './util.js';
@@ -47,8 +48,10 @@ export function classificar(evento) {
   if (RE.viagem.test(t)) return 'viagem';
   if (RE.refeicao.test(t)) return 'refeição';
   if (RE.aula.test(t)) return 'aula';
+  // "reunião de obra" é reunião, não trabalho: a palavra da reunião vem antes da palavra do trabalho
+  if (RE.reuniao.test(t)) return 'reunião';
   if (RE.trabalho.test(t)) return 'trabalho';
-  if (RE.reuniao.test(t) || (evento.convidados || 0) > 0) return 'reunião';
+  if ((evento.convidados || 0) > 0) return 'reunião'; // sem palavra-chave, ter gente marcada denuncia reunião
   // aula costuma ser evento semanal fixo, em dia útil, com o nome da matéria e sem convidados
   if (evento.recorrente && !evento.diaTodo && (evento.duracaoMin || 0) >= 45 && (evento.duracaoMin || 0) <= 300) return 'aula';
   return 'compromisso';
@@ -71,9 +74,67 @@ const minutosDoDia = (iso, fuso) => {
 // ============================================================
 // Leitura da API
 // ============================================================
+/**
+ * Caminho preferido: "endereço secreto no formato iCal" da agenda (Configurações da agenda > Integrar agenda).
+ * É uma URL só de leitura, não precisa de OAuth, de app publicado nem de domínio próprio. Trate como segredo.
+ * Eventos semanais (aula) vêm como regra de repetição e são expandidos aqui pra janela pedida.
+ */
+async function eventosDoIcs(inicio, fim) {
+  const url = (process.env.AGENDA_ICS_URL || '').trim();
+  if (!url) return null;
+  const res = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS), redirect: 'follow' });
+  if (!res.ok) throw new Error(`ICS HTTP ${res.status}`);
+  const dados = ical.parseICS(await res.text());
+  const lista = [];
+  const noIntervalo = (d) => d >= inicio && d <= fim;
+  for (const e of Object.values(dados)) {
+    if (e?.type !== 'VEVENT' || e.status === 'CANCELLED') continue;
+    const duracaoMs = e.end && e.start ? new Date(e.end) - new Date(e.start) : 3600_000;
+    const excluidos = new Set(Object.keys(e.exdate || {}));
+    const bruto = (ini, fimEv, override) => ({
+      titulo: String(override?.summary || e.summary || '(sem título)').trim(),
+      descricao: String(override?.description || e.description || '').slice(0, 200),
+      inicio: new Date(ini).toISOString(),
+      fim: new Date(fimEv).toISOString(),
+      diaTodo: e.datetype === 'date',
+      duracaoMin: Math.max(1, Math.round((new Date(fimEv) - new Date(ini)) / 60000)),
+      convidados: e.attendee ? (Array.isArray(e.attendee) ? e.attendee.length : 1) : 0,
+      recorrente: Boolean(e.rrule),
+      local: String(override?.location || e.location || ''),
+    });
+    if (e.rrule) {
+      for (const ocorrencia of e.rrule.between(inicio, fim, true) || []) {
+        const chave = new Date(ocorrencia).toISOString().slice(0, 10);
+        if (excluidos.has(chave)) continue;
+        const override = e.recurrences?.[chave];
+        const ini = override?.start || ocorrencia;
+        const fimEv = override?.end || new Date(new Date(ini).getTime() + duracaoMs);
+        lista.push(bruto(ini, fimEv, override));
+      }
+    } else if (e.start && noIntervalo(new Date(e.start))) {
+      lista.push(bruto(e.start, e.end || new Date(new Date(e.start).getTime() + duracaoMs)));
+    }
+  }
+  return lista.map((ev) => ({ ...ev, tipo: classificar(ev) })).sort((a, b) => a.inicio.localeCompare(b.inicio));
+}
+
 export async function eventos({ dias = 3, fuso } = {}) {
   if (desligada) return null;
   if (cache.eventos && Date.now() - cache.em < CACHE_MS) return cache.eventos;
+  // 1) endereço iCal secreto (não precisa de OAuth)
+  if ((process.env.AGENDA_ICS_URL || '').trim()) {
+    try {
+      const inicio = new Date();
+      inicio.setHours(0, 0, 0, 0);
+      const lista = await eventosDoIcs(inicio, new Date(inicio.getTime() + dias * 86400000));
+      cache = { em: Date.now(), eventos: lista };
+      return lista;
+    } catch (e) {
+      console.warn('[agenda] falha no endereço iCal:', String(e.message).slice(0, 140));
+      return null;
+    }
+  }
+  // 2) API do Google (precisa do escopo calendar.readonly na credencial)
   try {
     const cal = google.calendar({ version: 'v3', auth: autenticacaoGoogle() });
     const inicio = new Date();

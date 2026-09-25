@@ -10,6 +10,7 @@ import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo } from '../util.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
+import { classificar, blocoAgenda, ocupadoAgora } from '../agenda.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
 import { falasDe } from '../gemini.js';
 
@@ -420,4 +421,37 @@ test('projetarMeta: prazo, ritmo necessário e projeção sem meta', () => {
   const semMeta = projetarMeta({ perfil: {}, deltaKgSemana: -0.4, pesoAtual: 74, dia: '2026-09-27' });
   assert.match(semMeta, /PROJEÇÃO \(sem meta combinada\)/);
   assert.match(semMeta, /em 1 mês ~72,3 kg, em 3 meses ~68,8 kg e em 6 meses ~63,6 kg/);
+});
+
+test('agenda: classifica aula, trabalho, reunião e treino do jeito que a pessoa escreve', () => {
+  const ev = (titulo, extra = {}) => classificar({ titulo, ...extra });
+  assert.equal(ev('Cálculo III', { recorrente: true, duracaoMin: 100 }), 'aula');
+  assert.equal(ev('Trabalho'), 'trabalho');
+  assert.equal(ev('Reunião de obra - Predialize'), 'reunião');
+  assert.equal(ev('Alinhamento com cliente', { convidados: 3 }), 'reunião');
+  assert.equal(ev('Daily', { convidados: 5 }), 'reunião');
+  assert.equal(ev('Vôlei'), 'treino');
+  assert.equal(ev('Academia 7h'), 'treino');
+  assert.equal(ev('Consulta dermatologista'), 'saúde');
+  assert.equal(ev('Churrasco na casa do Heitor'), 'refeição');
+  assert.equal(ev('Voo para Floripa'), 'viagem');
+  assert.equal(ev('Aniversário da vó'), 'refeição');
+  assert.equal(ev('Buscar encomenda'), 'compromisso');
+});
+
+test('agenda: bloco do prompt e janelas livres', () => {
+  const perfil = { nome: 'Lucas', fuso: 'America/Sao_Paulo' };
+  const iso = (dia, h, m) => new Date(Date.UTC(2026, 8, dia, h + 3, m)).toISOString(); // 3h = BRT -> UTC
+  const lista = [
+    { titulo: 'Cálculo III', inicio: iso(25, 10, 0), fim: iso(25, 11, 40), diaTodo: false, tipo: 'aula' },
+    { titulo: 'Reunião de obra', inicio: iso(25, 14, 0), fim: iso(25, 15, 30), diaTodo: false, tipo: 'reunião' },
+  ];
+  const bloco = blocoAgenda(lista, { perfil, dias: 2 });
+  assert.match(bloco, /10:00-11:40 Cálculo III \(aula\)/);
+  assert.match(bloco, /janelas livres: 07:00-10:00, 11:40-14:00, 15:30-23:00/);
+  // o evento é de hoje (25/09): às 10:30 ela sabe que a pessoa está em aula até 11:40
+  const dentro = ocupadoAgora(lista, { perfil, minutos: 10 * 60 + 30 });
+  assert.equal(dentro?.tipo, 'aula');
+  assert.equal(dentro?.terminaEm, '11:40');
+  assert.equal(ocupadoAgora(lista, { perfil, minutos: 12 * 60 }), null);
 });
