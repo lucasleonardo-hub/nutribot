@@ -279,6 +279,26 @@ export async function apagarRevisaoPendente(id) {
   await colecao('revisoes_pendentes').deleteOne({ _id: id });
 }
 
+// ---------- Previsões semanais ("nesse ritmo, domingo que vem você está com X kg") ----------
+
+export async function salvarPrevisao(p) {
+  // uma por pessoa por domingo: refazer o resumo no mesmo dia substitui
+  await colecao('previsoes').replaceOne({ jid: p.jid, feitaEm: p.feitaEm }, { ...p, criadoEm: new Date() }, { upsert: true });
+}
+
+/** Previsão ainda não conferida cujo alvo é hoje (ou já passou). */
+export async function previsaoAberta(jids, dia) {
+  return colecao('previsoes')
+    .find({ jid: { $in: jids }, conferida: { $ne: true }, alvoDia: { $lte: dia } })
+    .sort({ alvoDia: -1 })
+    .limit(1)
+    .next();
+}
+
+export async function marcarPrevisaoConferida(id, resultado) {
+  await colecao('previsoes').updateOne({ _id: id }, { $set: { conferida: true, resultado, conferidaEm: new Date() } });
+}
+
 // ---------- Hábitos do dia (água em ml, álcool em doses), somados por pessoa e dia ----------
 
 export async function registrarHabito({ jid, nome, dia, agua_ml = 0, alcool_doses = 0 }) {

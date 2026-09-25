@@ -672,7 +672,7 @@ export async function resumoDiario({ dia, perfis, historico, persona, refeicoes 
 /**
  * @param {string} p.tabela  totais por dia e média, compilados em código (resumo.js compilarSemana). A IA não soma nada.
  */
-export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, tabela }) {
+export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, tabela, previsoes }) {
   const corpo =
     resumosDiarios.map((r) => `### ${r.dia}\n${r.conteudo.slice(0, 1500)}`).join('\n\n') || '(nenhum resumo diário encontrado)';
   return gerar({
@@ -680,8 +680,11 @@ export async function resumoSemanal({ semana, perfis, resumosDiarios, persona, t
       `Semana ${semana}. PERFIS:\n${blocoPerfis(perfis)}\n\n` +
       `NÚMEROS DA SEMANA, POR PESSOA (compilados pelo sistema; use ESTES valores, sem recalcular):\n${tabela}\n\n` +
       `RESUMOS DIÁRIOS DA SEMANA (contexto de acertos, derrapadas e momentos):\n${corpo}\n\n` +
-      `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), a média diária do bloco de números escrita por extenso ("~X kcal · Proteína X g · Carboidratos X g · Gorduras X g") e se bate a meta de proteína, os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Dias sem registro contam como sumiço: cobre com carinho. Feche com o "🏆 Placar da semana" (todo mundo do grupo) e um incentivo final com humor. Nutrientes sempre por extenso, nunca P/C/G. Use os [[links]] e poucos emojis.`,
-    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 4000 },
+      (previsoes
+        ? `APOSTA DA SEMANA, POR PESSOA (calculada pelo sistema; a CONFERÊNCIA é da previsão que você fez no domingo passado e a PREVISÃO é a nova. Use os números como estão):\n${previsoes}\n\n`
+        : '') +
+      `Escreva o *RESUMO DA SEMANA* (máx. 350 palavras, formato WhatsApp, sem cabeçalhos #), no seu personagem: simpática, sincera, engraçada. Para cada pessoa: tendência da semana (melhorou/piorou), a média diária do bloco de números escrita por extenso ("~X kcal · Proteína X g · Carboidratos X g · Gorduras X g") e se bate a meta de proteína, os 3 momentos que mais atrapalharam, o melhor momento, se está no caminho do objetivo, e uma 💡 Meta pra próxima semana (mensurável). Dias sem registro contam como sumiço: cobre com carinho. Depois das pessoas, escreva a seção *🔮 Minha aposta* em até 120 palavras: primeiro assuma o resultado da previsão passada quando houver conferência ("domingo passado eu disse que você ia X; deu Y — acertei / cheguei perto / errei feio"), com humor e sem se justificar demais, e diga em uma frase o que explica a diferença; depois crave a previsão da próxima semana de cada um em uma linha (peso previsto e quanto de massa magra e gordura), lembrando que é estimativa e que só vale se registrarem tudo e subirem na balança. Quem estiver sem dados suficientes, cobre o que falta. Feche com o "🏆 Placar da semana" (todo mundo do grupo) e um incentivo final com humor. Nutrientes sempre por extenso, nunca P/C/G. Use os [[links]] e poucos emojis.`,
+    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 5000 },
   });
 }
 

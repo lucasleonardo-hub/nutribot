@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, metaBalanco, gastoAdaptativo, sequenciaDe, placarSemana } from '../resumo.js';
 import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
+import { preverSemana, conferirPrevisao, pesagemPerto, somarDias } from '../previsao.js';
 import { textoParaFala } from '../voz.js';
 import { separarAtualizacao, montarSystem } from '../gemini.js';
 import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo } from '../util.js';
@@ -316,4 +317,75 @@ test('pareceConsumo: separa "tomei esse iogurte" de "vale a pena esse iogurte?"'
   assert.equal(pareceConsumo('comi isso agora'), true);
   assert.equal(pareceConsumo('esse iogurte é bom? vale a pena comprar'), false);
   assert.equal(pareceConsumo('olha o rótulo desse whey novo'), false);
+});
+
+test('preverSemana: superávit do relógio vira ganho previsto, com divisão magra/gordura', () => {
+  const perfil = { nome: 'Lucas', peso: 76, objetivo: 'hipertrofia', relogio: { treinos7d: 4 } };
+  const refeicoes = [];
+  const gastos = {};
+  // 6 dias completos: 3.000 kcal comidas x 2.450 gastas = +550/dia; proteína 160 g (2,1 g/kg)
+  for (let i = 19; i <= 24; i++) {
+    const d = `2026-09-${i}`;
+    for (let k = 0; k < 3; k++) refeicoes.push({ dia: d, estimativa: { kcal: 1000, p: 160 / 3 } });
+    gastos[d] = 2450;
+  }
+  const pesagens = [{ dia: '2026-09-18', peso: 75.6 }, { dia: '2026-09-25', peso: 76.0 }];
+  const p = preverSemana({ perfil, refeicoes, pesagens, gastos, dia: '2026-09-25' });
+  assert.equal(p.alvoDia, '2026-10-02');
+  assert.equal(p.base, 'balanço energético');
+  assert.equal(p.confianca, 'alta');
+  assert.ok(Math.abs(p.deltaKg - 0.5) < 0.01, `delta ${p.deltaKg}`); // 550*7/7700 = 0,5 kg
+  assert.ok(Math.abs(p.pesoPrevisto - 76.5) < 0.01);
+  assert.ok(Math.abs(p.magraKg - 0.225) < 0.01); // proteína boa + treino = 45% magra
+  assert.match(p.texto, /PREVISÃO PRA 02\/10 .*base: balanço energético, confiança alta.*\+0,50 kg/);
+  assert.match(p.texto, /225 g tendem a ser massa magra/);
+});
+
+test('preverSemana: sem relógio usa a tendência da balança; sem nada, não chuta', () => {
+  const perfil = { nome: 'Ale', peso: 74, objetivo: 'emagrecer' };
+  const pesagens = [
+    { dia: '2026-09-07', peso: 75.0 },
+    { dia: '2026-09-12', peso: 74.7 },
+    { dia: '2026-09-18', peso: 74.4 },
+    { dia: '2026-09-25', peso: 74.0 },
+  ];
+  const p = preverSemana({ perfil, refeicoes: [], pesagens, dia: '2026-09-25' });
+  assert.equal(p.base, 'tendência da balança');
+  assert.ok(p.deltaKg < -0.2 && p.deltaKg > -0.6, `delta ${p.deltaKg}`);
+  assert.match(p.texto, /tendem a ser gordura/);
+
+  const vazio = preverSemana({ perfil, refeicoes: [], pesagens: [], dia: '2026-09-25' });
+  assert.equal(vazio.semDados, true);
+  assert.match(vazio.texto, /ainda não dá pra prever. Falta/);
+});
+
+test('conferirPrevisao: compara com a balança e classifica acerto', () => {
+  const previsao = { feitaEm: '2026-09-18', diaInicial: '2026-09-18', alvoDia: '2026-09-25', pesoInicial: 75.6, deltaKg: 0.5, pesoPrevisto: 76.1, magraKg: 0.225 };
+  const perto = conferirPrevisao({ previsao, pesagens: [{ dia: '2026-09-18', peso: 75.6 }, { dia: '2026-09-25', peso: 76.0 }], dia: '2026-09-25' });
+  assert.equal(perto.acerto, 'cheio'); // errou por 100 g
+  assert.match(perto.texto, /eu disse \+0,50 kg .*deu \+0,40 kg/);
+  assert.match(perto.texto, /ACERTEI, na direção certa/);
+
+  const longe = conferirPrevisao({ previsao, pesagens: [{ dia: '2026-09-18', peso: 75.6 }, { dia: '2026-09-25', peso: 74.9 }], dia: '2026-09-25' });
+  assert.equal(longe.acerto, 'errou');
+  assert.match(longe.texto, /ERREI, na direção errada/);
+
+  const semBalanca = conferirPrevisao({ previsao, pesagens: [{ dia: '2026-09-18', peso: 75.6 }], dia: '2026-09-25' });
+  assert.equal(semBalanca.semPesagem, true);
+
+  // com bioimpedância nas duas pontas, confere massa magra também
+  const comGordura = conferirPrevisao({
+    previsao,
+    pesagens: [{ dia: '2026-09-18', peso: 75.6, gordura: 18.0 }, { dia: '2026-09-25', peso: 76.0, gordura: 18.1 }],
+    dia: '2026-09-25',
+  });
+  assert.match(comGordura.texto, /Pela bioimpedância do relógio: massa magra \+0,25 kg e gordura \+0,15 kg/);
+  assert.match(comGordura.texto, /Eu tinha estimado \+0,23 kg de magra/);
+});
+
+test('pesagemPerto e somarDias', () => {
+  const ps = [{ dia: '2026-09-20', peso: 75 }, { dia: '2026-09-24', peso: 76 }];
+  assert.equal(pesagemPerto(ps, '2026-09-25')?.peso, 76);
+  assert.equal(pesagemPerto(ps, '2026-09-30'), null);
+  assert.equal(somarDias('2026-09-25', 7), '2026-10-02');
 });

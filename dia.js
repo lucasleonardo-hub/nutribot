@@ -1,13 +1,14 @@
 // dia.js - Memória do dia, daily note no Drive, virada e fechamento do dia (resumo, momentos, gírias, rotina, notas,
 // persona), fechamento da semana e a revisão mensal da base de conhecimento.
 
-import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde, ultimaPesagem } from './mongo.js';
+import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde, ultimaPesagem, salvarPrevisao, previsaoAberta, marcarPrevisaoConferida } from './mongo.js';
 import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { atualizarConhecimento } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
 import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo, placarSemana } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
+import { preverSemana, conferirPrevisao } from './previsao.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
 import { configGrafico, renderizar } from './graficos.js';
@@ -278,7 +279,41 @@ export async function fecharSemana({ dia, perfis, grupo }) {
   const registros = await refeicoesDesde(todasJids, dias[0]).catch(() => []);
   const tabela = compilarSemana(registros, perfis, dias);
   console.log(`[semana] tabela:\n${tabela}`);
-  const resumo = ia.separarAtualizacao(await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona: estado.persona, tabela })).texto || '(sem resumo)';
+
+  // Aposta da semana: confere a previsão do domingo passado e faz a do próximo (tudo calculado em código)
+  const previsoes = [];
+  for (const p of perfis) {
+    const jids = p.jids || [];
+    if (!jids.length) continue;
+    const linhas = [];
+    const refs30 = await refeicoesDesde(jids, diasAnteriores(dia, 30)[0]).catch(() => []);
+    const pes30 = await pesagensDesde(jids, diasAnteriores(dia, 30)[0]).catch(() => []);
+    try {
+      const anterior = await previsaoAberta(jids, dia);
+      if (anterior) {
+        const conf = conferirPrevisao({ previsao: anterior, pesagens: pes30, dia });
+        if (conf) {
+          linhas.push(conf.texto);
+          await marcarPrevisaoConferida(anterior._id, { realKg: conf.realKg ?? null, erroKg: conf.erroKg ?? null, acerto: conf.acerto || 'sem pesagem' }).catch(() => {});
+          console.log(`[previsao] ${p.nome}: ${conf.acerto || 'sem pesagem'} (previu ${anterior.deltaKg?.toFixed?.(2)} kg, deu ${conf.realKg?.toFixed?.(2) ?? '?'} kg)`);
+        }
+      }
+      const nova = preverSemana({ perfil: p, refeicoes: refs30, pesagens: pes30, gastos: p.relogio?.gastos, dia });
+      if (nova) {
+        linhas.push(nova.texto);
+        if (!nova.semDados) {
+          await salvarPrevisao({ jid: jids[0], nome: p.nome, feitaEm: dia, alvoDia: nova.alvoDia, pesoInicial: nova.pesoInicial, diaInicial: nova.diaInicial, deltaKg: nova.deltaKg, pesoPrevisto: nova.pesoPrevisto, magraKg: nova.magraKg, gorduraKg: nova.gorduraKg, base: nova.base, confianca: nova.confianca }).catch((e) => console.error('[previsao] falha ao salvar:', e.message));
+          console.log(`[previsao] ${p.nome}: ${nova.texto.slice(0, 120)}`);
+        }
+      }
+    } catch (e) {
+      console.error(`[previsao] falha para ${p.nome}:`, e.message);
+    }
+    if (linhas.length) previsoes.push(`${p.nome}:\n${linhas.join('\n')}`);
+  }
+  const blocoPrevisoes = previsoes.join('\n\n');
+
+  const resumo = ia.separarAtualizacao(await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona: estado.persona, tabela, previsoes: blocoPrevisoes })).texto || '(sem resumo)';
   await enviar(grupo, `📆 *RESUMO DA SEMANA ${semana}*\n\n${resumo}`);
   // Gráfico de 30 dias por pessoa (calorias, gasto do relógio, meta e peso), pra quem já tem registro
   for (const p of perfis) {
