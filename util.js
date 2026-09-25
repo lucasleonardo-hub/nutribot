@@ -195,5 +195,8 @@ const RE_CORRECAO = /n[ãa]o (é|era|foi|tinha|tem)|na verdade|era[m]?\s+\d|tinh
 
 /** Pedido de sugestão ou plano futuro ("vou tentar comer algo às 18h", "tem algo pra comprar?") e não relato do que comeu. */
 export const parecePedidoOuPlano = (t) => RE_PEDIDO.test(String(t || '')) && !RE_CONSUMO.test(String(t || ''));
+
+/** A pessoa disse que CONSUMIU ("comi", "tomei", "almocei", "acabei de...")? Usado pra nao tratar rotulo de algo consumido como "nao e comida". */
+export const pareceConsumo = (t) => RE_CONSUMO.test(String(t || ''));
 /** Correção de uma análise recente ("não é picanha, é fígado", "eram 2 pães"). */
 export const pareceCorrecao = (t) => RE_CORRECAO.test(String(t || '')) && !parecePedidoOuPlano(t);

@@ -11,7 +11,7 @@ import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
 import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
-import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pedidoDeAudio } from './util.js';
+import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
 import { sintetizar } from './voz.js';
@@ -564,7 +564,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // sugestões também trazem estimativa e não são refeição. Exceção: foto com legenda de comida cuja resposta veio sem
   // bloco (modelo reserva esqueceu) e não diz que é receita/rótulo/produto: registra mesmo assim, sem estimativa.
   const temBloco = /Refei[cç][aã]o:\*?\s*(caf[eé]|almo[cç]o|lanche|jantar|ceia)|O que eu vi/i.test(resposta || '');
-  const naoEhComida = /receita|r[óo]tulo|tabela nutricional|card[áa]pio|produto|embalagem|print|suplemento novo|não (é|foi) (uma )?refei|comeu isso ou/i.test(resposta || '');
+  // "rótulo", "tabela nutricional" etc. na resposta normalmente significam "não foi refeição". Mas quando a pessoa DIZ que
+  // consumiu ("tomei 200 ml desse iogurte" + foto do rótulo), é refeição sim: aí só a negação explícita dela vale.
+  const RE_NAO_COMIDA = pareceConsumo(texto)
+    ? /não (é|foi) (uma )?refei|comeu isso ou|é (só )?(pra|para) avaliar/i
+    : /receita|r[óo]tulo|tabela nutricional|card[áa]pio|produto|embalagem|print|suplemento novo|não (é|foi) (uma )?refei|comeu isso ou/i;
+  const naoEhComida = RE_NAO_COMIDA.test(resposta || '');
   const blocoDeSugestao = /O que eu vi:\*?[^\n]*sugest|Estimativa[^:\n]*:[^\n]*sugest/i.test(resposta || '');
   // Texto sem foto que é pedido de sugestão ou plano futuro NUNCA vira refeição, mesmo que a IA tenha posto o bloco
   const ehPedido = !temImagem && !temAudio && parecePedidoOuPlano(texto);

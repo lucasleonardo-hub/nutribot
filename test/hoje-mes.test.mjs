@@ -5,7 +5,7 @@ import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
 import { textoParaFala } from '../voz.js';
 import { separarAtualizacao, montarSystem } from '../gemini.js';
-import { pedidoDeAudio, semLinhaAtualizar } from '../util.js';
+import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo } from '../util.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
@@ -307,4 +307,11 @@ test('agruparFotos: fotos seguidas da mesma pessoa viram uma análise só', () =
   assert.equal(g[0].extras.length, 5); // 6 fotos na primeira análise
   assert.equal(g.length, 2); // as 3 que sobraram viram uma segunda análise
   assert.equal(g[1].extras.length, 2);
+});
+
+test('pareceConsumo: separa "tomei esse iogurte" de "vale a pena esse iogurte?"', () => {
+  assert.equal(pareceConsumo('mandei a foto do prato e tomei também 200ml desse iogurte, segue o rótulo'), true);
+  assert.equal(pareceConsumo('comi isso agora'), true);
+  assert.equal(pareceConsumo('esse iogurte é bom? vale a pena comprar'), false);
+  assert.equal(pareceConsumo('olha o rótulo desse whey novo'), false);
 });
