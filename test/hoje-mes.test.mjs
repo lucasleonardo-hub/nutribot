@@ -10,7 +10,7 @@ import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo } from '../util.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
-import { classificar, blocoAgenda, ocupadoAgora } from '../agenda.js';
+import { classificar, blocoAgenda, ocupadoAgora, limparAnonimos } from '../agenda.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
 import { falasDe } from '../gemini.js';
 
@@ -460,4 +460,20 @@ test('agenda: bloco do prompt e janelas livres', () => {
   assert.equal(dentro?.tipo, 'aula');
   assert.equal(dentro?.terminaEm, '11:40');
   assert.equal(ocupadoAgora(lista, { perfil, minutos: 12 * 60 }), null);
+});
+
+test('agenda: evento sem nome ("Busy") só some quando o horário já tem um evento com nome', () => {
+  const iso = (dia, h, m) => new Date(Date.UTC(2026, 8, dia, h + 3, m)).toISOString();
+  const nomeado = { titulo: 'Reunião de obra', inicio: iso(25, 14, 0), fim: iso(25, 15, 30) };
+  const sobreposto = { titulo: 'Busy', inicio: iso(25, 14, 0), fim: iso(25, 15, 30) };
+  const parcial = { titulo: 'Busy', inicio: iso(25, 15, 0), fim: iso(25, 16, 0) };
+  const sozinho = { titulo: 'Busy', inicio: iso(25, 20, 0), fim: iso(25, 21, 0) };
+
+  const limpa = limparAnonimos([nomeado, sobreposto, parcial, sozinho]);
+  assert.deepEqual(
+    limpa.map((e) => `${e.titulo} ${e.inicio.slice(11, 16)}`),
+    ['Reunião de obra 17:00', 'Busy 23:00']
+  );
+  // sem nenhum evento nomeado, os anônimos ficam (saber que está ocupado já serve)
+  assert.equal(limparAnonimos([sobreposto, sozinho]).length, 2);
 });

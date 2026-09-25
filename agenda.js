@@ -142,6 +142,17 @@ async function umIcs(url, inicio, fim) {
   });
 }
 
+/**
+ * A agenda pública devolve os eventos sem nome ("Busy"). Se o MESMO horário já tem um evento com nome de verdade
+ * (vindo da agenda secreta), o anônimo é ruído e sai. Sozinho ele fica: saber que está ocupado já evita cobrança.
+ */
+export function limparAnonimos(lista) {
+  const anonimo = (e) => /^(busy|ocupado|sem t[íi]tulo|\(sem t[íi]tulo\)|reservado|private|particular)$/i.test(String(e.titulo || '').trim());
+  const seSobrepoe = (a, b) => a.inicio < b.fim && b.inicio < a.fim;
+  const comNome = lista.filter((e) => !anonimo(e));
+  return lista.filter((e) => !anonimo(e) || !comNome.some((n) => seSobrepoe(e, n)));
+}
+
 /** Junta todas as agendas configuradas (a principal e as compartilhadas), sem repetir o mesmo evento. */
 async function eventosDoIcs(inicio, fim) {
   const urls = urlsIcs();
@@ -164,13 +175,7 @@ async function eventosDoIcs(inicio, fim) {
   }
   if (!resultados.some((r) => r.status === 'fulfilled')) throw new Error('nenhuma agenda respondeu');
 
-  // A agenda pública devolve os eventos sem nome ("Busy"). Se o MESMO horário já tem um evento com nome de verdade
-  // (vindo da agenda secreta), o anônimo é ruído: sai. Sozinho, ele fica — saber que está ocupado já evita cobrança.
-  const anonimo = (e) => /^(busy|ocupado|sem t[íi]tulo|\(sem t[íi]tulo\)|reservado|private|particular)$/i.test(String(e.titulo || '').trim());
-  const comNome = lista.filter((e) => !anonimo(e));
-  const seSobrepoe = (a, b) => a.inicio < b.fim && b.inicio < a.fim;
-  const limpa = lista.filter((e) => !anonimo(e) || !comNome.some((n) => seSobrepoe(e, n)));
-  return limpa.sort((a, b) => a.inicio.localeCompare(b.inicio));
+  return limparAnonimos(lista).sort((a, b) => a.inicio.localeCompare(b.inicio));
 }
 
 export async function eventos({ dias = 3, fuso } = {}) {
