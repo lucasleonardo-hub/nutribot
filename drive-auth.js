@@ -25,7 +25,12 @@ const oauth2 = new google.auth.OAuth2(cfg.client_id, cfg.client_secret, redirect
 const url = oauth2.generateAuthUrl({
   access_type: 'offline',
   prompt: 'consent',
-  scope: ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/calendar.readonly'],
+  scope: [
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/calendar.readonly',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'openid',
+  ],
 });
 
 const servidor = http.createServer(async (req, res) => {
@@ -39,9 +44,22 @@ const servidor = http.createServer(async (req, res) => {
       client_secret: cfg.client_secret,
       refresh_token: tokens.refresh_token,
     };
+    if (!tokens.refresh_token) {
+      res.end('<h2>Faltou o refresh_token. Remova o acesso em myaccount.google.com/permissions e rode de novo.</h2>');
+      console.error('\n❌ O Google não devolveu refresh_token. Revogue o acesso do app em https://myaccount.google.com/permissions e rode de novo.');
+      return;
+    }
     fs.writeFileSync(ARQ_SAIDA, JSON.stringify(saida, null, 2));
-    res.end('<h2>Pronto! Pode fechar esta aba.</h2>');
-    console.log(`\n✅ ${ARQ_SAIDA} salvo. Coloque no .env: GOOGLE_SERVICE_ACCOUNT_FILE=${ARQ_SAIDA}`);
+    // qual conta foi autorizada (erro clássico: escolher a conta errada na tela do Google)
+    let conta = '';
+    try {
+      const partes = String(tokens.id_token || '').split('.');
+      if (partes[1]) conta = JSON.parse(Buffer.from(partes[1], 'base64url').toString()).email || '';
+    } catch {}
+    const escopos = String(tokens.scope || '');
+    res.end(`<h2>Pronto! Pode fechar esta aba.</h2><p>Conta: ${conta || '(não informada)'}</p>`);
+    console.log(`\n✅ ${ARQ_SAIDA} salvo${conta ? ` para a conta ${conta}` : ''}. Coloque no .env: GOOGLE_SERVICE_ACCOUNT_FILE=${ARQ_SAIDA}`);
+    console.log(`   Drive: ${escopos.includes('auth/drive') ? 'ok' : 'FALTOU'} · Agenda: ${escopos.includes('calendar.readonly') ? 'ok' : 'FALTOU'}`);
   } catch (e) {
     res.end('Erro: ' + e.message);
     console.error(e);
@@ -51,7 +69,7 @@ const servidor = http.createServer(async (req, res) => {
 });
 
 servidor.listen(PORTA, () => {
-  console.log('Abrindo o navegador para autorizar o acesso ao Drive...\n' + url);
+  console.log('Abrindo o navegador para autorizar Drive + Agenda. ESCOLHA A CONTA CERTA (a mesma dona da pasta do bot no Drive).\n' + url);
   const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
   exec(cmd);
 });
