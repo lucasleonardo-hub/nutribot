@@ -39,5 +39,10 @@ export function aplicarAtualizacao(perfil, a, dia) {
   if (fusoValido(a.fuso)) set('fuso', a.fuso);
   set('dieta', str(a.dieta)?.toLowerCase());
   set('restricoes', str(a.restricoes));
+  // meta com prazo ("quero chegar a 80 kg até março"): vira projeção no resumo de domingo
+  const meta = num(a.meta_peso_kg ?? a.meta_peso);
+  if (meta && meta > 25 && meta < 400) set('metaPeso', meta);
+  const prazo = str(a.meta_prazo);
+  if (prazo && /^\d{4}-\d{2}(-\d{2})?$/.test(prazo)) set('metaPrazo', prazo.length === 7 ? `${prazo}-28` : prazo);
   return Object.keys(novo).length > 2 ? novo : null;
 }

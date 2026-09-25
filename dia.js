@@ -4,11 +4,11 @@
 import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde, ultimaPesagem, salvarPrevisao, previsaoAberta, marcarPrevisaoConferida } from './mongo.js';
 import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
-import { atualizarConhecimento } from './conhecimento.js';
+import { atualizarConhecimento, docsPara } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
 import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo, placarSemana } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
-import { preverSemana, conferirPrevisao } from './previsao.js';
+import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta } from './previsao.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
 import { configGrafico, renderizar } from './graficos.js';
@@ -302,6 +302,10 @@ export async function fecharSemana({ dia, perfis, grupo }) {
       if (nova) {
         linhas.push(nova.texto);
         if (!nova.semDados) {
+          const ritmo = avaliarRitmo({ peso: nova.pesoInicial, deltaKg: nova.deltaKg, objetivo: p.objetivo });
+          if (ritmo) linhas.push(ritmo);
+          const projecao = projetarMeta({ perfil: p, deltaKgSemana: nova.deltaKg, pesoAtual: nova.pesoInicial, dia });
+          if (projecao) linhas.push(projecao);
           await salvarPrevisao({ jid: jids[0], nome: p.nome, feitaEm: dia, alvoDia: nova.alvoDia, pesoInicial: nova.pesoInicial, diaInicial: nova.diaInicial, deltaKg: nova.deltaKg, pesoPrevisto: nova.pesoPrevisto, magraKg: nova.magraKg, gorduraKg: nova.gorduraKg, base: nova.base, confianca: nova.confianca }).catch((e) => console.error('[previsao] falha ao salvar:', e.message));
           console.log(`[previsao] ${p.nome}: ${nova.texto.slice(0, 120)}`);
         }
@@ -313,7 +317,9 @@ export async function fecharSemana({ dia, perfis, grupo }) {
   }
   const blocoPrevisoes = previsoes.join('\n\n');
 
-  const resumo = ia.separarAtualizacao(await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona: estado.persona, tabela, previsoes: blocoPrevisoes })).texto || '(sem resumo)';
+  // a base de conhecimento entra aqui pra ela julgar o ritmo com a faixa recomendada (0,25-0,5%/semana pra ganho etc.)
+  const conhecimentoSemana = docsPara(perfis, { texto: 'ritmo de ganho e perda de peso por semana superávit déficit proteína' });
+  const resumo = ia.separarAtualizacao(await ia.resumoSemanal({ semana, perfis, resumosDiarios, persona: estado.persona, tabela, previsoes: blocoPrevisoes, conhecimento: conhecimentoSemana })).texto || '(sem resumo)';
   await enviar(grupo, `📆 *RESUMO DA SEMANA ${semana}*\n\n${resumo}`);
   // Gráfico de 30 dias por pessoa (calorias, gasto do relógio, meta e peso), pra quem já tem registro
   for (const p of perfis) {

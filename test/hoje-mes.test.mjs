@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, metaBalanco, gastoAdaptativo, sequenciaDe, placarSemana } from '../resumo.js';
 import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
-import { preverSemana, conferirPrevisao, pesagemPerto, somarDias } from '../previsao.js';
+import { preverSemana, conferirPrevisao, pesagemPerto, somarDias, avaliarRitmo, projetarMeta } from '../previsao.js';
 import { textoParaFala } from '../voz.js';
 import { separarAtualizacao, montarSystem } from '../gemini.js';
 import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo } from '../util.js';
@@ -388,4 +388,36 @@ test('pesagemPerto e somarDias', () => {
   assert.equal(pesagemPerto(ps, '2026-09-25')?.peso, 76);
   assert.equal(pesagemPerto(ps, '2026-09-30'), null);
   assert.equal(somarDias('2026-09-25', 7), '2026-10-02');
+});
+
+test('avaliarRitmo: compara com a faixa da base (0,25-0,5%/semana pra ganho)', () => {
+  const rapido = avaliarRitmo({ peso: 76, deltaKg: 0.72, objetivo: 'Hipertrofia' });
+  assert.match(rapido, /RÁPIDO DEMAIS/);
+  assert.match(rapido, /o recomendado é 190 g a 380 g\/semana/);
+  assert.match(rapido, /Excesso de ~340 g\/semana, que equivale a 370 kcal\/dia a menos/); // (0,72-0,38)*7700/7 = 374
+  const bom = avaliarRitmo({ peso: 76, deltaKg: 0.3, objetivo: 'Hipertrofia' });
+  assert.match(bom, /DENTRO da faixa/);
+  const lento = avaliarRitmo({ peso: 76, deltaKg: 0.05, objetivo: 'hipertrofia' });
+  assert.match(lento, /LENTO/);
+  const perda = avaliarRitmo({ peso: 80, deltaKg: -1.2, objetivo: 'emagrecer e definir' });
+  assert.match(perda, /RÁPIDO DEMAIS pra perder gordura/);
+  assert.equal(avaliarRitmo({ peso: 76, deltaKg: 0.3, objetivo: 'manter a saúde' }), '');
+});
+
+test('projetarMeta: prazo, ritmo necessário e projeção sem meta', () => {
+  const perfil = { metaPeso: 80, metaPrazo: '2027-03-31', objetivo: 'Hipertrofia' };
+  const noRitmo = projetarMeta({ perfil, deltaKgSemana: 0.3, pesoAtual: 76, dia: '2026-09-27' });
+  assert.match(noRitmo, /META: 80,0 kg até 2027-03-31; faltam 4,0 kg \(está em 76,0 kg\)/);
+  assert.match(noRitmo, /chega em ~13 semana\(s\)/);
+  assert.match(noRitmo, /está ADIANTADA/);
+
+  const parado = projetarMeta({ perfil, deltaKgSemana: 0, pesoAtual: 76, dia: '2026-09-27' });
+  assert.match(parado, /NÃO chega/);
+
+  const errado = projetarMeta({ perfil, deltaKgSemana: -0.2, pesoAtual: 76, dia: '2026-09-27' });
+  assert.match(errado, /indo pro lado contrário/);
+
+  const semMeta = projetarMeta({ perfil: {}, deltaKgSemana: -0.4, pesoAtual: 74, dia: '2026-09-27' });
+  assert.match(semMeta, /PROJEÇÃO \(sem meta combinada\)/);
+  assert.match(semMeta, /em 1 mês ~72,3 kg, em 3 meses ~68,8 kg e em 6 meses ~63,6 kg/);
 });

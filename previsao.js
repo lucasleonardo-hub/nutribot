@@ -176,3 +176,96 @@ export function conferirPrevisao({ previsao, pesagens = [], dia }) {
 
   return { previstoKg: previsao.deltaKg, realKg, erroKg, acerto, pesoFinal: final.peso, texto };
 }
+
+// ============================================================
+// Ritmo saudável e projeção de meta (números da própria base de conhecimento dela)
+//   ganho: 0,25 a 0,5% do peso/semana (Iraki 2019) - mais que isso vira gordura
+//   perda: 0,5 a 1% do peso/semana (Helms 2014) - mais que isso derruba músculo e treino
+// ============================================================
+export function faixaSaudavel({ peso, ganho }) {
+  if (!peso) return null;
+  return ganho ? { min: peso * 0.0025, max: peso * 0.005 } : { min: -peso * 0.01, max: -peso * 0.005 };
+}
+
+/** O ritmo previsto está dentro da faixa? Devolve texto pronto pro prompt (ou '' sem dados). */
+export function avaliarRitmo({ peso, deltaKg, objetivo }) {
+  if (!peso || deltaKg == null) return '';
+  const querGanhar = /hipertrof|ganh|massa|bulk|for[çc]a/i.test(String(objetivo || ''));
+  const querPerder = /emagre|perd|reduz|defin|secar|gordura/i.test(String(objetivo || ''));
+  if (!querGanhar && !querPerder) return '';
+  const faixa = faixaSaudavel({ peso, ganho: querGanhar });
+  const dentro = querGanhar ? deltaKg >= faixa.min && deltaKg <= faixa.max : deltaKg <= faixa.max && deltaKg >= faixa.min;
+  const alvo = querGanhar
+    ? `${gramas(faixa.min)} a ${gramas(faixa.max)}/semana (0,25 a 0,5% do peso)`
+    : `${gramas(faixa.max)} a ${gramas(faixa.min)}/semana (0,5 a 1% do peso)`;
+  if (dentro) return `RITMO: ${sinalKg(deltaKg)}/semana está DENTRO da faixa recomendada pra ${querGanhar ? 'ganhar massa' : 'perder gordura'} (${alvo}).`;
+  const rapido = querGanhar ? deltaKg > faixa.max : deltaKg < faixa.min;
+  const devagar = querGanhar ? deltaKg < faixa.min : deltaKg > faixa.max;
+  const excesso = querGanhar ? deltaKg - faixa.max : faixa.min - deltaKg;
+  const ajusteDia = Math.round((Math.abs(excesso) * KCAL_POR_KG) / 7 / 10) * 10;
+  if (rapido) {
+    return (
+      `RITMO: ${sinalKg(deltaKg)}/semana está RÁPIDO DEMAIS pra ${querGanhar ? 'ganhar massa' : 'perder gordura'} ` +
+      `(o recomendado é ${alvo}). Excesso de ~${gramas(excesso)}/semana, que equivale a ${ajusteDia} kcal/dia ` +
+      `${querGanhar ? 'a menos' : 'a mais'} pra cair na faixa. Nesse passo, ${querGanhar ? 'boa parte do ganho vira gordura' : 'começa a ir músculo junto'}.`
+    );
+  }
+  if (devagar) {
+    return (
+      `RITMO: ${sinalKg(deltaKg)}/semana está LENTO pra ${querGanhar ? 'ganhar massa' : 'perder gordura'} (o recomendado é ${alvo}); ` +
+      `faltam ~${gramas(Math.abs(excesso))}/semana, ou seja ${ajusteDia} kcal/dia ${querGanhar ? 'a mais' : 'a menos'}.`
+    );
+  }
+  return '';
+}
+
+/**
+ * Projeção até a meta (perfil.metaPeso / perfil.metaPrazo) no ritmo atual. Sem meta, projeta a tendência em 1, 3 e 6 meses.
+ * @returns {string} texto pro prompt ('' se não der pra projetar)
+ */
+export function projetarMeta({ perfil = {}, deltaKgSemana, pesoAtual, dia }) {
+  if (deltaKgSemana == null || !pesoAtual) return '';
+  const emMeses = (m) => somarDias(dia, Math.round(m * 30.4));
+  const proj = (m) => pesoAtual + (deltaKgSemana * 30.4 * m) / 7;
+
+  if (!perfil.metaPeso) {
+    if (Math.abs(deltaKgSemana) < 0.05) return `PROJEÇÃO: no ritmo atual o peso fica praticamente onde está (${kg1(pesoAtual)}) nos próximos meses. Sem meta de peso combinada.`;
+    return (
+      `PROJEÇÃO (sem meta combinada): mantido esse ritmo de ${sinalKg(deltaKgSemana)}/semana, ` +
+      `em 1 mês ~${kg1(proj(1))}, em 3 meses ~${kg1(proj(3))} e em 6 meses ~${kg1(proj(6))}. ` +
+      `Ritmo não se mantém igual por meses (o corpo se ajusta), então trate como direção, não promessa. Se ela quiser uma meta com prazo, pergunte.`
+    );
+  }
+
+  const falta = perfil.metaPeso - pesoAtual;
+  const prazo = perfil.metaPrazo || null;
+  if (Math.abs(falta) <= 0.3) return `META: ${kg1(perfil.metaPeso)}${prazo ? ` até ${prazo}` : ''} — praticamente alcançada (está em ${kg1(pesoAtual)}). Hora de decidir o próximo passo (manter, ou virar a chave pra definição).`;
+
+  const partes = [`META: ${kg1(perfil.metaPeso)}${prazo ? ` até ${prazo}` : ''}; faltam ${kg1(Math.abs(falta))} (está em ${kg1(pesoAtual)}).`];
+  const mesmaDirecao = Math.sign(falta) === Math.sign(deltaKgSemana);
+  if (!mesmaDirecao || Math.abs(deltaKgSemana) < 0.02) {
+    partes.push(`No ritmo desta semana (${sinalKg(deltaKgSemana)}/semana) ela NÃO chega: está ${Math.abs(deltaKgSemana) < 0.02 ? 'parada' : 'indo pro lado contrário'}.`);
+  } else {
+    const semanas = falta / deltaKgSemana;
+    const dataNoRitmo = somarDias(dia, Math.round(semanas * 7));
+    partes.push(`No ritmo desta semana (${sinalKg(deltaKgSemana)}/semana), chega em ~${Math.round(semanas)} semana(s), por volta de ${dataNoRitmo}.`);
+    if (prazo) {
+      const semanasAtePrazo = (new Date(`${prazo}T12:00:00Z`) - new Date(`${dia}T12:00:00Z`)) / (86400000 * 7);
+      if (semanasAtePrazo > 0) {
+        const necessario = falta / semanasAtePrazo;
+        const status = dataNoRitmo < prazo ? 'ADIANTADA' : Math.abs(semanas - semanasAtePrazo) <= 2 ? 'NO CRONOGRAMA' : 'ATRASADA';
+        partes.push(`Pro prazo (${Math.round(semanasAtePrazo)} semanas), o ritmo necessário é ${sinalKg(necessario)}/semana: está ${status}.`);
+        const faixa = faixaSaudavel({ peso: pesoAtual, ganho: falta > 0 });
+        if (faixa) {
+          const saudavel = falta > 0 ? necessario <= faixa.max : necessario >= faixa.min;
+          partes.push(
+            saudavel
+              ? `Esse ritmo necessário cabe na faixa recomendada, dá pra chegar sem estragar a composição.`
+              : `ATENÇÃO: esse ritmo necessário passa da faixa recomendada (${falta > 0 ? `máx. ${gramas(faixa.max)}/semana` : `máx. ${gramas(faixa.min)}/semana de perda`}), então ou estica o prazo, ou aceita que parte vai ser ${falta > 0 ? 'gordura' : 'músculo'}. Diga isso com franqueza.`
+          );
+        }
+      }
+    }
+  }
+  return partes.join(' ');
+}
