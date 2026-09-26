@@ -10,7 +10,7 @@ import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo } from '../util.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
-import { classificar, blocoAgenda, ocupadoAgora, limparAnonimos } from '../agenda.js';
+import { classificar, blocoAgenda, ocupadoAgora, limparAnonimos, normalizarEventoApi } from '../agenda.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
 import { falasDe } from '../gemini.js';
 
@@ -455,11 +455,34 @@ test('agenda: bloco do prompt e janelas livres', () => {
   const bloco = blocoAgenda(lista, { perfil, dias: 2 });
   assert.match(bloco, /10:00-11:40 Cálculo III \(aula\)/);
   assert.match(bloco, /janelas livres: 07:00-10:00, 11:40-14:00, 15:30-23:00/);
-  // o evento é de hoje (25/09): às 10:30 ela sabe que a pessoa está em aula até 11:40
-  const dentro = ocupadoAgora(lista, { perfil, minutos: 10 * 60 + 30 });
+  // "hoje" injetado (25/09) pra o teste não depender do relógio: às 10:30 ela sabe que a pessoa está em aula até 11:40
+  const dentro = ocupadoAgora(lista, { perfil, minutos: 10 * 60 + 30, hoje: '2026-09-25' });
   assert.equal(dentro?.tipo, 'aula');
   assert.equal(dentro?.terminaEm, '11:40');
-  assert.equal(ocupadoAgora(lista, { perfil, minutos: 12 * 60 }), null);
+  assert.equal(ocupadoAgora(lista, { perfil, minutos: 12 * 60, hoje: '2026-09-25' }), null);
+  assert.equal(ocupadoAgora(lista, { perfil, minutos: 10 * 60 + 30, hoje: '2026-09-26' }), null); // outro dia: nada
+});
+
+test('agenda: evento da API vira o formato comum, com a agenda de origem como pista de tipo', () => {
+  const reuniao = normalizarEventoApi(
+    { summary: 'Alinhamento semanal', start: { dateTime: '2026-09-28T14:00:00-03:00' }, end: { dateTime: '2026-09-28T15:00:00-03:00' }, attendees: [{}, {}], recurringEventId: 'x' },
+    'Lucas'
+  );
+  assert.equal(reuniao.tipo, 'reunião');
+  assert.equal(reuniao.inicio, '2026-09-28T17:00:00.000Z');
+  assert.equal(reuniao.duracaoMin, 60);
+  assert.equal(reuniao.agenda, 'Lucas');
+
+  // sem palavra no título, o nome da agenda decide: agenda da faculdade -> aula; da empresa -> trabalho
+  const semPista = { summary: 'Sala 204', start: { dateTime: '2026-09-28T08:00:00-03:00' }, end: { dateTime: '2026-09-28T10:00:00-03:00' } };
+  assert.equal(normalizarEventoApi(semPista, 'Faculdade UFSC').tipo, 'aula');
+  assert.equal(normalizarEventoApi(semPista, 'Predialize').tipo, 'trabalho');
+  assert.equal(normalizarEventoApi(semPista, 'Lucas').tipo, 'compromisso');
+
+  const diaTodo = normalizarEventoApi({ summary: 'Viagem SP', start: { date: '2026-10-02' }, end: { date: '2026-10-04' } }, 'Lucas');
+  assert.equal(diaTodo.diaTodo, true);
+  assert.equal(diaTodo.tipo, 'viagem');
+  assert.equal(diaTodo.duracaoMin, 1440);
 });
 
 test('agenda: evento sem nome ("Busy") só some quando o horário já tem um evento com nome', () => {

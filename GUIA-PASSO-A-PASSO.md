@@ -62,12 +62,15 @@ Regras pra não ser banido:
 4. No `.env`: `GOOGLE_SERVICE_ACCOUNT_FILE=./drive-oauth.json`
    Pro Render: abra o `drive-oauth.json` no Bloco de Notas, copie TUDO e cole na variável `GOOGLE_SERVICE_ACCOUNT_JSON`.
 
-### 3.3 Credencial - jeito permanente (cliente OAuth próprio). Use se o 3.2 parar de funcionar
-1. https://console.cloud.google.com/apis/library/drive.googleapis.com → **Ativar**
+### 3.3 Credencial - jeito permanente (cliente OAuth próprio). RECOMENDADO: o Google avisou que vai bloquear o escopo de Drive no cliente do gcloud (3.2)
+1. Ative as duas APIs: https://console.cloud.google.com/apis/library/drive.googleapis.com e https://console.cloud.google.com/apis/library/calendar-json.googleapis.com → **Ativar**
 2. https://console.cloud.google.com/auth/overview → **Começar** → nome `NutriBot`, seu e-mail → público-alvo **Externo** → **Criar**
-3. https://console.cloud.google.com/auth/audience → **Adicionar usuários** → seu e-mail → **Salvar**
-4. https://console.cloud.google.com/apis/credentials → **+ Criar credenciais** → **ID do cliente OAuth** → tipo **App para computador** → **Criar** → **Fazer download do JSON**
-5. Salve como `oauth-client.json` na pasta do bot e rode `npm run drive-auth` → autorize no navegador → o `drive-oauth.json` é gerado sozinho
+3. https://console.cloud.google.com/auth/branding → preencha: página inicial `https://nutribot-5gwk.onrender.com/`, política de privacidade `https://nutribot-5gwk.onrender.com/privacidade` (as duas páginas existem no próprio bot) e, em **Domínios autorizados**, `nutribot-5gwk.onrender.com`.
+   > Atenção: é `nutribot-5gwk.onrender.com` inteiro, não `onrender.com`. O `onrender.com` está na lista pública de sufixos (como `github.io`), então pro Google o domínio "privado" é o subdomínio do serviço. Digitar só `onrender.com` dá "domínio inválido".
+4. https://console.cloud.google.com/auth/audience → **Publicar app** (confirmar). Em modo de teste o Google expira a autorização a cada 7 dias e o bot pararia toda semana; publicado, mesmo sem verificação, ela não expira. Vai aparecer "app não verificado" na hora de autorizar: **Avançado** → continuar.
+5. https://console.cloud.google.com/apis/credentials → **+ Criar credenciais** → **ID do cliente OAuth** → tipo **App para computador** → **Criar** → **Fazer download do JSON**
+6. Salve como `oauth-client.json` na pasta do bot e rode `npm run drive-auth` → escolha a conta dona da pasta do Drive → aceite Drive e Agenda → o `drive-oauth.json` é gerado sozinho (o script mostra a conta e se os dois acessos entraram)
+7. Cole o conteúdo do `drive-oauth.json` novo na variável `GOOGLE_SERVICE_ACCOUNT_JSON` do Render. A partir daí a Agenda passa a ler pela API (tempo real, todas as agendas), sem depender do endereço iCal.
 
 > Pra abrir no Obsidian: instale o Google Drive para desktop (https://www.google.com/drive/download/) e aponte o Vault do Obsidian pra pasta `NutriBot`.
 

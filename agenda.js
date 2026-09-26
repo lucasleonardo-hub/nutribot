@@ -178,54 +178,103 @@ async function eventosDoIcs(inicio, fim) {
   return limparAnonimos(lista).sort((a, b) => a.inicio.localeCompare(b.inicio));
 }
 
-export async function eventos({ dias = 3, fuso } = {}) {
-  if (desligada) return null;
+/** Evento da API do Google -> formato comum do módulo (puro, testável). `agendaNome` é o nome da agenda de origem. */
+export function normalizarEventoApi(e, agendaNome = '') {
+  const ini = e.start?.dateTime || e.start?.date;
+  const f = e.end?.dateTime || e.end?.date;
+  const diaTodo = !e.start?.dateTime;
+  const duracaoMin = diaTodo ? 24 * 60 : Math.max(1, Math.round((new Date(f) - new Date(ini)) / 60000));
+  const base = {
+    titulo: (e.summary || '(sem título)').trim(),
+    descricao: (e.description || '').slice(0, 200),
+    inicio: new Date(ini).toISOString(),
+    fim: new Date(f).toISOString(),
+    diaTodo,
+    duracaoMin,
+    convidados: e.attendees?.length || 0,
+    recorrente: Boolean(e.recurringEventId),
+    local: e.location || '',
+    agenda: agendaNome,
+  };
+  const tipo = classificar(base);
+  const dica = tipoDaAgenda(agendaNome);
+  return { ...base, tipo: tipo === 'compromisso' && dica ? dica : tipo };
+}
+
+/**
+ * API do Google: TODAS as agendas da conta (a pessoal e as compartilhadas que aparecem na tela dela), com título
+ * completo e sem o atraso do arquivo iCal. Precisa do escopo calendar.readonly na credencial.
+ */
+async function eventosDaApi(inicio, fim) {
+  const cal = google.calendar({ version: 'v3', auth: autenticacaoGoogle() });
+  const comPrazo = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('agenda demorou demais')), TIMEOUT_MS))]);
+  const agendas = (await comPrazo(cal.calendarList.list({ minAccessRole: 'reader', maxResults: 50 }))).data.items || [];
+  const visiveis = agendas.filter((a) => a.selected !== false && !/holiday|feriado|birthday|anivers[áa]rios|contacts/i.test(`${a.id} ${a.summary || ''}`));
+  const resultados = await Promise.allSettled(
+    visiveis.map(async (a) => {
+      const r = await comPrazo(cal.events.list({ calendarId: a.id, timeMin: inicio.toISOString(), timeMax: fim.toISOString(), singleEvents: true, orderBy: 'startTime', maxResults: 100 }));
+      return (r.data.items || [])
+        .filter((e) => e.status !== 'cancelled' && (e.transparency !== 'transparent' || RE.treino.test(e.summary || '')))
+        .map((e) => normalizarEventoApi(e, a.summaryOverride || a.summary || a.id));
+    })
+  );
+  const lista = [];
+  const vistos = new Set();
+  for (const [i, r] of resultados.entries()) {
+    if (r.status !== 'fulfilled') {
+      // agenda compartilhada que falhou sozinha não derruba as outras; erro de ESCOPO sobe pra quem chamou
+      if (/insufficient authentication scopes|invalid_scope/i.test(String(r.reason?.message))) throw r.reason;
+      console.warn(`[agenda] agenda "${visiveis[i]?.summary}" falhou: ${String(r.reason?.message).slice(0, 100)}`);
+      continue;
+    }
+    for (const ev of r.value) {
+      const chave = `${ev.inicio}|${semAcento(ev.titulo)}`;
+      if (vistos.has(chave)) continue;
+      vistos.add(chave);
+      lista.push(ev);
+    }
+  }
+  return limparAnonimos(lista).sort((a, b) => a.inicio.localeCompare(b.inicio));
+}
+
+/**
+ * Eventos dos próximos `dias` (a partir de hoje 00:00). Ordem: API do Google (todas as agendas, tempo real) e, se a
+ * credencial não tiver o escopo, os endereços iCal secretos. Cache curto pra não bater no Google a cada mensagem.
+ */
+export async function eventos({ dias = 3 } = {}) {
   if (cache.eventos && Date.now() - cache.em < CACHE_MS) return cache.eventos;
-  // 1) endereços iCal secretos (não precisa de OAuth); aceita várias agendas separadas por vírgula
+  const inicio = new Date();
+  inicio.setHours(0, 0, 0, 0);
+  const fim = new Date(inicio.getTime() + dias * 86400000);
+
+  // 1) API do Google (credencial com calendar.readonly): melhor fonte, cobre as agendas compartilhadas com título
+  if (!desligada) {
+    try {
+      const lista = await eventosDaApi(inicio, fim);
+      cache = { em: Date.now(), eventos: lista };
+      return lista;
+    } catch (e) {
+      const msg = String(e.message || '');
+      if (/insufficient authentication scopes|invalid_scope|403/i.test(msg)) {
+        desligada = true; // a API só volta a ser tentada depois de um restart com credencial nova
+        console.warn(`[agenda] credencial do Google sem escopo de Agenda; ${urlsIcs().length ? 'usando o endereço iCal' : 'recurso desligado (rode npm run drive-auth pra liberar)'}`);
+      } else {
+        console.warn('[agenda] API falhou agora:', msg.slice(0, 140));
+        if (!urlsIcs().length) return null;
+      }
+    }
+  }
+  // 2) endereços iCal secretos (sem OAuth; várias agendas separadas por vírgula; o Google atualiza com atraso)
   if (urlsIcs().length) {
     try {
-      const inicio = new Date();
-      inicio.setHours(0, 0, 0, 0);
-      const lista = await eventosDoIcs(inicio, new Date(inicio.getTime() + dias * 86400000));
+      const lista = await eventosDoIcs(inicio, fim);
       cache = { em: Date.now(), eventos: lista };
       return lista;
     } catch (e) {
       console.warn('[agenda] falha no endereço iCal:', String(e.message).slice(0, 140));
-      return null;
     }
   }
-  // 2) API do Google (precisa do escopo calendar.readonly na credencial)
-  try {
-    const cal = google.calendar({ version: 'v3', auth: autenticacaoGoogle() });
-    const inicio = new Date();
-    inicio.setHours(0, 0, 0, 0);
-    const fim = new Date(inicio.getTime() + dias * 86400000);
-    const r = await Promise.race([
-      cal.events.list({ calendarId: 'primary', timeMin: inicio.toISOString(), timeMax: fim.toISOString(), singleEvents: true, orderBy: 'startTime', maxResults: 60 }),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('agenda demorou demais')), TIMEOUT_MS)),
-    ]);
-    const lista = (r.data.items || [])
-      .filter((e) => e.status !== 'cancelled' && (e.transparency !== 'transparent' || RE.treino.test(e.summary || '')))
-      .map((e) => {
-        const ini = e.start?.dateTime || e.start?.date;
-        const f = e.end?.dateTime || e.end?.date;
-        const diaTodo = !e.start?.dateTime;
-        const duracaoMin = diaTodo ? 24 * 60 : Math.round((new Date(f) - new Date(ini)) / 60000);
-        const base = { titulo: (e.summary || '(sem título)').trim(), descricao: (e.description || '').slice(0, 200), inicio: ini, fim: f, diaTodo, duracaoMin, convidados: e.attendees?.length || 0, recorrente: Boolean(e.recurringEventId), local: e.location || '' };
-        return { ...base, tipo: classificar(base) };
-      });
-    cache = { em: Date.now(), eventos: lista };
-    return lista;
-  } catch (e) {
-    const msg = String(e.message || '');
-    if (/insufficient authentication scopes|invalid_scope|403/i.test(msg)) {
-      desligada = true;
-      console.warn('[agenda] credencial do Google sem escopo de Agenda: recurso desligado (rode npm run drive-auth de novo pra liberar)');
-    } else {
-      console.warn('[agenda] falha ao ler:', msg.slice(0, 140));
-    }
-    return null;
-  }
+  return null;
 }
 
 // ============================================================
@@ -277,10 +326,10 @@ export function blocoAgenda(lista, { perfil, dias = 2 } = {}) {
 }
 
 /** A pessoa está ocupada agora? Usado pra não cobrar refeição no meio de aula/reunião. */
-export function ocupadoAgora(lista, { perfil, minutos } = {}) {
+export function ocupadoAgora(lista, { perfil, minutos, hoje } = {}) {
   if (!lista?.length) return null;
   const fuso = fusoDe(perfil);
-  const hoje = agora(fuso).dia;
+  hoje ||= agora(fuso).dia; // injetável nos testes; em produção é o dia de hoje no fuso da pessoa
   const min = minutos ?? (() => { const [h, m] = agora(fuso).hora.split(':').map(Number); return h * 60 + m; })();
   for (const e of lista) {
     if (e.diaTodo || diaLocal(e.inicio, fuso) !== hoje) continue;
