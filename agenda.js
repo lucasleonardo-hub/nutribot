@@ -88,12 +88,20 @@ export const urlsIcs = () =>
     .map((u) => u.trim())
     .filter((u) => /^https?:\/\//.test(u));
 
+// Palavras extras que marcam agenda/evento de trabalho (nome da empresa, por exemplo): AGENDA_PALAVRAS_TRABALHO="acme,minha empresa"
+const PALAVRAS_TRABALHO = (() => {
+  const lista = String(process.env.AGENDA_PALAVRAS_TRABALHO || '').split(',').map((p) => semAcento(p).trim()).filter(Boolean);
+  return lista.length ? new RegExp(lista.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')) : null;
+})();
+
 /** Nome da agenda (X-WR-CALNAME) vira pista de tipo: evento da agenda "Faculdade" é aula, da "Trabalho" é trabalho. */
 export function tipoDaAgenda(nome) {
   const n = semAcento(nome);
   if (/faculdade|universidade|ufsc|udesc|aula|academic|escola|curso|semestre/.test(n)) return 'aula';
-  if (/trabalho|work|empresa|predialize|escritorio|job|obra/.test(n)) return 'trabalho';
+  if (/trabalho|work|empresa|escritorio|job|obra/.test(n) || (PALAVRAS_TRABALHO && PALAVRAS_TRABALHO.test(n))) return 'trabalho';
   if (/treino|academia|gym|esporte|volei/.test(n)) return 'treino';
+  // agenda identificada por e-mail de domínio corporativo (não é provedor pessoal): é a agenda do trabalho
+  if (/^[^@\s]+@[^@\s]+\.[a-z]+$/.test(n) && !/@(gmail|googlemail|hotmail|outlook|live|msn|yahoo|icloud|me|proton|protonmail|uol|bol|terra)\./.test(n)) return 'trabalho';
   return null;
 }
 

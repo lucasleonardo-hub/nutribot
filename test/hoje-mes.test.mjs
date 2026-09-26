@@ -438,7 +438,7 @@ test('agenda: classifica aula, trabalho, reunião e treino do jeito que a pessoa
   const ev = (titulo, extra = {}) => classificar({ titulo, ...extra });
   assert.equal(ev('Cálculo III', { recorrente: true, duracaoMin: 100 }), 'aula');
   assert.equal(ev('Trabalho'), 'trabalho');
-  assert.equal(ev('Reunião de obra - Predialize'), 'reunião');
+  assert.equal(ev('Reunião de obra - Empresa Exemplo'), 'reunião');
   assert.equal(ev('Alinhamento com cliente', { convidados: 3 }), 'reunião');
   assert.equal(ev('Daily', { convidados: 5 }), 'reunião');
   assert.equal(ev('Vôlei'), 'treino');
@@ -487,11 +487,12 @@ test('agenda: evento da API vira o formato comum, com a agenda de origem como pi
   // sem palavra no título, o nome da agenda decide: agenda da faculdade -> aula; da empresa -> trabalho
   const semPista = { summary: 'Sala 204', start: { dateTime: '2026-09-28T08:00:00-03:00' }, end: { dateTime: '2026-09-28T10:00:00-03:00' } };
   assert.equal(normalizarEventoApi(semPista, 'Faculdade UFSC').tipo, 'aula');
-  assert.equal(normalizarEventoApi(semPista, 'Predialize').tipo, 'trabalho');
+  assert.equal(normalizarEventoApi(semPista, 'Escritório Central').tipo, 'trabalho');
   assert.equal(normalizarEventoApi(semPista, 'Lucas').tipo, 'compromisso');
   // "Busy" (agenda pública do trabalho) não é reunião nem compromisso genérico: a agenda de origem diz que é trabalho
   const busy = { summary: 'Busy', start: { dateTime: '2026-09-28T16:00:00-03:00' }, end: { dateTime: '2026-09-28T17:00:00-03:00' }, attendees: [{}] };
-  assert.equal(normalizarEventoApi(busy, 'lucas.leonardo@predialize.com.br').tipo, 'trabalho');
+  assert.equal(normalizarEventoApi(busy, 'joao.silva@empresa-exemplo.com.br').tipo, 'trabalho');
+  assert.equal(normalizarEventoApi(busy, 'joao.silva@gmail.com').tipo, 'reunião'); // e-mail pessoal não é pista de trabalho
 
   const diaTodo = normalizarEventoApi({ summary: 'Viagem SP', start: { date: '2026-10-02' }, end: { date: '2026-10-04' } }, 'Lucas');
   assert.equal(diaTodo.diaTodo, true);

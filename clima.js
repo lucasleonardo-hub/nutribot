@@ -1,6 +1,6 @@
 // clima.js - Estação do ano e tempo agora na cidade de cada pessoa (Open-Meteo: gratuito, sem chave, sem cadastro).
 // Entra no contexto da resposta pra ela falar do tempo como quem olha pela janela ("com esse frio a sopa cai bem"),
-// e nunca mais inventar "que dia lindo" sem saber. Heitor em Paris e Lucas em Florianópolis ganham estações opostas.
+// e nunca mais inventar "que dia lindo" sem saber. Quem mora em hemisférios diferentes ganha estações opostas.
 
 import { colecao } from './mongo.js';
 

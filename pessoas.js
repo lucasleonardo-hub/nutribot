@@ -1,5 +1,5 @@
 // pessoas.js - "Cérebro" de cada pessoa no Drive.
-// Na raiz do Drive existe uma pasta com o nome de cada usuário (ex.: "Lucas Leonardo Alves da Silveira Vitória", "Heitor Salvalágio").
+// Na raiz do Drive existe uma pasta com o nome de cada usuário (ex.: "Ana Paula Souza", "João Almeida").
 // - O que a PESSOA coloca lá (PDF, Google Docs, .md, .txt) a Nutri lê e usa como memória sobre ela.
 // - O que a NUTRI aprende vai pra arquivos "Nutri-*.md" na mesma pasta (Nutri-Notas.md, Nutri-Ficha.md).
 // Textos extraídos ficam em cache no Mongo (collection arquivos_pessoa) por id+modifiedTime, então o PDF só é transcrito uma vez.
@@ -51,7 +51,7 @@ export async function pastaDe(perfil) {
     const tokens = normalizar(p.name);
     if (!alvo.length || tokens[0] !== alvo[0]) continue; // primeiro nome tem que bater
     const pontos = alvo.filter((t) => tokens.includes(t)).length;
-    const pastaInteiraBate = tokens.every((t) => alvo.includes(t)); // pasta "Heitor" pra "Heitor Almeida": vale
+    const pastaInteiraBate = tokens.every((t) => alvo.includes(t)); // pasta "João" pra "João Almeida": vale
     if (pontos < minimo && !pastaInteiraBate) continue;
     if (pontos > melhorPontos) {
       melhor = p;

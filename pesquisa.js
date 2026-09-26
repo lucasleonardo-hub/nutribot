@@ -5,7 +5,7 @@
 // pesquisar({ pt, en }) -> [{ fonte, titulo, url, trecho }]
 
 const TIMEOUT_MS = 15_000;
-const UA = 'NutriBot/1.0 (bot pessoal de nutricao; github.com/lucasleonardo-hub/nutribot)';
+const UA = `NutriBot/1.0 (bot pessoal de nutricao; ${process.env.REPO_URL || 'github.com/lucasleonardo-hub/nutribot'})`;
 
 async function getJSON(url, headers = {}) {
   const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json', ...headers }, signal: AbortSignal.timeout(TIMEOUT_MS) });

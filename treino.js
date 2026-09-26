@@ -12,7 +12,7 @@ const TIMEOUT_MS = 25_000;
 const DIAS = 28; // janela analisada (4 semanas: a atual e 3 de comparação)
 const PAGINAS_MAX = 6; // 10 treinos por página
 
-/** { "lucas": "chave", "heitor": "chave" } a partir de HEVY_CHAVES="lucas=abc,heitor=def" */
+/** { "ana": "chave", "joao": "chave" } a partir de HEVY_CHAVES="ana=abc,joao=def" */
 function chaves() {
   const bruto = process.env.HEVY_CHAVES || '';
   const mapa = {};

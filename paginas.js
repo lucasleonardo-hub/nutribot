@@ -8,6 +8,10 @@ code{background:#eee;padding:1px 5px;border-radius:4px}
 a{color:#146c43}ul{padding-left:1.2em}small{color:#666}
 .card{background:#fff;border:1px solid #e3e3e3;border-radius:10px;padding:18px 20px;margin:14px 0}`;
 
+// Quem responde pelo bot (aparece no rodapé e na política de privacidade). Sem .env, fica genérico.
+const CONTATO_NOME = process.env.CONTATO_NOME || 'o administrador do bot';
+const CONTATO_EMAIL = process.env.CONTATO_EMAIL || '(e-mail não informado)';
+
 const molde = (titulo, corpo) =>
   `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
   `<title>${titulo}</title><style>${ESTILO}</style></head><body>${corpo}</body></html>`;
@@ -16,7 +20,7 @@ export const paginaInicial = () =>
   molde(
     'NutriBot',
     `<h1>NutriBot</h1>
-<p>Assistente de nutrição privado, usado por um grupo fechado de três amigos no WhatsApp. Não é um produto aberto ao público
+<p>Assistente de nutrição privado, usado por um grupo fechado de amigos no WhatsApp. Não é um produto aberto ao público
 e não aceita cadastro: funciona apenas dentro do grupo de quem o instalou.</p>
 <div class="card">
   <h2>O que ele faz</h2>
@@ -29,7 +33,7 @@ e não aceita cadastro: funciona apenas dentro do grupo de quem o instalou.</p>
   </ul>
 </div>
 <p><a href="/privacidade">Política de Privacidade</a></p>
-<p><small>Projeto pessoal, sem fins comerciais. Contato: operacoespredialize@gmail.com</small></p>`
+<p><small>Projeto pessoal, sem fins comerciais. Contato: ${CONTATO_EMAIL}</small></p>`
   );
 
 export const paginaPrivacidade = () =>
@@ -85,7 +89,7 @@ acesso ao Drive e à Agenda.</p>
 <p>Os dados são mantidos enquanto o bot estiver em uso pelo grupo, e apagados a pedido do titular.</p>
 
 <h2>Contato</h2>
-<p>Responsável pelo tratamento: Lucas Leonardo — operacoespredialize@gmail.com</p>
+<p>Responsável pelo tratamento: ${CONTATO_NOME} — ${CONTATO_EMAIL}</p>
 
 <p><a href="/">Voltar</a></p>`
   );

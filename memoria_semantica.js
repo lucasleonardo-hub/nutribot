@@ -34,7 +34,7 @@ export async function garantirIndiceVetorial() {
   }
 }
 
-/** Guarda (ou substitui) uma lembrança. chave = identidade estável (ex.: "conversa:2026-09-24:Lucas"). Nunca lança. */
+/** Guarda (ou substitui) uma lembrança. chave = identidade estável (ex.: "conversa:2026-09-24:Ana"). Nunca lança. */
 export async function guardarLembranca({ chave, tipo, pessoa, dia, texto }) {
   try {
     const t = String(texto || '').trim();
@@ -60,7 +60,7 @@ export async function lembrancasPara({ consulta, pessoa, outros = [], excluirDia
   try {
     const vetor = await ia.embutir(q.slice(0, 2000), 'RETRIEVAL_QUERY');
     if (!vetor) return '';
-    // lembranças da própria pessoa, do grupo, da Nutri e de quem foi citado na mensagem ("o Heitor tem trauma de ovo?")
+    // lembranças da própria pessoa, do grupo, da Nutri e de quem foi citado na mensagem ("o João tem trauma de ovo?")
     const pessoas = [...new Set([pessoa, 'grupo', 'nutri', ...outros].filter(Boolean))];
     const docs = await colecao(COLECAO)
       .aggregate([

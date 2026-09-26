@@ -18,7 +18,7 @@ const MAX_CHARS_ENTRADA = Number(process.env.RESERVA_MAX_CHARS) || 24000; // ~6-
 const MAX_CHARS_GROQ = Number(process.env.RESERVA_MAX_CHARS_GROQ) || 12000; // Groq on_demand devolve 413 acima de ~6k tokens por pedido
 
 // OpenRouter pede esses cabeçalhos pra identificar o app (aparece no painel deles; sem eles funciona, mas fica anônimo)
-const OPENROUTER_HEADERS = { 'HTTP-Referer': 'https://github.com/lucasleonardo-hub/nutribot', 'X-Title': 'NutriBot' };
+const OPENROUTER_HEADERS = { 'HTTP-Referer': process.env.REPO_URL || 'https://github.com/lucasleonardo-hub/nutribot', 'X-Title': process.env.BOT_NOME || 'NutriBot' };
 
 const PROVEDORES = [
   // Ordem = o que respondeu de fato nos logs: Cohere estável; Groq rápido mas recusa prompt grande (413) e estoura por minuto;
