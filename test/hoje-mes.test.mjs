@@ -478,6 +478,9 @@ test('agenda: evento da API vira o formato comum, com a agenda de origem como pi
   assert.equal(normalizarEventoApi(semPista, 'Faculdade UFSC').tipo, 'aula');
   assert.equal(normalizarEventoApi(semPista, 'Predialize').tipo, 'trabalho');
   assert.equal(normalizarEventoApi(semPista, 'Lucas').tipo, 'compromisso');
+  // "Busy" (agenda pública do trabalho) não é reunião nem compromisso genérico: a agenda de origem diz que é trabalho
+  const busy = { summary: 'Busy', start: { dateTime: '2026-09-28T16:00:00-03:00' }, end: { dateTime: '2026-09-28T17:00:00-03:00' }, attendees: [{}] };
+  assert.equal(normalizarEventoApi(busy, 'lucas.leonardo@predialize.com.br').tipo, 'trabalho');
 
   const diaTodo = normalizarEventoApi({ summary: 'Viagem SP', start: { date: '2026-10-02' }, end: { date: '2026-10-04' } }, 'Lucas');
   assert.equal(diaTodo.diaTodo, true);

@@ -135,10 +135,10 @@ async function umIcs(url, inicio, fim) {
       lista.push(bruto(e.start, e.end || new Date(new Date(e.start).getTime() + duracaoMs)));
     }
   }
-  // o nome da agenda só entra quando o título não disse nada (classificar devolve "compromisso")
+  // o nome da agenda decide quando o título não diz nada ("compromisso" genérico ou "Busy" da agenda pública)
   return lista.map((ev) => {
     const tipo = classificar(ev);
-    return { ...ev, tipo: tipo === 'compromisso' && dica ? dica : tipo };
+    return { ...ev, tipo: (tipo === 'compromisso' || ehAnonimo(ev.titulo)) && dica ? dica : tipo };
   });
 }
 
@@ -146,11 +146,28 @@ async function umIcs(url, inicio, fim) {
  * A agenda pública devolve os eventos sem nome ("Busy"). Se o MESMO horário já tem um evento com nome de verdade
  * (vindo da agenda secreta), o anônimo é ruído e sai. Sozinho ele fica: saber que está ocupado já evita cobrança.
  */
+/** Título que não diz nada ("Busy" da agenda pública, "sem título"). */
+export const ehAnonimo = (titulo) => /^(busy|ocupado|sem t[íi]tulo|\(sem t[íi]tulo\)|reservado|private|particular)$/i.test(String(titulo || '').trim());
+
 export function limparAnonimos(lista) {
-  const anonimo = (e) => /^(busy|ocupado|sem t[íi]tulo|\(sem t[íi]tulo\)|reservado|private|particular)$/i.test(String(e.titulo || '').trim());
+  const anonimo = (e) => ehAnonimo(e.titulo);
   const seSobrepoe = (a, b) => a.inicio < b.fim && b.inicio < a.fim;
   const comNome = lista.filter((e) => !anonimo(e));
   return lista.filter((e) => !anonimo(e) || !comNome.some((n) => seSobrepoe(e, n)));
+}
+
+/** Junta listas de eventos de fontes diferentes: sem repetir o mesmo evento, sem "Busy" em cima de evento com nome. */
+export function juntarEventos(...listas) {
+  const saida = [];
+  const vistos = new Set();
+  for (const ev of listas.flat()) {
+    if (!ev) continue;
+    const chave = `${ev.inicio}|${semAcento(ev.titulo)}`;
+    if (vistos.has(chave)) continue;
+    vistos.add(chave);
+    saida.push(ev);
+  }
+  return limparAnonimos(saida).sort((a, b) => a.inicio.localeCompare(b.inicio));
 }
 
 /** Junta todas as agendas configuradas (a principal e as compartilhadas), sem repetir o mesmo evento. */
@@ -198,7 +215,7 @@ export function normalizarEventoApi(e, agendaNome = '') {
   };
   const tipo = classificar(base);
   const dica = tipoDaAgenda(agendaNome);
-  return { ...base, tipo: tipo === 'compromisso' && dica ? dica : tipo };
+  return { ...base, tipo: (tipo === 'compromisso' || ehAnonimo(base.titulo)) && dica ? dica : tipo };
 }
 
 /**
@@ -209,7 +226,10 @@ async function eventosDaApi(inicio, fim) {
   const cal = google.calendar({ version: 'v3', auth: autenticacaoGoogle() });
   const comPrazo = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('agenda demorou demais')), TIMEOUT_MS))]);
   const agendas = (await comPrazo(cal.calendarList.list({ minAccessRole: 'reader', maxResults: 50 }))).data.items || [];
-  const visiveis = agendas.filter((a) => a.selected !== false && !/holiday|feriado|birthday|anivers[áa]rios|contacts/i.test(`${a.id} ${a.summary || ''}`));
+  // fora: feriados, aniversários de contatos e feeds assinados de entretenimento (ex.: calendário do Stremio com
+  // lançamentos de séries), que não são compromisso de ninguém. AGENDA_IGNORAR (regex) permite tirar outras.
+  const ignorar = new RegExp(process.env.AGENDA_IGNORAR || 'holiday|feriado|birthday|anivers[áa]rios|contacts|strem\\.io|^webcal:|imdb|trakt', 'i');
+  const visiveis = agendas.filter((a) => a.selected !== false && !ignorar.test(`${a.id} ${a.summary || ''}`));
   const resultados = await Promise.allSettled(
     visiveis.map(async (a) => {
       const r = await comPrazo(cal.events.list({ calendarId: a.id, timeMin: inicio.toISOString(), timeMax: fim.toISOString(), singleEvents: true, orderBy: 'startTime', maxResults: 100 }));
@@ -250,7 +270,12 @@ export async function eventos({ dias = 3 } = {}) {
   // 1) API do Google (credencial com calendar.readonly): melhor fonte, cobre as agendas compartilhadas com título
   if (!desligada) {
     try {
-      const lista = await eventosDaApi(inicio, fim);
+      let lista = await eventosDaApi(inicio, fim);
+      // agenda que só existe como endereço iCal (ex.: a do trabalho, que é de outra conta Google) entra por cima
+      if (urlsIcs().length) {
+        const extras = await eventosDoIcs(inicio, fim).catch((e) => (console.warn('[agenda] iCal extra falhou:', String(e.message).slice(0, 100)), []));
+        lista = juntarEventos(lista, extras);
+      }
       cache = { em: Date.now(), eventos: lista };
       return lista;
     } catch (e) {
