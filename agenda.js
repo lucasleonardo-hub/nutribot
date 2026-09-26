@@ -288,11 +288,15 @@ export async function eventos({ dias = 3 } = {}) {
       return lista;
     } catch (e) {
       const msg = String(e.message || '');
-      if (/insufficient authentication scopes|invalid_scope|403/i.test(msg)) {
+      // Só desliga a API de vez quando o problema é permanente: credencial sem o escopo ou API não ativada no projeto.
+      // Um 403 qualquer (limite de uso momentâneo, agenda compartilhada indisponível) NÃO é motivo: na próxima leitura tenta de novo.
+      const semEscopo = /insufficient authentication scopes|invalid_scope|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(msg);
+      const apiDesativada = /accessNotConfigured|has not been used in project|is disabled/i.test(msg);
+      if (semEscopo || apiDesativada) {
         desligada = true; // a API só volta a ser tentada depois de um restart com credencial nova
-        console.warn(`[agenda] credencial do Google sem escopo de Agenda; ${urlsIcs().length ? 'usando o endereço iCal' : 'recurso desligado (rode npm run drive-auth pra liberar)'}`);
+        console.warn(`[agenda] ${semEscopo ? 'credencial do Google sem escopo de Agenda' : 'API da Agenda não ativada no projeto do Google'}; ${urlsIcs().length ? 'usando o endereço iCal' : 'recurso desligado (rode npm run drive-auth pra liberar)'}`);
       } else {
-        console.warn('[agenda] API falhou agora:', msg.slice(0, 140));
+        console.warn(`[agenda] API falhou agora (${e.code || '?'}): ${msg.slice(0, 200)}`);
         if (!urlsIcs().length) return null;
       }
     }
