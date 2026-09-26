@@ -16,6 +16,7 @@ import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
 import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
+import { climaParaPrompt } from './clima.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
@@ -472,9 +473,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const horaLocal = agora(fusoDe(eu)).hora;
   const slot = slotDaHora(horaLocal);
   const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
+  // estação do ano e tempo agora na cidade da pessoa (Open-Meteo, grátis; cache de 30 min; só na via completa)
+  const clima = motivo ? await comTempo(climaParaPrompt(eu, dia), 5_000, 'clima').catch(() => '') : '';
   const contextoHorario =
     `hora local de ${perfil.nome}: ${horaLocal}${eu.cidade ? ` em ${eu.cidade}` : ' (cidade/fuso ainda não informados, pode estar errada)'}; ` +
     `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}` +
+    (clima ? `; ${clima}` : '') +
     (atrasadas
       ? `. ATENÇÃO: as últimas ${atrasadas + 1} mensagens do histórico (esta incluída) chegaram juntas, em sequência. Trate como UMA fala só (mesmo contexto, mesma refeição se for comida, mesma pergunta se for dúvida): responda uma vez, considerando tudo, e não responda mensagem por mensagem`
       : '');

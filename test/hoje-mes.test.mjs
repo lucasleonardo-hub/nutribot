@@ -11,6 +11,7 @@ import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
 import { classificar, blocoAgenda, ocupadoAgora, limparAnonimos, normalizarEventoApi } from '../agenda.js';
+import { estacaoDoAno, hemisferio, descricaoTempo, sensacao, linhaClima } from '../clima.js';
 import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
 import { falasDe } from '../gemini.js';
 
@@ -502,4 +503,32 @@ test('agenda: evento sem nome ("Busy") só some quando o horário já tem um eve
   );
   // sem nenhum evento nomeado, os anônimos ficam (saber que está ocupado já serve)
   assert.equal(limparAnonimos([sobreposto, sozinho]).length, 2);
+});
+
+test('clima: estação certa em cada hemisfério e descrição do tempo', () => {
+  assert.equal(estacaoDoAno('2026-09-26', 'sul'), 'primavera');
+  assert.equal(estacaoDoAno('2026-09-26', 'norte'), 'outono');
+  assert.equal(estacaoDoAno('2026-01-15', 'sul'), 'verão');
+  assert.equal(estacaoDoAno('2026-07-10', 'sul'), 'inverno');
+  assert.equal(estacaoDoAno('2026-07-10', 'norte'), 'verão');
+  assert.equal(hemisferio({ latitude: -27.6 }), 'sul');
+  assert.equal(hemisferio({ latitude: 48.8 }), 'norte');
+  assert.equal(hemisferio({ fuso: 'Europe/Paris' }), 'norte');
+  assert.equal(hemisferio({ fuso: 'America/Sao_Paulo' }), 'sul');
+  assert.equal(descricaoTempo(0, true), 'céu limpo');
+  assert.equal(descricaoTempo(61), 'chuva fraca');
+  assert.equal(descricaoTempo(95), 'trovoada');
+  assert.equal(sensacao(12), 'frio');
+  assert.equal(sensacao(30), 'calorão');
+});
+
+test('clima: linha do prompt fala do agora, do dia e de amanhã', () => {
+  const dados = {
+    cidade: 'Florianópolis', lat: -27.6, temp: 27.8, sensacaoTermica: 33.4, chuvaAgoraMm: 0, codigo: 0, ehDia: true,
+    hoje: { max: 28.2, min: 16.5, chuvaPct: 0, codigo: 3 },
+    amanha: { max: 23.6, min: 17.6, chuvaPct: 45, codigo: 51 },
+  };
+  const l = linhaClima(dados, { dia: '2026-09-26' });
+  assert.match(l, /^primavera no hemisfério sul; tempo em Florianópolis: 28°C agora \(sensação 33°C, calorão\), céu limpo; hoje mín 17°C \/ máx 28°C, chance de chuva 0%; amanhã 18°C a 24°C, garoa, chuva 45%$/);
+  assert.equal(linhaClima(null), '');
 });
