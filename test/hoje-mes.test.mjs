@@ -4,7 +4,7 @@ import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao,
 import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
 import { preverSemana, conferirPrevisao, pesagemPerto, somarDias, avaliarRitmo, projetarMeta } from '../previsao.js';
-import { textoParaFala } from '../voz.js';
+import { textoParaFala, promptDeVoz, wavDePcm } from '../voz.js';
 import { separarAtualizacao, montarSystem } from '../gemini.js';
 import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo } from '../util.js';
 import { duracaoDe } from '../comandos.js';
@@ -240,6 +240,16 @@ test('configGrafico: barras de kcal, linha de peso, faixa da meta e gasto do rel
 test('textoParaFala: tira markdown, emojis e fala números', () => {
   const f = textoParaFala('*Almoço* top! 🏐\n🔥 *Estimativa:* ~950 kcal · [[Proteína]] 60 g\n💡 Dica: dormiu 5h03?');
   assert.equal(f, 'Almoço top!\nEstimativa: ~950 calorias · Proteína 60 gramas\nDica: dormiu 5 horas e 03?');
+});
+
+test('voz: prompt do TTS separa estilo do texto e WAV ganha cabeçalho certo', () => {
+  const p = promptDeVoz('Oi, criatura.', 'Fale com carinho.');
+  assert.match(p, /^Fale com carinho\.\n\nDiga exatamente isto, sem acrescentar nada:\nOi, criatura\.$/);
+  const wav = wavDePcm(Buffer.alloc(48000), 24000); // 1 s de silêncio
+  assert.equal(wav.length, 44 + 48000);
+  assert.equal(wav.toString('ascii', 0, 4), 'RIFF');
+  assert.equal(wav.readUInt32LE(24), 24000);
+  assert.equal(wav.readUInt32LE(40), 48000);
 });
 
 test('separarAtualizacao: linha HABITO oculta é extraída e some do texto', () => {
