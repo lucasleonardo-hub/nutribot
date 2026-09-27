@@ -284,6 +284,21 @@ export function mdPerfil(p) {
     `- Gírias aprendidas: ${(p.girias || []).map((g) => `[[${g}]]`).join(', ') || 'nenhuma ainda'}\n` +
     (p.horarios ? `- Horários habituais: ${p.horarios}\n` : '') +
     (p.rotina ? `\n## Rotina observada\n${p.rotina}\n` : '') +
+    (p.produtos?.length ? `\n## Produtos fixos (rótulo lido)\n${p.produtos.map((x) => `- ${x.nome}: ${x.porcao} = ${x.kcal} kcal · Proteína ${x.proteina} g · Carboidratos ${x.carbo} g · Gorduras ${x.gordura} g (em ${x.em})`).join('\n')}\n` : '') +
+    (p.documentos?.length
+      ? `\n## Documentos e medições (lidos da pasta)\n${p.documentos
+          .map((d) => {
+            const medidas = Object.entries(d.medidas || {}).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`);
+            const exames = (d.exames || []).map((e) => `${e.nome} ${e.valor}${e.unidade ? ` ${e.unidade}` : ''}${e.referencia ? ` (ref. ${e.referencia})` : ''}${e.fora_da_referencia ? ' ⚠️' : ''}`);
+            return (
+              `- **${d.data || 'sem data'}** · ${d.tipo} · confiança ${d.confianca}${d.motivo ? ` (${d.motivo})` : ''} · [[${String(d.arquivo).replace(/\.[a-z0-9]+$/i, '')}]]` +
+              (medidas.length ? `\n  - medidas: ${medidas.join(' · ')}` : '') +
+              (exames.length ? `\n  - exames: ${exames.join('; ')}` : '') +
+              (d.resumo ? `\n  - ${d.resumo}` : '')
+            );
+          })
+          .join('\n')}\n`
+      : '') +
     `- Cadastro: ${p.criadoEm ? new Date(p.criadoEm).toISOString().slice(0, 10) : ''}\n`
   );
 }

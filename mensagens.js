@@ -17,6 +17,7 @@ import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, enviadosPe
 import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
+import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarras } from './off.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
@@ -521,15 +522,19 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const citados = perfis.filter((p) => p.nome !== eu.nome && mencionaNome(texto, p.nome)).map((p) => p.nome);
   const lembrancas = motivo && texto ? await comTempo(lembrancasPara({ consulta: texto, pessoa: eu.nome, outros: citados, excluirDia: dia }), 6_000, 'lembranças').catch(() => '') : '';
   const citacao = citacaoDe(conteudo, perfis);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '' };
+  // código de barras na mensagem vira rótulo do Open Food Facts antes mesmo de ela responder
+  const rotulos = motivo && texto ? await comTempo(rotulosPara(texto), 10_000, 'rótulos').catch(() => '') : '';
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', rotulos };
   let resposta;
   let atualizacao = null;
   let habito = null;
   let querAudio = false;
   let registro = null; // linhas REGISTRO da IA: apagar/corrigir registros do dia a pedido da pessoa
+  let refeicao = null; // linha REFEICAO da IA: números e tipo da refeição consumida, estruturados
+  let produto = null; // "PRODUTO: x": ela quer o rótulo do Open Food Facts antes de responder
   try {
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
-    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
+    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
   } catch (e) {
     // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -545,7 +550,14 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     const consulta = pedido[1].replace(/["*]/g, '').trim();
     console.log(`[pesquisa] Nutri pediu pra pesquisar: ${consulta}`);
     enviar(jidGrupo, acaso(['Boa pergunta. Deixa eu conferir isso direito antes de falar besteira. 📚', 'Isso eu não vou chutar. Pesquisando... 🔎', 'Segura que eu vou ler sobre isso rapidinho. 🤓']), msg, { rapido: true }).catch(() => {});
-    const fontes = await pesquisar({ en: consulta, pt: texto }).catch((e) => (console.error('[pesquisa]', e.message), []));
+    // PubMed/Wikipedia/Brave e, quando ligado (PESQUISA_WEB=on, exige faturamento no Google), a busca do Google pelo Gemini
+    const [fontesBase, web] = await Promise.all([
+      pesquisar({ en: consulta, pt: texto }).catch((e) => (console.error('[pesquisa]', e.message), [])),
+      ia.pesquisarNaWeb(consulta).catch(() => null),
+    ]);
+    const fontes = web
+      ? [{ fonte: 'Google (busca na web com fontes)', titulo: `Resumo da busca: ${web.consultas.slice(0, 2).join(' / ') || consulta}`, url: web.fontes[0]?.url || `https://www.google.com/search?q=${encodeURIComponent(consulta)}`, trecho: `${web.texto}\nFontes: ${web.fontes.slice(0, 5).map((f) => f.url).join(' ')}` }, ...fontesBase]
+      : fontesBase;
     const fontesTxt = formatarFontes(fontes, 8);
     const r2 = await ia.responder({
       ...base,
@@ -557,6 +569,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     habito = r2.habito || habito;
     querAudio = r2.audio || querAudio;
     registro = r2.registro || registro;
+    refeicao = r2.refeicao || refeicao;
     origemExterna = ia.ultimaFoiExterna();
     if (fontes.length) {
       ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
@@ -564,6 +577,22 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
         .then((d) => console.log(`[pesquisa] nota salva: ${d.id}`))
         .catch((e) => console.error('[pesquisa] falha ao salvar nota:', e.message));
     }
+  }
+
+  // A Nutri quer o rótulo de um produto industrializado (Open Food Facts) antes de responder: busca e pergunta de novo
+  if (produto && !pedido) {
+    console.log(`[rotulo] Nutri pediu o rótulo de: ${produto}`);
+    const achados = await comTempo(ehCodigoBarras(produto) ? buscarPorCodigo(produto).then((p) => (p ? [p] : [])) : buscarPorNome(produto), 15_000, 'Open Food Facts').catch((e) => (console.warn('[rotulo]', e.message), []));
+    const bloco = achados.length ? blocoRotulos(achados) : `(nenhum produto encontrado no Open Food Facts para "${produto}": estime pelo que sabe do tipo de produto e diga que é estimativa)`;
+    console.log(`[rotulo] ${achados.length} produto(s) para "${produto}"`);
+    const r2 = await ia.responder({ ...base, rotulos: [base.rotulos, bloco].filter(Boolean).join('\n'), jaPesquisou: true, conhecimento });
+    resposta = r2.texto;
+    atualizacao = r2.atualizacao || atualizacao;
+    habito = r2.habito || habito;
+    querAudio = r2.audio || querAudio;
+    registro = r2.registro || registro;
+    refeicao = r2.refeicao || refeicao;
+    origemExterna = ia.ultimaFoiExterna();
   }
 
   // Foi refeição? Quando a análise traz "🕐 Refeição:" ou "O que eu vi" (comida consumida). "Estimativa" sozinha não basta:
@@ -582,8 +611,13 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // Correção de uma análise recente ("não é picanha, é fígado") com estimativa nova: atualiza o registro anterior
   // Vale também COM foto: o rótulo/tabela mandado minutos depois do shake ("segue a tabela, dá uma ajustada") corrige o
   // registro do shake, não vira uma segunda refeição de 800 kcal
-  const correcaoRecente = !temAudio && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30 && Boolean(lerEstimativa(resposta));
-  const foiRefeicao = !ehPedido && !blocoDeSugestao && (temBloco || correcaoRecente || (temImagem && Boolean(resposta) && !naoEhComida));
+  // Linha REFEICAO da IA (estruturada): números e tipo vêm dela, não de regex no texto. O texto continua como reserva
+  // (modelo externo que não escreveu a linha).
+  const TIPOS = new Set(['cafe', 'lanche_manha', 'almoco', 'lanche', 'jantar', 'ceia']);
+  const estruturada = refeicao && Number(refeicao.kcal) > 0 && Number(refeicao.kcal) < 8000 ? refeicao : null;
+  const correcaoEstruturada = Boolean(estruturada?.correcao) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 45;
+  const correcaoRecente = correcaoEstruturada || (!temAudio && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30 && Boolean(estruturada || lerEstimativa(resposta)));
+  const foiRefeicao = !ehPedido && !blocoDeSugestao && (Boolean(estruturada) || temBloco || correcaoRecente || (temImagem && Boolean(resposta) && !naoEhComida));
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
   if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
@@ -666,10 +700,13 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   let refeicaoRegistrada = null; // { slot, minutos } do registro feito agora, pra revisão poder corrigi-lo
   if (foiRefeicao) {
     // O tipo da refeição vem do que a IA entendeu (a pessoa disse "café da manhã"); numa correção, o da refeição corrigida
-    const slotFinal = (correcaoRecente && minhaUltima?.slot) || lerTipoRefeicao(resposta) || slot.id;
-    // Sem números legíveis na análise (modelo reserva com formato próprio)? Estimativa rápida num modelo leve a partir da descrição
-    let estimativa = lerEstimativa(resposta);
-    const descricaoBase = descricaoDaAnalise(resposta, resumoRefeicao);
+    const tipoEstruturado = estruturada && TIPOS.has(String(estruturada.tipo || '').trim()) ? String(estruturada.tipo).trim() : null;
+    const slotFinal = (correcaoRecente && minhaUltima?.slot) || tipoEstruturado || lerTipoRefeicao(resposta) || slot.id;
+    // Números: primeiro a linha REFEICAO; sem ela, o texto; sem números legíveis (modelo reserva), estimativa num modelo leve
+    let estimativa = estruturada
+      ? { kcal: Math.round(Number(estruturada.kcal)), p: Math.round(Number(estruturada.proteina) || 0), c: Math.round(Number(estruturada.carbo) || 0), g: Math.round(Number(estruturada.gordura) || 0) }
+      : lerEstimativa(resposta);
+    const descricaoBase = (typeof estruturada?.itens === 'string' && estruturada.itens.trim().slice(0, 220)) || descricaoDaAnalise(resposta, resumoRefeicao);
     if (!estimativa && descricaoBase && !/^\[(foto|áudio)\]$/.test(descricaoBase)) {
       estimativa = (await ia.estimarRefeicaoManual({ descricao: descricaoBase, perfil }).catch(() => null))?.estimativa || null;
       if (estimativa) console.log(`[refeicoes] estimativa de reserva pra ${perfil.nome}: ${JSON.stringify(estimativa)}`);

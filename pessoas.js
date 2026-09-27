@@ -9,6 +9,8 @@ import { listarPastasRaiz, listarArquivos, baixarArquivo, pastaNaRaiz, salvarEmP
 import * as ia from './gemini.js';
 import { ehPlanilhaSaude, sincronizarSaude } from './saude.js';
 import { textoRelogio } from './relogio.js';
+import { colecao as colecaoDocs, salvarPerfil as salvarPerfilDocs, registrarPesagem as registrarPesagemDocs } from './mongo.js';
+import { mdPerfil as mdPerfilDocs } from './drive.js';
 import { agora } from './util.js';
 
 const PASTAS_SISTEMA = new Set(['conhecimento', 'logs', 'diario', 'resumos', 'perfis']);
@@ -140,6 +142,8 @@ async function sincronizar(perfil, { forcar = false } = {}) {
       } else {
         const t = await textoDoArquivo(arq);
         st.textos.set(chave, { nome: arq.name, texto: t });
+        // bioimpedância, exame, avaliação: vira dado com data e confiança na ficha (uma vez por versão do arquivo)
+        if (t) analisarDocumento(perfil, arq, chave, t).catch((e) => console.error(`[documentos] "${arq.name}":`, e.message));
       }
     }
   }
@@ -196,4 +200,46 @@ export async function salvarNotas(perfil, texto, dia) {
 export async function salvarFicha(perfil, md) {
   const pastaId = await pastaDe(perfil);
   await salvarEmPasta(pastaId, ARQ_FICHA, md);
+}
+
+/**
+ * Documento novo na pasta (PDF, imagem, doc, texto) -> dados estruturados: tipo (bioimpedância, exame, avaliação...),
+ * data do documento, confiança (alta/média/baixa com motivo), medidas e exames. Guarda em documentos_pessoa (por versão
+ * do arquivo), resume no perfil (perfil.documentos, últimos 20) e reescreve a Nutri-Ficha.md. Bioimpedância confiável
+ * e com data vira pesagem com data (fonte "documento"). Não lança: erro aqui não pode derrubar o dossiê.
+ */
+async function analisarDocumento(perfil, arq, chave, texto) {
+  if (!texto || texto.length < 40 || arq.name.startsWith('Nutri-')) return;
+  const col = colecaoDocs('documentos_pessoa');
+  if (await col.findOne({ _id: chave })) return;
+  const jid = perfil.jids?.[0];
+  const hoje = agora().dia;
+  let d;
+  try {
+    d = await ia.extrairDadosDocumento({ texto, nomeArquivo: arq.name, hoje });
+  } catch (e) {
+    console.warn(`[documentos] não consegui extrair "${arq.name}":`, String(e.message).slice(0, 120));
+    return;
+  }
+  const temDados = Object.keys(d.medidas || {}).length > 0 || (d.exames || []).length > 0;
+  const doc = { _id: chave, arquivoId: arq.id, jid, nome: arq.name, modificado: arq.modifiedTime, ...d, relevante: d.tipo !== 'outro' || temDados, salvoEm: new Date() };
+  await col.replaceOne({ _id: chave }, doc, { upsert: true });
+  await col.deleteMany({ arquivoId: arq.id, _id: { $ne: chave } });
+  console.log(`[documentos] ${perfil.nome}: "${arq.name}" -> ${d.tipo}, data ${d.data || 'sem data'}, confiança ${d.confianca} (${d.motivo}); ${Object.keys(d.medidas || {}).length} medidas, ${(d.exames || []).length} exames`);
+  if (!doc.relevante) return;
+
+  // resumo compacto no perfil (o que a IA vê em toda resposta) e na ficha do Drive
+  const todos = await col.find({ jid, relevante: true }).toArray();
+  const documentos = todos
+    .sort((a, b) => String(a.data || a.modificado || '').localeCompare(String(b.data || b.modificado || '')))
+    .slice(-20)
+    .map((x) => ({ arquivo: x.nome, tipo: x.tipo, data: x.data || null, confianca: x.confianca, motivo: x.motivo, medidas: x.medidas || {}, exames: (x.exames || []).slice(0, 40), resumo: x.resumo }));
+  await salvarPerfilDocs({ jids: perfil.jids, documentos });
+  const perfilNovo = { ...perfil, documentos };
+  salvarFicha(perfilNovo, mdPerfilDocs(perfilNovo)).catch((e) => console.error('[documentos] ficha:', e.message));
+
+  // bioimpedância de confiança (não baixa) com data e peso: entra na evolução de peso com a data do exame
+  if (d.tipo === 'bioimpedancia' && d.confianca !== 'baixa' && d.data && d.medidas?.peso_kg && jid) {
+    await registrarPesagemDocs({ jid, nome: perfil.nome, dia: d.data, peso: d.medidas.peso_kg, gordura: d.medidas.gordura_pct ?? undefined, fonte: 'documento' }).catch((e) => console.error('[documentos] pesagem:', e.message));
+  }
 }

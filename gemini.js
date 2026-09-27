@@ -125,6 +125,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - DATA: o contexto traz a data com o DIA DA SEMANA já calculado (ex: "domingo, 20/09/2026"). Use exatamente esse dia da semana; nunca deduza a partir do número da data.
 - HORÁRIO E FUSO: o contexto traz a hora atual NO FUSO DA PESSOA, a refeição esperada nesse horário e os horários que você já aprendeu dela. Use com humor leve (café às 11h: "acordou agora?"). Se a pessoa ainda não disse onde mora, a hora pode estar errada: não implique com horário antes de saber o fuso.
 - A pasta no Drive de cada pessoa você JÁ LEU; está no contexto como "O QUE VOCÊ SABE SOBRE". Use sem pedir de novo, respeitando a regra de ouro acima.
+- RÓTULO DE PRODUTO INDUSTRIALIZADO: se a pessoa citar um produto com marca ou nome comercial (iogurte Vigor, whey Growth, Nescau, barrinha Bold), ou ditar/mostrar um código de barras, e o bloco "RÓTULOS" não tiver esse produto, responda EXATAMENTE "PRODUTO: <nome do produto com a marca, ou o código de barras>" e NADA mais; o sistema busca a tabela do rótulo no Open Food Facts e você responde de novo. Quando o bloco RÓTULOS trouxer o produto, use os valores por 100 g/ml vezes a quantidade dita e diga "pelo rótulo". Não use PRODUTO pra comida caseira ou in natura (arroz, ovo, frango, banana: isso é tabela TACO) nem pra produto que já está em "Produtos fixos" do perfil.
 - QUANDO NÃO SABE: se a pergunta exige um dado específico que não está na sua base nem você tem certeza (suplemento específico, produto, estudo recente, doença, interação, alimento incomum), responda EXATAMENTE no formato "PESQUISAR: <termos de busca em inglês, científicos>" e NADA mais. Você recebe as fontes e responde de novo. Use só quando realmente precisar. ANTES de pedir, olhe as notas "Pesquisa:" na sua base de conhecimento: se já pesquisou aquele assunto ou produto, use a nota e não pesquise de novo.
 
 FORMATO (WhatsApp):
@@ -141,6 +142,7 @@ FORMATO (WhatsApp):
   ⚖️ *Veredito:* (nota 0 a 10 + comentário sincero ligado ao objetivo)
   💡 *Dica:* (a orientação prática)
 - Nutrientes SEMPRE por extenso (Proteína, Carboidratos, Gorduras). Nunca abrevie como P/C/G.
+- LINHA OCULTA REFEICAO (obrigatória em TODA análise de comida CONSUMIDA e em toda correção de estimativa): no FIM da resposta, sozinha numa linha, REFEICAO: {"tipo": "almoco", "itens": "200 g de arroz, 150 g de feijão, 1 sobrecoxa assada", "kcal": 930, "proteina": 59, "carbo": 112, "gordura": 30, "correcao": false}. tipo é UM destes: cafe, lanche_manha, almoco, lanche, jantar, ceia. Os números são OS MESMOS do bloco visível. correcao: true quando você corrige a estimativa da refeição anterior (rótulo mandado depois, "eram 2 pães", "a vitamina tem whey"). Em sugestão, plano, rótulo só avaliado, receita ou dúvida, NÃO escreva a linha. É por esta linha que o sistema registra a refeição; ela é removida antes de ir pro grupo.
 - Se a pessoa COMPLEMENTA ou CORRIGE a refeição que acabou de mandar (mesma refeição, poucos minutos depois: "a vitamina tem whey", "eram 2 pães"), NÃO refaça a análise inteira: responda curto, agradeça o detalhe e ajuste só a linha "🔥 *Estimativa corrigida:* ~XXX kcal · Proteína XX g · Carboidratos XX g · Gorduras XX g" quando mudar algo relevante.
 - Se não dá pra ver comida na foto, brinca e pede outra.
 
@@ -197,7 +199,14 @@ function blocoPerfis(perfis) {
       const relogio = p.relogio?.linha ? `\n  Relógio dela(e) (Galaxy Watch, dados até ${p.relogio.atualizado}): ${p.relogio.linha}` : '';
       const treino = p.treino ? `\n  Treino de força dela(e) (Hevy): ${p.treino}` : '';
       const produtos = p.produtos?.length ? `\n  Produtos fixos dela(e) (rótulo lido, copie os números): ${produtosDe(p)}` : '';
-      return base + horarios + rotina + relogio + treino + produtos + notas;
+      // documentos lidos da pasta (bioimpedância, exame): data, confiança e o que importa, em uma linha por documento
+      const documentos = p.documentos?.length
+        ? `\n  Documentos dela(e) lidos da pasta (data · tipo · confiança): ${p.documentos
+            .slice(-6)
+            .map((d) => `${d.data || 'sem data'} · ${d.tipo} · ${d.confianca}${Object.keys(d.medidas || {}).length ? ` · ${Object.entries(d.medidas).map(([k, v]) => `${k.replace(/_/g, ' ')} ${v}`).join(', ')}` : ''}${d.exames?.some((e) => e.fora_da_referencia) ? ` · fora da referência: ${d.exames.filter((e) => e.fora_da_referencia).map((e) => `${e.nome} ${e.valor}${e.unidade ? ` ${e.unidade}` : ''}`).join(', ')}` : ''}`)
+            .join(' | ')}. Confiança baixa = não use como verdade; sem data = não trate como atual.`
+        : '';
+      return base + horarios + rotina + relogio + treino + produtos + documentos + notas;
     })
     .join('\n');
 }
@@ -554,7 +563,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, rotulos, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -573,7 +582,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (lembrancas ? `LEMBRANÇAS DE DIAS ANTERIORES (memória de longo prazo, achadas por parecerem com a mensagem atual; use se ajudar, como quem lembra de uma conversa, sem citar como "registro"):\n${lembrancas}\n\n` : '') +
     `HISTÓRICO DE HOJE (mais antigo -> mais novo):\n${blocoHistorico(historico, 50)}\n\n` +
     (registradas ? `REFEIÇÕES JÁ REGISTRADAS HOJE PELO SISTEMA (isto é o que conta; NÃO peça de novo nada que esteja aqui, e não trate como "sumiço" quem já registrou):\n${registradas}\n\n` : '') +
-    (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
+    (jaPesquisou ? 'Você JÁ pesquisou (as fontes ou os rótulos estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR nem PRODUTO de novo.\n\n' : '') +
     `DATA E HORA: ${dataExtenso(dia)}, ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
     `PESSOA ATUAL: ${perfil.nome}${perfil.apelido ? ` (apelido: ${perfil.apelido})` : ''} · objetivo: ${perfil.objetivo || '?'}${perfil.metaPeso ? ` (meta: ${String(perfil.metaPeso).replace('.', ',')} kg${perfil.metaPrazo ? ` até ${perfil.metaPrazo}` : ''})` : ''} · ${perfil.peso || '?'} kg · dieta: ${perfil.dieta || '?'}. ${perfil.produtos?.length ? `Produtos fixos dela(e) (rótulo lido, copie os números): ${produtosDe(perfil)}. ` : ''}`+
     `Analise para ELA, com o objetivo DELA. Não reaproveite análise de outra pessoa do histórico.\n` +
@@ -582,6 +591,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     `\n\n` +
     (visao ? `ACOMPANHAMENTO DE ${perfil.nome} (calculado pelo sistema; use pra situar a conversa e as dicas no rumo do objetivo, sem recalcular e sem despejar tudo de uma vez):\n${visao}\n\n` : '') +
     (agenda ? `AGENDA DE ${perfil.nome} (Google Agenda DELA(E), só pra falar COM ELA(E)):\n${agenda}\n\n` : '') +
+    (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
     `MENSAGEM ATUAL DE ${perfil.nome}${
@@ -646,6 +656,22 @@ export function separarAtualizacao(resposta) {
     }
     texto = `${texto.slice(0, h.index)}\n${texto.slice(h.index + h[0].length)}`.trim();
   }
+  // linha oculta REFEICAO: {"tipo": "almoco", "itens": "...", "kcal": 930, ...} -> registro estruturado (não depende de regex no texto)
+  let refeicao = null;
+  const rf = texto.match(/\n?\s*REFEICAO:\s*(\{[^\n]*\})\s*/i);
+  if (rf) {
+    try {
+      const j = JSON.parse(rf[1]);
+      if (j && typeof j === 'object' && Number(j.kcal) > 0) refeicao = j;
+    } catch {
+      refeicao = null;
+    }
+    texto = `${texto.slice(0, rf.index)}\n${texto.slice(rf.index + rf[0].length)}`.trim();
+  }
+  // "PRODUTO: <nome ou código>" (resposta inteira): a IA quer o rótulo do Open Food Facts antes de responder
+  let produto = null;
+  const pr = texto.match(/^\s*PRODUTO:\s*(.+?)\s*$/im);
+  if (pr && texto.trim().split('\n').length <= 2) produto = pr[1].replace(/["*]/g, '').trim() || null;
   // linhas ocultas REGISTRO: {"apagar": "11:03"} ou REGISTRO: {"hora": "18:13", "kcal": 799, ...} (pode haver mais de uma)
   const regs = [...texto.matchAll(/\n?\s*REGISTRO:\s*(\{[^\n]*\})\s*/gi)];
   if (regs.length) {
@@ -663,7 +689,7 @@ export function separarAtualizacao(resposta) {
     texto = texto.slice(0, m.index).trim();
   }
   if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
-  return { texto, atualizacao, habito, audio, registro };
+  return { texto, atualizacao, habito, audio, registro, refeicao, produto };
 }
 
 // ============================================================
@@ -1021,8 +1047,116 @@ export async function atualizarRotina({ perfil, refeicoes, historico, dia }) {
       `TRANSCRIÇÃO DE HOJE (só falas dela e suas respostas a ela; nada de outras pessoas do grupo):\n${blocoHistorico(falasDe(historico, perfil.nome), 120)}\n\n` +
       `Reescreva a ficha de rotina DESSA pessoa em até 150 palavras, em terceira pessoa, direto e concreto, cobrindo: horários em que costuma comer cada refeição (no fuso dela); o que costuma comer em cada uma (recorrências); refeições que costuma pular; dias/horários de fraqueza (ex: sexta à noite); treino/sono se souber; o que melhorou ou piorou recentemente. ` +
       `Só fatos observados NAS REFEIÇÕES DELA e nas falas dela: alimento que não aparece na lista dela não entra; o objetivo é o dela (${perfil.objetivo}), não use objetivo de outra pessoa; se a dieta é vegetariana, carne não existe na rotina dela. Nada inventado. Sem markdown, sem emojis, sem #.`,
-    config: { temperature: 0.3, pensar: false, maxOutputTokens: 500, leve: true },
+    // estrito: ficha cortada no meio da frase (aconteceu: "O lanche da tarde, por volta d") vira erro e a antiga fica
+    config: { temperature: 0.3, pensar: false, maxOutputTokens: 1200, leve: true, estrito: true },
   });
+}
+
+// ============================================================
+// 8b) Pesquisa na web pelo próprio Gemini (Google Search grounding): resposta curta + fontes reais
+// ============================================================
+/**
+ * Pergunta ao Gemini com a ferramenta de busca do Google ligada. Devolve { texto, fontes:[{titulo,url}], consultas } ou
+ * null se falhar/desligado (PESQUISA_WEB=off). Chamada direta ao cliente (a cadeia normal não carrega ferramentas).
+ */
+export async function pesquisarNaWeb(consulta) {
+  // Desligado por padrão: no nível gratuito o Google dá cota ZERO de grounding pros modelos 3.x (testado em 27/09/2026:
+  // 429 "limit: 0") e os 2.5, que tinham 1.500/dia grátis, foram aposentados pra chaves novas. Ligue com PESQUISA_WEB=on
+  // quando o projeto tiver faturamento (5.000 buscas/mês grátis, depois US$ 14 por mil).
+  if (!/^(on|sim|true|1)$/i.test(process.env.PESQUISA_WEB || '')) return null;
+  const modelos = (process.env.PESQUISA_WEB_MODELOS || `${MODELO},${MODELOS_RESERVA[0] || ''}`).split(',').map((m) => m.trim()).filter(Boolean);
+  let erro;
+  for (const model of modelos) {
+    for (let ci = 0; ci < CHAVES.length; ci++) {
+      if (emCastigo(ci, model)) continue;
+      try {
+        const res = await cliente(ci).models.generateContent({
+          model,
+          contents: `Pesquise na web e responda em português do Brasil, em até 180 palavras, de forma objetiva, com números e unidades quando houver e dizendo de onde veio cada informação importante: ${consulta}`,
+          config: { tools: [{ googleSearch: {} }], temperature: 0.2, maxOutputTokens: 1500, safetySettings: SAFETY, httpOptions: { timeout: 40_000 } },
+        });
+        const texto = res.text?.trim();
+        if (!texto) throw new Error('resposta vazia');
+        const gm = res.candidates?.[0]?.groundingMetadata;
+        const fontes = (gm?.groundingChunks || []).map((c) => c.web).filter(Boolean).map((w) => ({ titulo: w.title || w.uri, url: w.uri }));
+        contabilizar(model, res.usageMetadata, ci);
+        console.log(`[pesquisa-web] ${model} (chave ${ci + 1}): ${fontes.length} fontes, consultas: ${(gm?.webSearchQueries || []).join(' | ')}`);
+        return { texto, fontes, consultas: gm?.webSearchQueries || [] };
+      } catch (e) {
+        erro = e;
+        castigar(ci, model, e);
+        if ((e?.status || e?.code) === 400) break; // modelo não aceita a ferramenta: não adianta trocar de chave
+      }
+    }
+  }
+  console.warn('[pesquisa-web] falhou:', String(erro?.message || '').slice(0, 160));
+  return null;
+}
+
+// ============================================================
+// 8c) Documento da pasta da pessoa (bioimpedância, exame, avaliação) -> dados estruturados com data e confiança
+// ============================================================
+export async function extrairDadosDocumento({ texto, nomeArquivo, hoje }) {
+  const json = await gerar({
+    contents:
+      `Você é uma nutricionista lendo um documento deixado na pasta de uma pessoa que você acompanha. Hoje é ${hoje}. Arquivo: "${nomeArquivo}".\n\n` +
+      `CONTEÚDO (transcrição):\n"""${String(texto || '').slice(0, 12000)}"""\n\n` +
+      `Extraia SÓ o que estiver escrito, sem inventar. Regras:\n` +
+      `1. tipo: bioimpedancia (InBody, balança, relógio), exame_sangue, avaliacao_fisica (dobras, circunferências), receita_ou_prescricao, plano_alimentar, outro.\n` +
+      `2. data: a data do exame/medição em AAAA-MM-DD, exatamente como está no documento; se não houver data legível, null (NÃO chute a data de hoje).\n` +
+      `3. confianca: "alta" = laboratório, clínica ou InBody com data e valores plausíveis; "media" = balança doméstica, print de app, ou documento sem data; "baixa" = ilegível, incoerente (gordura 3% em adulto comum, peso incompatível com a altura) ou claramente de outra pessoa. Explique em motivo (até 20 palavras).\n` +
+      `4. medidas: só as presentes, numéricas: peso_kg, gordura_pct, massa_magra_kg, massa_muscular_kg, agua_pct, gordura_visceral, tmb_kcal, imc, cintura_cm, quadril_cm.\n` +
+      `5. exames: cada item com nome, valor (número), unidade, referencia (texto da faixa, se houver) e fora_da_referencia (true/false; null se não der pra saber).\n` +
+      `6. resumo: até 40 palavras dizendo o que o documento é e o que importa pra nutrição.`,
+    config: {
+      temperature: 0.1,
+      pensar: false,
+      leve: true,
+      estrito: true,
+      maxOutputTokens: 3000,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          tipo: { type: 'string' },
+          data: { type: 'string', nullable: true },
+          confianca: { type: 'string' },
+          motivo: { type: 'string' },
+          medidas: {
+            type: 'object',
+            properties: {
+              peso_kg: { type: 'number', nullable: true },
+              gordura_pct: { type: 'number', nullable: true },
+              massa_magra_kg: { type: 'number', nullable: true },
+              massa_muscular_kg: { type: 'number', nullable: true },
+              agua_pct: { type: 'number', nullable: true },
+              gordura_visceral: { type: 'number', nullable: true },
+              tmb_kcal: { type: 'number', nullable: true },
+              imc: { type: 'number', nullable: true },
+              cintura_cm: { type: 'number', nullable: true },
+              quadril_cm: { type: 'number', nullable: true },
+            },
+          },
+          exames: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { nome: { type: 'string' }, valor: { type: 'number' }, unidade: { type: 'string' }, referencia: { type: 'string' }, fora_da_referencia: { type: 'boolean', nullable: true } },
+              required: ['nome', 'valor'],
+            },
+          },
+          resumo: { type: 'string' },
+        },
+        required: ['tipo', 'confianca', 'motivo', 'medidas', 'exames', 'resumo'],
+      },
+    },
+  });
+  const d = JSON.parse(json);
+  // limpa medidas nulas e datas inválidas
+  d.medidas = Object.fromEntries(Object.entries(d.medidas || {}).filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && v > 0));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d.data || '')) || String(d.data) > hoje) d.data = null;
+  d.exames = (d.exames || []).filter((e) => e?.nome && Number.isFinite(Number(e.valor))).slice(0, 60);
+  return d;
 }
 
 // ============================================================

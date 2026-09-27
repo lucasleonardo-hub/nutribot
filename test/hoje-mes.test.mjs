@@ -10,6 +10,7 @@ import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo, pareceCorrecao, parece
 import { acharRegistro } from '../resumo.js';
 import { aplicarAtualizacao } from '../perfis.js';
 import { normalizarEnvio, fundir, tokensRelogio } from '../relogio.js';
+import { codigosDeBarras, ehCodigoBarras, normalizarProduto, blocoRotulos } from '../off.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
@@ -326,6 +327,37 @@ test('recuperação: batimento de repouso acima da média por 2+ dias vira sinal
   const ind = indicadoresRelogio({ pesos: [], sonos: [], atividades: [...normal, base(61, 12), base(63, 13)].map((a) => ({ ...a, passos: 8000 })) }, { hoje: '2026-09-26' });
   assert.equal(ind.recuperacao, 'acima');
   assert.match(ind.linha, /acima do normal há 2 dias/);
+});
+
+test('rótulos (Open Food Facts): código de barras no texto, normalização e bloco pro prompt', () => {
+  assert.deepEqual(codigosDeBarras('tomei um iogurte 7891999003072 e um 20260926 de nada'), ['7891999003072']); // data de 8 dígitos fica fora
+  assert.equal(ehCodigoBarras('7891000100103'), true);
+  assert.equal(ehCodigoBarras('whey growth'), false);
+  const p = normalizarProduto({ code: '7891999003072', product_name: 'Iogurte Grego Vigor Pote 100g', brands: ['VIGOR'], quantity: '100g', serving_size: '100 g', nova_group: 4, nutriments: { 'energy-kcal_100g': 151, proteins_100g: 5.1, carbohydrates_100g: 16, fat_100g: 7.5, sugars_100g: 14.2, 'energy-kcal_serving': 151 } });
+  assert.equal(p.kcal, 151);
+  assert.equal(p.proteina, 5.1);
+  assert.equal(p.marca, 'VIGOR');
+  assert.equal(normalizarProduto({ code: 'x', product_name: 'sem tabela', nutriments: {} }), null);
+  const bloco = blocoRotulos([p]);
+  assert.match(bloco, /Iogurte Grego Vigor Pote 100g \(VIGOR\), embalagem 100g \[código 7891999003072\]/);
+  assert.match(bloco, /por 100 g\/ml: 151 kcal · Proteína 5\.1 g · Carboidratos 16 g · Gorduras 7\.5 g \(açúcares 14\.2 g\)/);
+  assert.match(bloco, /porção do rótulo: 100 g = 151 kcal · NOVA 4 \(ultraprocessado\)/);
+  assert.equal(blocoRotulos([]), '');
+});
+
+test('linha REFEICAO estruturada e pedido PRODUTO são lidos e somem do texto', () => {
+  const r = separarAtualizacao('Pratão! 🍽️\n🕐 *Refeição:* almoço\n🔥 *Estimativa:* ~930 kcal · Proteína 59 g · Carboidratos 112 g · Gorduras 30 g\nREFEICAO: {"tipo": "almoco", "itens": "200 g de arroz, 150 g de feijão, 1 sobrecoxa", "kcal": 930, "proteina": 59, "carbo": 112, "gordura": 30, "correcao": false}');
+  assert.equal(r.refeicao.tipo, 'almoco');
+  assert.equal(r.refeicao.kcal, 930);
+  assert.equal(r.refeicao.correcao, false);
+  assert.ok(!/REFEICAO/.test(r.texto));
+  assert.match(r.texto, /Gorduras 30 g$/);
+  assert.equal(separarAtualizacao('Sem bloco.\nREFEICAO: {"tipo": "almoco", "kcal": 0}').refeicao, null); // kcal 0 não é refeição
+  const p = separarAtualizacao('PRODUTO: whey concentrado Growth');
+  assert.equal(p.produto, 'whey concentrado Growth');
+  assert.equal(p.texto, 'PRODUTO: whey concentrado Growth');
+  assert.equal(separarAtualizacao('Oi! Sobre o whey...\nPRODUTO: x\nmais texto\ne mais').produto, null); // só vale como resposta inteira
+  assert.equal(semLinhaAtualizar('Feito.\nREFEICAO: {"tipo": "cafe", "kcal": 300}'), 'Feito.');
 });
 
 test('perfil: produto fixo com rótulo lido entra em produtos e substitui o de mesmo nome', () => {

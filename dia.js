@@ -168,9 +168,12 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
         }
         try {
           const rotina = await ia.atualizarRotina({ perfil: p, refeicoes: p._refs || [], historico, dia });
-          if (rotina?.trim()) {
+          // ficha que termina no meio da frase (saída cortada) não substitui a anterior
+          if (rotina?.trim() && /[.!?)"»]$/.test(rotina.trim())) {
             p.rotina = rotina.trim();
             await salvarPerfil({ jids: p.jids, rotina: p.rotina });
+          } else if (rotina?.trim()) {
+            console.warn(`[rotina] ${p.nome}: texto novo parece cortado ("...${rotina.trim().slice(-40)}"); mantendo a ficha anterior`);
           }
         } catch (e) {
           console.error(`[rotina] falha para ${p.nome}:`, e.message);
