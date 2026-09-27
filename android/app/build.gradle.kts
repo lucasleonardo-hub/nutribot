@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "br.nutribot.relogio"
-    compileSdk = 35
+    compileSdk = 36 // connect-client 1.1.0 exige API 36
 
     defaultConfig {
         applicationId = "br.nutribot.relogio"
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
