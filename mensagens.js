@@ -3,13 +3,13 @@
 
 import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, registrarHabito } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, apagarRefeicaoPorId, registrarHabito } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
 import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
-import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot } from './resumo.js';
+import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot, acharRegistro } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
 import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
@@ -526,9 +526,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   let atualizacao = null;
   let habito = null;
   let querAudio = false;
+  let registro = null; // linhas REGISTRO da IA: apagar/corrigir registros do dia a pedido da pessoa
   try {
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
-    ({ texto: resposta, atualizacao, habito, audio: querAudio } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
+    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
   } catch (e) {
     // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -555,6 +556,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     atualizacao = r2.atualizacao || atualizacao;
     habito = r2.habito || habito;
     querAudio = r2.audio || querAudio;
+    registro = r2.registro || registro;
     origemExterna = ia.ultimaFoiExterna();
     if (fontes.length) {
       ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
@@ -578,7 +580,9 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // Texto sem foto que é pedido de sugestão ou plano futuro NUNCA vira refeição, mesmo que a IA tenha posto o bloco
   const ehPedido = !temImagem && !temAudio && parecePedidoOuPlano(texto);
   // Correção de uma análise recente ("não é picanha, é fígado") com estimativa nova: atualiza o registro anterior
-  const correcaoRecente = !temImagem && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30 && Boolean(lerEstimativa(resposta));
+  // Vale também COM foto: o rótulo/tabela mandado minutos depois do shake ("segue a tabela, dá uma ajustada") corrige o
+  // registro do shake, não vira uma segunda refeição de 800 kcal
+  const correcaoRecente = !temAudio && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30 && Boolean(lerEstimativa(resposta));
   const foiRefeicao = !ehPedido && !blocoDeSugestao && (temBloco || correcaoRecente || (temImagem && Boolean(resposta) && !naoEhComida));
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
@@ -623,6 +627,39 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // água/álcool ditos agora (linha oculta HABITO da IA) -> somados no dia; aparecem no !hoje
   if (habito && typeof habito === 'object') {
     registrarHabito({ jid: jids[0], nome: perfil.nome, dia, agua_ml: Number(habito.agua_ml) || 0, alcool_doses: Number(habito.alcool_doses) || 0 }).catch((e) => console.error('[habitos]', e.message));
+  }
+  // A pessoa pediu pra apagar ou corrigir um registro do dia (linha oculta REGISTRO da IA): o sistema executa aqui,
+  // só nos registros DELA. Sem a linha, nada muda (e a regra manda a IA não prometer que "já ajustou").
+  for (const reg of Array.isArray(registro) ? registro : []) {
+    try {
+      const meus = refeicoesHoje.filter((r) => jids.includes(r.jid));
+      const alvo = acharRegistro(meus, reg.apagar ?? reg.hora);
+      if (!alvo) {
+        console.warn(`[refeicoes] REGISTRO de ${perfil.nome} sem alvo: ${JSON.stringify(reg)} (registros: ${meus.map((r) => r.horaLocal || r.hora).join(', ') || 'nenhum'})`);
+        continue;
+      }
+      if (reg.apagar != null) {
+        await apagarRefeicaoPorId(alvo._id);
+        console.log(`[refeicoes] ${perfil.nome} apagou o registro das ${alvo.horaLocal || alvo.hora} (${alvo.slot}, ~${alvo.estimativa?.kcal || '?'} kcal)`);
+        continue;
+      }
+      const set = {};
+      const est = { ...(alvo.estimativa || {}) };
+      if (Number(reg.kcal) > 0) est.kcal = Number(reg.kcal);
+      if (reg.proteina != null && Number(reg.proteina) >= 0) est.p = Number(reg.proteina);
+      if (reg.carbo != null && Number(reg.carbo) >= 0) est.c = Number(reg.carbo);
+      if (reg.gordura != null && Number(reg.gordura) >= 0) est.g = Number(reg.gordura);
+      if (est.kcal) set.estimativa = est;
+      const tipo = reg.tipo && lerTipoRefeicao(`Refeição: ${reg.tipo}`);
+      if (tipo) set.slot = tipo;
+      if (typeof reg.descricao === 'string' && reg.descricao.trim()) set.descricao = reg.descricao.trim().slice(0, 220);
+      if (Object.keys(set).length) {
+        await atualizarRefeicao(alvo._id, set);
+        console.log(`[refeicoes] ${perfil.nome} corrigiu o registro das ${alvo.horaLocal || alvo.hora}: ${JSON.stringify(set)}`);
+      }
+    } catch (e) {
+      console.error('[refeicoes] REGISTRO falhou:', e.message);
+    }
   }
 
   const resumoRefeicao = texto || (temImagem ? (imagens.length > 1 ? `[${imagens.length} fotos]` : '[foto]') : temAudio ? '[áudio]' : '');

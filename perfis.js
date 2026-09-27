@@ -59,5 +59,22 @@ export function aplicarAtualizacao(perfil, a, dia) {
   if (meta && meta > 25 && meta < 400) set('metaPeso', meta);
   const prazo = str(a.meta_prazo);
   if (prazo && /^\d{4}-\d{2}(-\d{2})?$/.test(prazo)) set('metaPrazo', prazo.length === 7 ? `${prazo}-28` : prazo);
+  // produto de uso fixo com rótulo lido ("vai ser sempre esse hipercalórico, deixa salvo"): porção e números pra copiar depois
+  if (a.produto && typeof a.produto === 'object') {
+    const nome = str(a.produto.nome)?.toLowerCase();
+    const kcal = num(a.produto.kcal);
+    if (nome && kcal && kcal > 0 && kcal < 5000) {
+      const item = {
+        nome,
+        porcao: str(a.produto.porcao) || '1 porção',
+        kcal: Math.round(kcal),
+        proteina: Math.round(num(a.produto.proteina) || 0),
+        carbo: Math.round(num(a.produto.carbo) || 0),
+        gordura: Math.round(num(a.produto.gordura) || 0),
+        em: dia,
+      };
+      set('produtos', [...(perfil.produtos || []).filter((p) => p.nome !== nome), item].slice(-10));
+    }
+  }
   return Object.keys(novo).length > 2 ? novo : null;
 }

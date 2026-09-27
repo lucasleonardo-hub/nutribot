@@ -212,6 +212,26 @@ const TIPO_POR_PALAVRA = [
   [/jantar|janta|dinner/i, 'jantar'],
   [/ceia|madrugada/i, 'ceia'],
 ];
+/**
+ * Acha o registro que a pessoa quis dizer: "ultimo"/"último" é o mais recente; "11:03" ou "11h03" é o que tem essa hora
+ * local (exata; senão o mais próximo até 5 min). Devolve null se não houver. Puro: recebe só os registros DA pessoa.
+ */
+export function acharRegistro(registros, ref) {
+  const lista = [...(registros || [])].sort((a, b) => (a.minutos || 0) - (b.minutos || 0));
+  if (!lista.length) return null;
+  const r = String(ref || '').trim().toLowerCase();
+  if (!r || /^[úu]ltim[oa]$/.test(r)) return lista[lista.length - 1];
+  const m = r.match(/^(\d{1,2})\s*[:h]\s*(\d{2})$/);
+  if (!m) return null;
+  const alvo = Number(m[1]) * 60 + Number(m[2]);
+  const hh = `${String(m[1]).padStart(2, '0')}:${m[2]}`;
+  return (
+    lista.find((x) => x.horaLocal === hh || x.hora === hh) ||
+    lista.map((x) => ({ x, d: Math.abs((x.minutos || 0) - alvo) })).filter((p) => p.d <= 5).sort((a, b) => a.d - b.d)[0]?.x ||
+    null
+  );
+}
+
 export function lerTipoRefeicao(texto) {
   const m = String(texto || '').match(/Refei[cç][aã]o:\*?\s*([^\n]{2,40})/i);
   if (!m) return null;

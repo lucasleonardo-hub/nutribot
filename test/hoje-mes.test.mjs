@@ -6,7 +6,9 @@ import { configGrafico } from '../graficos.js';
 import { preverSemana, conferirPrevisao, pesagemPerto, somarDias, avaliarRitmo, projetarMeta } from '../previsao.js';
 import { textoParaFala, promptDeVoz, wavDePcm } from '../voz.js';
 import { separarAtualizacao, montarSystem } from '../gemini.js';
-import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo } from '../util.js';
+import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo, pareceCorrecao, parecePedidoOuPlano } from '../util.js';
+import { acharRegistro } from '../resumo.js';
+import { aplicarAtualizacao } from '../perfis.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
@@ -240,6 +242,37 @@ test('configGrafico: barras de kcal, linha de peso, faixa da meta e gasto do rel
 test('textoParaFala: tira markdown, emojis e fala números', () => {
   const f = textoParaFala('*Almoço* top! 🏐\n🔥 *Estimativa:* ~950 kcal · [[Proteína]] 60 g\n💡 Dica: dormiu 5h03?');
   assert.equal(f, 'Almoço top!\nEstimativa: ~950 calorias · Proteína 60 gramas\nDica: dormiu 5 horas e 03?');
+});
+
+test('registros: rótulo depois do shake é correção, sobremesa é consumo, e a linha REGISTRO é lida e some do texto', () => {
+  assert.equal(pareceCorrecao('Segue aqui a tabela do hipercalorico da uma ajustada nessas calorias ai'), true);
+  assert.equal(pareceConsumo('E minha sobremesa são os 2 bolinhos que sobraram ali super proteicos, arrasei?'), true);
+  assert.equal(parecePedidoOuPlano('E minha sobremesa são os 2 bolinhos que sobraram ali super proteicos, arrasei?'), false);
+  const r = separarAtualizacao('Pode deixar, tirei o almoço das 11:03 e ajustei o shake. 🛠️\nREGISTRO: {"apagar": "11:03"}\nREGISTRO: {"hora": "18:13", "kcal": 799, "proteina": 26, "tipo": "lanche"}');
+  assert.equal(r.texto, 'Pode deixar, tirei o almoço das 11:03 e ajustei o shake. 🛠️');
+  assert.deepEqual(r.registro, [{ apagar: '11:03' }, { hora: '18:13', kcal: 799, proteina: 26, tipo: 'lanche' }]);
+  assert.equal(separarAtualizacao('Tudo certo.').registro, null);
+  assert.equal(semLinhaAtualizar('Feito.\nREGISTRO: {"apagar": "ultimo"}'), 'Feito.');
+  const regs = [
+    { _id: 1, horaLocal: '11:03', minutos: 663, slot: 'almoco' },
+    { _id: 2, horaLocal: '11:08', minutos: 668, slot: 'cafe' },
+    { _id: 3, horaLocal: '18:13', minutos: 1093, slot: 'lanche' },
+  ];
+  assert.equal(acharRegistro(regs, '11:03')._id, 1);
+  assert.equal(acharRegistro(regs, '11h03')._id, 1);
+  assert.equal(acharRegistro(regs, '18:15')._id, 3); // até 5 min de diferença
+  assert.equal(acharRegistro(regs, 'ultimo')._id, 3);
+  assert.equal(acharRegistro(regs, '09:00'), null);
+  assert.equal(acharRegistro([], 'ultimo'), null);
+});
+
+test('perfil: produto fixo com rótulo lido entra em produtos e substitui o de mesmo nome', () => {
+  const p1 = aplicarAtualizacao({ nome: 'Ana', jids: ['x'] }, { produto: { nome: 'Hipercalórico', porcao: '160 g + 300 ml leite', kcal: 799, proteina: 26, carbo: 150, gordura: 10.2 } }, '2026-09-26');
+  assert.deepEqual(p1.produtos, [{ nome: 'hipercalórico', porcao: '160 g + 300 ml leite', kcal: 799, proteina: 26, carbo: 150, gordura: 10, em: '2026-09-26' }]);
+  const p2 = aplicarAtualizacao({ nome: 'Ana', jids: ['x'], produtos: p1.produtos }, { produto: { nome: 'hipercalórico', porcao: '2 dosadores', kcal: 250 } }, '2026-09-27');
+  assert.equal(p2.produtos.length, 1);
+  assert.equal(p2.produtos[0].kcal, 250);
+  assert.equal(aplicarAtualizacao({ nome: 'Ana', jids: ['x'] }, { produto: { nome: 'x' } }, '2026-09-26'), null); // sem kcal não grava
 });
 
 test('voz: prompt do TTS separa estilo do texto e WAV ganha cabeçalho certo', () => {

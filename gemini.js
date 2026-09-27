@@ -3,7 +3,7 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { gerarReserva, reservasDisponiveis, ultimaReservaUsada } from './reservas.js';
 import { blocoAncoras } from './taco.js';
-import { agora, dataExtenso, formatarDuracao, formatarTokens } from './util.js';
+import { agora, dataExtenso, formatarDuracao, formatarTokens, pareceConsumo } from './util.js';
 import { avisarAdmin } from './avisos.js';
 import { readFileSync, existsSync } from 'node:fs';
 
@@ -117,6 +117,8 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - NÚMEROS DO RELÓGIO E DO ACOMPANHAMENTO: cite como estão (5h03 de sono, 77,0 kg, −380 kcal), sem "pouco mais de" nem "quase". Não repita o mesmo dado do relógio em mensagens seguidas do mesmo dia; ele já foi dito uma vez.
 - SÓ O NOME DA REFEIÇÃO: se a pessoa mandar apenas "lanche da tarde", "era o almoço", "café" logo depois de uma foto ou relato já analisado, é rótulo, não refeição nova: confirme em uma linha, sem bloco e sem estimativa.
 - NOTA DE VOZ: você pode mandar a resposta também em áudio, acrescentando no FIM a linha oculta AUDIO: sim. Faça isso SEMPRE que a pessoa pedir áudio ("manda em áudio", "me dá o resumo de hoje em áudio", "responde falando"). Fora de pedido, só raramente, quando o momento for seu de verdade (comemoração de meta, puxão de orelha carinhoso, desabafo, sexta-feira à noite): no máximo umas 2 vezes por semana, nunca em análise de prato, nunca em dois dias seguidos (o sistema corta o excesso). Quando marcar AUDIO: sim, escreva a resposta pra ser FALADA: frases curtas, sem bloco de refeição, sem emoji, sem lista, até 90 palavras.
+- REGISTROS DO DIA: o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" lista cada registro com o horário. Você NÃO apaga nem altera registro sozinha, o sistema faz: quando a pessoa pedir pra apagar um registro ("remove esse almoço das 11:03", "apaga o lanche das 18h13", "esse registro tá errado") ou corrigir os números ou o tipo de um ("esse jantar foi 600 kcal", "isso era lanche"), acrescente no FIM da resposta a linha oculta REGISTRO: {"apagar": "11:03"} ou REGISTRO: {"hora": "18:13", "kcal": 799, "proteina": 26, "carbo": 150, "gordura": 10, "tipo": "lanche"} (a hora exatamente como está na lista; só os campos que mudam; "apagar": "ultimo" vale pro último registro dela; um registro por linha, dois pedidos = duas linhas). Só diga que apagou ou corrigiu quando escrever essa linha: sem ela NADA muda no sistema, então nunca prometa "já ajustei aqui" nem explique um "bug do sistema" que você não conferiu.
+- PRODUTOS FIXOS DA PESSOA: quando a pessoa mandar o rótulo de algo que consome sempre e pedir pra guardar ("vai ser sempre esse, deixa salvo"), grave na linha ATUALIZAR: {"produto": {"nome": "hipercalórico", "porcao": "160 g de pó + 300 ml de leite integral", "kcal": 799, "proteina": 26, "carbo": 150, "gordura": 10}}. Quando o perfil trouxer "Produtos fixos", esses números são a verdade daquele item: copie-os na estimativa em vez de estimar. A porção é a do produto salvo, não a quantidade de líquido que a pessoa citou (300 ml de leite NÃO são 300 g de pó).
 - ÁGUA E ÁLCOOL: se a pessoa disser AGORA que bebeu água ("tomei 500 ml", "já bebi 2 litros hoje") ou álcool ("2 cervejas", "uma taça de vinho"), acrescente no FIM da resposta a linha oculta HABITO: {"agua_ml": 500, "alcool_doses": 2} (só o que foi dito nesta mensagem; 1 dose = 1 lata de cerveja, 1 taça de vinho ou 1 shot). Não escreva essa linha em outra situação.
 - QUEM DISSE O QUÊ: cada linha do histórico começa com o nome de quem falou. Nunca atribua a fala, a refeição ou a foto de uma pessoa a outra, mesmo que duas pessoas comam a mesma coisa no mesmo horário (casal, família): trate cada registro como de quem mandou. A "MENSAGEM ATUAL DE X" é de X.
 - DATA: o contexto traz a data com o DIA DA SEMANA já calculado (ex: "domingo, 20/09/2026"). Use exatamente esse dia da semana; nunca deduza a partir do número da data.
@@ -171,6 +173,12 @@ export function montarSystem(persona, { documento = false } = {}) {
 // Helpers
 // ============================================================
 
+/** Produtos de uso fixo com rótulo lido (hipercalórico, whey...): números que ela copia em vez de estimar. */
+function produtosDe(p) {
+  if (!p?.produtos?.length) return '';
+  return p.produtos.map((x) => `${x.nome} = ${x.porcao} → ${x.kcal} kcal, Proteína ${x.proteina} g, Carboidratos ${x.carbo} g, Gorduras ${x.gordura} g`).join('; ');
+}
+
 function blocoPerfis(perfis) {
   if (!perfis?.length) return 'Nenhum perfil cadastrado ainda.';
   return perfis
@@ -187,7 +195,8 @@ function blocoPerfis(perfis) {
       const notas = p.notas ? `\n  Minhas notas sobre ela(e): ${String(p.notas).slice(0, 700)}` : '';
       const relogio = p.relogio?.linha ? `\n  Relógio dela(e) (Galaxy Watch, dados até ${p.relogio.atualizado}): ${p.relogio.linha}` : '';
       const treino = p.treino ? `\n  Treino de força dela(e) (Hevy): ${p.treino}` : '';
-      return base + horarios + rotina + relogio + treino + notas;
+      const produtos = p.produtos?.length ? `\n  Produtos fixos dela(e) (rótulo lido, copie os números): ${produtosDe(p)}` : '';
+      return base + horarios + rotina + relogio + treino + produtos + notas;
     })
     .join('\n');
 }
@@ -375,11 +384,13 @@ function rebaixarPensar(model, e) {
  * de conversa, 5 min em documentos longos). Sem isso, num dia de "alta demanda" geral uma mensagem levava 5 minutos.
  */
 async function gerar({ contents, config = {}, tentativas = 2 }) {
-  const { pensar, estrito, leve, prazoMs, semReserva, ...configApi } = config;
+  const { pensar, estrito, leve, prazoMs, semReserva, validar, ...configApi } = config;
   let erro;
   const falhas = []; // { modelo, chave, motivo } desta chamada, pro aviso do admin
   const inicio = Date.now();
   const longo = (configApi.maxOutputTokens || 1024) > 2000;
+  // pedido com foto demora mais (duas fotos + prompt grande estouravam os 30 s e a resposta caía num modelo leve)
+  const comImagem = partesDe(contents).some((p) => p?.inlineData?.mimeType?.startsWith('image/'));
   const prazoTotal = prazoMs || (longo ? 300_000 : 75_000);
   // Duas fases com prazo próprio: a primeira família de modelos (Flash, ou Lite se leve) tem até ~55% do tempo; a outra
   // família ganha a vez depois, mesmo que a primeira tenha engasgado. Num dia de "alta demanda" geral, os Lite costumam
@@ -418,7 +429,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
             ...configPensar(model, pensar),
             ...configApi,
             _dobrado: undefined,
-            httpOptions: { timeout: longo ? 180_000 : 30_000 },
+            httpOptions: { timeout: longo ? 180_000 : comImagem ? 45_000 : 30_000 },
           },
         });
         const texto = res.text?.trim();
@@ -433,6 +444,9 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
           continue;
         }
         if (!texto) throw new Error(`Gemini respondeu vazio (finishReason: ${fim})`);
+        // quem chamou pode recusar uma resposta fora do formato (ex.: análise de foto que virou fala "no lugar" da pessoa):
+        // conta como falha desse modelo e a cadeia segue pro próximo, sem repetir a mesma chave
+        if (validar && !validar(texto)) throw Object.assign(new Error(`resposta de ${model} fora do formato esperado`), { invalida: true });
         if (fim === 'MAX_TOKENS') {
           if (estrito) throw Object.assign(new Error(`resposta cortada por maxOutputTokens (${configApi.maxOutputTokens || 1024})`), { cortada: true, parcial: texto });
           console.warn(`[gemini] ${model}: resposta cortada por maxOutputTokens`);
@@ -447,6 +461,11 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
       } catch (e) {
         erro = e;
         if (e.cortada) throw e; // insistir não resolve e trocar de modelo também não
+        if (e.invalida) {
+          console.warn(`[gemini] ${model} (chave ${ci + 1}): ${e.message}; tentando outro modelo`);
+          falhas.push({ modelo: model, chave: ci + 1, motivo: 'resposta fora do formato' });
+          break; // próxima chave/modelo, sem repetir este
+        }
         const status = e?.status || e?.code;
         if (status === 400 && pensar === false && rebaixarPensar(model, e)) {
           i--; // mesma rodada, agora com o nível que o modelo aceita
@@ -496,6 +515,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
       });
       const reserva = ultimaReservaUsada();
       const rotuloReserva = reserva ? `${reserva.id} (${reserva.modelo})` : 'reserva externa';
+      if (validar && !validar(textoReserva)) throw new Error(`resposta da ${rotuloReserva} fora do formato esperado`);
       origemUltima = 'externa';
       anotarResposta({ modelo: `externa: ${rotuloReserva}`, chave: 0, papel: 'externa', motivo: resumirFalhas(falhas) });
       avisarAdmin('reserva-externa', `resposta das ${agora().hora} saiu pela reserva externa *${rotuloReserva}* porque o Gemini falhou em tudo: ${resumirFalhas(falhas)}. Qualidade menor; aviso 1x a cada 30 min.`).catch(() => {});
@@ -554,7 +574,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (registradas ? `REFEIÇÕES JÁ REGISTRADAS HOJE PELO SISTEMA (isto é o que conta; NÃO peça de novo nada que esteja aqui, e não trate como "sumiço" quem já registrou):\n${registradas}\n\n` : '') +
     (jaPesquisou ? 'Você JÁ pesquisou (as fontes estão acima). Agora responda de verdade, no personagem, com o que tem. Não peça PESQUISAR de novo.\n\n' : '') +
     `DATA E HORA: ${dataExtenso(dia)}, ${hora || ''}${contextoHorario ? ` (${contextoHorario})` : ''}\n\n` +
-    `PESSOA ATUAL: ${perfil.nome}${perfil.apelido ? ` (apelido: ${perfil.apelido})` : ''} · objetivo: ${perfil.objetivo || '?'}${perfil.metaPeso ? ` (meta: ${String(perfil.metaPeso).replace('.', ',')} kg${perfil.metaPrazo ? ` até ${perfil.metaPrazo}` : ''})` : ''} · ${perfil.peso || '?'} kg · dieta: ${perfil.dieta || '?'}. `+
+    `PESSOA ATUAL: ${perfil.nome}${perfil.apelido ? ` (apelido: ${perfil.apelido})` : ''} · objetivo: ${perfil.objetivo || '?'}${perfil.metaPeso ? ` (meta: ${String(perfil.metaPeso).replace('.', ',')} kg${perfil.metaPrazo ? ` até ${perfil.metaPrazo}` : ''})` : ''} · ${perfil.peso || '?'} kg · dieta: ${perfil.dieta || '?'}. ${perfil.produtos?.length ? `Produtos fixos dela(e) (rótulo lido, copie os números): ${produtosDe(perfil)}. ` : ''}`+
     `Analise para ELA, com o objetivo DELA. Não reaproveite análise de outra pessoa do histórico.\n` +
     `TUDO que você escrever agora (veredito, dica, elogio, [[links]]) serve o objetivo de ${perfil.nome.split(' ')[0]}: "${perfil.objetivo || '?'}".` +
     (objetivosAlheios ? ` Os objetivos a seguir são de OUTRAS pessoas e NÃO podem aparecer na resposta dela: ${objetivosAlheios}. Não fale de ganho de massa com quem quer emagrecer, nem de déficit com quem quer ganhar.` : '') +
@@ -577,9 +597,29 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
 
   const bruto = await gerar({
     contents: [{ role: 'user', parts }],
-    config: { systemInstruction: montarSystem(persona), pensar: false, leve },
+    config: { systemInstruction: montarSystem(persona), pensar: false, leve, validar: fotos.length ? validadorDeFoto(texto) : undefined },
   });
   return separarAtualizacao(bruto);
+}
+
+/**
+ * Resposta a FOTO tem que ter cara de resposta a foto. Um modelo leve, com duas fotos, já devolveu um texto falando
+ * NO LUGAR da pessoa ("já registrei meu café da manhã...") e o sistema registrou aquilo como almoço. Recusa:
+ * (a) fala em primeira pessoa como se fosse a pessoa, sem bloco de refeição; (b) legenda dizendo que consumiu, resposta
+ * sem bloco e sem dizer por que não é refeição. O resto passa (piada com foto que não é comida, pergunta, pesquisa).
+ */
+function validadorDeFoto(legenda) {
+  const consumo = pareceConsumo(legenda) || /\b(ovo|p[ãa]o|arroz|feij[ãa]o|frango|carne|almo[çc]o|caf[eé]|janta|lanche|whey|iogurte|salada|fruta)\b/i.test(legenda || '');
+  return (texto) => {
+    const t = String(texto || '');
+    if (/^\s*PESQUISAR:/i.test(t) || /^\s*SILENCIO\W*$/i.test(t)) return true;
+    const temBloco = /Refei[cç][aã]o:|O que (eu )?vi|Estimativa/i.test(t);
+    if (temBloco) return true;
+    const quebraPersona = /j[áa] registrei (meu|minha)|meu treino (de )?hoje|minha (alimenta[çc][ãa]o|dieta) (est[áa]|t[áa])|preciso garantir que minha|hoje (é|eh) dia de treino pesado/i.test(t);
+    if (quebraPersona) return false;
+    const explicaNaoRefeicao = /receita|r[óo]tulo|tabela nutricional|card[áa]pio|produto|embalagem|print|sugest|n[ãa]o (consigo|d[áa] pra|deu pra|t[ôo] conseguindo) ver|manda outra foto|foto (escura|borrada)|n[ãa]o (é|parece) comida/i.test(t);
+    return !consumo || explicaNaoRefeicao;
+  };
 }
 
 /** Tira a linha "ATUALIZAR: {...}" do fim da resposta. Devolve { texto: string|null, atualizacao: object|null }. */
@@ -588,6 +628,7 @@ export function separarAtualizacao(resposta) {
   let atualizacao = null;
   let habito = null;
   let audio = false;
+  let registro = null; // pedidos de apagar/corrigir registros do dia (uma ou mais linhas REGISTRO)
   // linha oculta AUDIO: sim -> a resposta sai também como nota de voz (pedido da pessoa ou momento que ela julgou merecer)
   const au = texto.match(/\n?\s*AUDIO:\s*(sim|n[ãa]o|true|false)\s*/i);
   if (au) {
@@ -604,6 +645,13 @@ export function separarAtualizacao(resposta) {
     }
     texto = `${texto.slice(0, h.index)}\n${texto.slice(h.index + h[0].length)}`.trim();
   }
+  // linhas ocultas REGISTRO: {"apagar": "11:03"} ou REGISTRO: {"hora": "18:13", "kcal": 799, ...} (pode haver mais de uma)
+  const regs = [...texto.matchAll(/\n?\s*REGISTRO:\s*(\{[^\n]*\})\s*/gi)];
+  if (regs.length) {
+    registro = regs.map((r) => { try { return JSON.parse(r[1]); } catch { return null; } }).filter((r) => r && typeof r === 'object');
+    if (!registro.length) registro = null;
+    texto = texto.replace(/\n?\s*REGISTRO:\s*\{[^\n]*\}\s*/gi, '\n').trim();
+  }
   const m = texto.match(/\n?\s*ATUALIZAR:\s*(\{[\s\S]*\})\s*$/i);
   if (m) {
     try {
@@ -614,7 +662,7 @@ export function separarAtualizacao(resposta) {
     texto = texto.slice(0, m.index).trim();
   }
   if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
-  return { texto, atualizacao, habito, audio };
+  return { texto, atualizacao, habito, audio, registro };
 }
 
 // ============================================================

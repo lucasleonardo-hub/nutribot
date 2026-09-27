@@ -178,8 +178,12 @@ export async function registrarRefeicao(r) {
   // r = { jid, nome, dia, hora, minutos, slot, resumo }
   // Complemento/correção da mesma refeição poucos minutos depois ("a vitamina tem whey") atualiza o registro em vez de criar outro
   const col = colecao('refeicoes');
-  const ultima = await col.find({ jid: r.jid, dia: r.dia, slot: r.slot }).sort({ minutos: -1 }).limit(1).next();
-  if (ultima && Math.abs(r.minutos - ultima.minutos) <= 30) {
+  // O ÚLTIMO registro da pessoa, de qualquer tipo: rótulo mandado 4 min depois do shake (que a IA chamou de "jantar")
+  // e a sobremesa 7 min depois da janta (que ela chamou de "ceia") são a MESMA refeição, não uma segunda.
+  // Só o registro manual (!refeicao) com tipo diferente fica separado, porque ali a pessoa disse o tipo de propósito.
+  const ultima = await col.find({ jid: r.jid, dia: r.dia }).sort({ minutos: -1 }).limit(1).next();
+  const mesmaRefeicao = ultima && Math.abs(r.minutos - ultima.minutos) <= 30 && (ultima.slot === r.slot || !r.manual);
+  if (mesmaRefeicao) {
     const set = { atualizadoEm: new Date() };
     if (r.estimativa) set.estimativa = r.estimativa; // estimativa corrigida substitui a anterior
     if (r.correcao) {
@@ -203,6 +207,12 @@ export async function registrarRefeicao(r) {
 /** Ajusta campos de um registro (ex.: tipo da refeição quando a pessoa diz "era o lanche da tarde"). */
 export async function atualizarRefeicao(id, set) {
   await colecao('refeicoes').updateOne({ _id: id }, { $set: { ...set, atualizadoEm: new Date() } });
+}
+
+/** Apaga um registro pelo _id (pedido da pessoa: "remove esse almoço das 11:03", ou !apagar). */
+export async function apagarRefeicaoPorId(id) {
+  const r = await colecao('refeicoes').deleteOne({ _id: id });
+  return r.deletedCount || 0;
 }
 
 /** Apaga o registro de uma refeição específica (revisão descobriu que não era comida consumida). Devolve quantos apagou. */
