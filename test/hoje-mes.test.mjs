@@ -9,6 +9,7 @@ import { separarAtualizacao, montarSystem } from '../gemini.js';
 import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo, pareceCorrecao, parecePedidoOuPlano } from '../util.js';
 import { acharRegistro } from '../resumo.js';
 import { aplicarAtualizacao } from '../perfis.js';
+import { normalizarEnvio, fundir, tokensRelogio } from '../relogio.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
@@ -264,6 +265,41 @@ test('registros: rótulo depois do shake é correção, sobremesa é consumo, e 
   assert.equal(acharRegistro(regs, 'ultimo')._id, 3);
   assert.equal(acharRegistro(regs, '09:00'), null);
   assert.equal(acharRegistro([], 'ultimo'), null);
+});
+
+test('relógio (app): envio vira pesos/sonos/atividades no fuso da pessoa e funde com o histórico por dia', () => {
+  const corpo = {
+    pesos: [
+      { t: '2026-09-26T10:12:00Z', kg: 77.14, gordura: 18.2, magra: 60.3, fonte: 'com.sec.android.app.shealth' }, // 07:12 em Floripa
+      { t: '2026-09-26T21:00:00Z', kg: 78.0, fonte: 'outro.app' }, // mesmo dia, outra fonte: Samsung vence
+      { t: '2026-09-25T10:00:00Z', kg: 3, fonte: 'x' }, // lixo
+    ],
+    sonos: [
+      { inicio: '2026-09-26T02:30:00Z', fim: '2026-09-26T09:25:00Z', leve: 240, profundo: 60, rem: 90, acordado: 25 }, // deitou 23:30, levantou 06:25
+      { inicio: '2026-09-26T17:00:00Z', fim: '2026-09-26T17:40:00Z', leve: 40, profundo: 0, rem: 0, acordado: 0 }, // cochilo: soma nas horas, não mexe no deitou/levantou
+    ],
+    dias: [{ dia: '2026-09-26', passos: 8342, calorias: 2450.4, fcRepouso: 58 }, { dia: '2026-09-25', passos: 12000 }],
+    treinos: [{ inicio: '2026-09-26T20:00:00Z', fim: '2026-09-26T21:02:00Z', tipo: 'Musculação', fonte: 'com.sec.android.app.shealth' }],
+  };
+  const d = normalizarEnvio(corpo, 'America/Sao_Paulo');
+  assert.deepEqual(d.pesos, [{ dia: '2026-09-26', hora: '07:12', peso: 77.14, gordura: 18.2, altura: null, magra: 60.3, fonte: 'com.sec.android.app.shealth' }]);
+  assert.equal(d.sonos.length, 1);
+  assert.equal(d.sonos[0].total, 430);
+  assert.equal(d.sonos[0].inicio, '2026-09-25 23:30');
+  assert.equal(d.sonos[0].fim, '2026-09-26 06:25');
+  assert.equal(d.sonos[0].sessoes, 2);
+  assert.deepEqual(d.atividades.map((a) => a.dia), ['2026-09-25', '2026-09-26']);
+  const hoje = d.atividades[1];
+  assert.equal(hoje.passos, 8342);
+  assert.equal(hoje.calorias, 2450);
+  assert.equal(hoje.fcRepouso, 58);
+  assert.deepEqual(hoje.treinos, [{ nome: 'Musculação', min: 62, hora: '17:00', fonte: 'com.sec.android.app.shealth', kcal: null }]);
+  // fusão: o novo vence no mesmo dia, o antigo fica, e o que passou de 90 dias sai
+  const f = fundir({ pesos: [{ dia: '2026-09-25', peso: 77.5 }, { dia: '2026-05-01', peso: 70 }], sonos: [], atividades: [{ dia: '2026-09-26', passos: 100, treinos: [] }] }, d, '2026-09-26');
+  assert.deepEqual(f.pesos.map((p) => [p.dia, p.peso]), [['2026-09-25', 77.5], ['2026-09-26', 77.14]]);
+  assert.equal(f.atividades.find((a) => a.dia === '2026-09-26').passos, 8342);
+  assert.deepEqual(tokensRelogio('Lucas=abc123, heitor=d=ef'), { lucas: 'abc123', heitor: 'd=ef' });
+  assert.deepEqual(tokensRelogio(''), {});
 });
 
 test('perfil: produto fixo com rótulo lido entra em produtos e substitui o de mesmo nome', () => {

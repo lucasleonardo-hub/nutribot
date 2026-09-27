@@ -8,6 +8,7 @@ import { colecao, salvarPerfil } from './mongo.js';
 import { listarPastasRaiz, listarArquivos, baixarArquivo, pastaNaRaiz, salvarEmPasta } from './drive.js';
 import * as ia from './gemini.js';
 import { ehPlanilhaSaude, sincronizarSaude } from './saude.js';
+import { textoRelogio } from './relogio.js';
 import { agora } from './util.js';
 
 const PASTAS_SISTEMA = new Set(['conhecimento', 'logs', 'diario', 'resumos', 'perfis']);
@@ -116,6 +117,12 @@ async function sincronizar(perfil, { forcar = false } = {}) {
   st.arquivos = arquivos;
   st.listadoEm = Date.now();
 
+  // dados do relógio vindos direto do celular (app Relógio): se forem recentes, entram no dossiê e a planilha
+  // do "Health Data Export" (que atualiza uma vez por dia) nem é lida
+  const push = await textoRelogio(perfil).catch(() => null);
+  if (push) st.textos.set('relogio:push', { nome: 'app Relógio (Health Connect)', texto: push, saude: true });
+  else st.textos.delete('relogio:push');
+
   for (const arq of arquivos) {
     if (arq.name === ARQ_NOTAS) {
       const t = await textoDoArquivo(arq);
@@ -126,6 +133,7 @@ async function sincronizar(perfil, { forcar = false } = {}) {
     const chave = `${arq.id}:${arq.modifiedTime}`;
     if (!st.textos.has(chave)) {
       if (ehPlanilhaSaude(arq)) {
+        if (push) continue; // o app já trouxe dados mais novos que a planilha
         // planilha do relógio (Health Connect): vira resumo curto em vez do CSV inteiro, e alimenta pesagens/perfil
         const t = await sincronizarSaude(perfil, arq, { pastaId, hoje: agora().dia }).catch((e) => (console.error(`[saude] falha em "${arq.name}":`, e.message), null));
         st.textos.set(chave, { nome: arq.name, texto: t, saude: true });
@@ -137,7 +145,7 @@ async function sincronizar(perfil, { forcar = false } = {}) {
   }
   // limpa textos de arquivos que sumiram/mudaram
   const validas = new Set(arquivos.map((a) => `${a.id}:${a.modifiedTime}`));
-  for (const k of [...st.textos.keys()]) if (!validas.has(k)) st.textos.delete(k);
+  for (const k of [...st.textos.keys()]) if (!validas.has(k) && k !== 'relogio:push') st.textos.delete(k);
   return st;
 }
 

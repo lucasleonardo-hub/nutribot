@@ -21,7 +21,8 @@ import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemo
 import { iniciarDrive, verificarCredencial } from './drive.js';
 import * as ia from './gemini.js';
 import { carregarConhecimento } from './conhecimento.js';
-import { dossieDe } from './pessoas.js';
+import { dossieDe, pastaDe } from './pessoas.js';
+import { receberEnvio } from './relogio.js';
 import { reservasDisponiveis } from './reservas.js';
 import { TZ, agora } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
@@ -56,6 +57,19 @@ app.get('/privacidade', (_req, res) => res.type('html').send(paginaPrivacidade()
 app.get('/estado', (_req, res) =>
   res.json({ status: estado.statusConexao, dia: estado.memoria.dia, mensagensHoje: estado.memoria.mensagens.length, grupo: estado.memoria.grupo })
 );
+// Dados do relógio direto do celular (app android/relogio): POST JSON com o cabeçalho x-relogio-token da pessoa.
+// Fora da fila de mensagens de propósito: a fila engole erros (e aqui o app precisa receber o 401/404 de verdade),
+// e o que isto grava (Mongo, um arquivo no Drive) não disputa nada com uma resposta em andamento.
+app.post('/relogio', express.json({ limit: '4mb' }), async (req, res) => {
+  try {
+    const r = await receberEnvio({ token: req.get('x-relogio-token'), corpo: req.body, hoje: agora().dia, pastaDe });
+    res.json(r);
+  } catch (e) {
+    if (!e.status) console.error('[relogio] falha:', e.message);
+    res.status(e.status || 500).json({ ok: false, erro: e.message });
+  }
+});
+app.get('/relogio', (_req, res) => res.type('text').send('POST JSON aqui com o cabeçalho x-relogio-token (app Relógio do NutriBot).'));
 app.get('/qr', async (_req, res) => {
   const pagina = (corpo, recarregarEm) =>
     res.send(

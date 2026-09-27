@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/titulo"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/explicacao" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="@string/rotulo_url" />
+
+        <EditText
+            android:id="@+id/url"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="textUri"
+            android:importantForAutofill="no" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/rotulo_pessoa" />
+
+        <EditText
+            android:id="@+id/pessoa"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/dica_pessoa"
+            android:inputType="textPersonName"
+            android:importantForAutofill="no" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/rotulo_token" />
+
+        <EditText
+            android:id="@+id/token"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/dica_token"
+            android:inputType="textVisiblePassword"
+            android:importantForAutofill="no" />
+
+        <Button
+            android:id="@+id/permissoes"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="@string/botao_permissoes" />
+
+        <Button
+            android:id="@+id/sincronizar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/botao_sincronizar" />
+
+        <Button
+            android:id="@+id/bateria"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/botao_bateria" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:textIsSelectable="true" />
+    </LinearLayout>
+</ScrollView>

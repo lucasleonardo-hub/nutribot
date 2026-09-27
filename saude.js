@@ -343,12 +343,22 @@ export async function sincronizarSaude(perfil, arq, { pastaId, hoje } = {}) {
   console.log(`[saude] lendo planilha "${arq.name}" de ${perfil.nome}...`);
   const abas = await lerAbas(arq.id);
   const dados = interpretarAbas(abas);
-  const comHevy = temHevy(perfil);
-  const texto = resumoSaude(dados, { hoje, nomePlanilha: arq.name, comHevy });
-  console.log(`[saude] ${perfil.nome}: ${dados.pesos.length} pesagens, ${dados.sonos.length} noites, ${dados.atividades.length} dias de atividade -> resumo de ${texto.length} chars`);
+  const texto = await aplicarDadosSaude(perfil, dados, { hoje, fonteNome: arq.name, pastaId });
 
   await cache.replaceOne({ _id: chave }, { _id: chave, arquivoId: arq.id, nome: arq.name, texto, salvoEm: new Date() }, { upsert: true });
   await cache.deleteMany({ arquivoId: arq.id, _id: { $ne: chave } });
+  return texto;
+}
+
+/**
+ * O que acontece com os dados do relógio venham de onde vierem (planilha do Drive ou o app Relógio mandando direto):
+ * resumo em texto pro dossiê, cada peso vira pesagem com data, o peso do perfil acompanha a última medição,
+ * indicadores curtos no perfil (valem em toda resposta) e um Nutri-Saude.md na pasta da pessoa. Devolve o texto.
+ */
+export async function aplicarDadosSaude(perfil, dados, { hoje, fonteNome = 'relógio', pastaId } = {}) {
+  const comHevy = temHevy(perfil);
+  const texto = resumoSaude(dados, { hoje, nomePlanilha: fonteNome, comHevy });
+  console.log(`[saude] ${perfil.nome} (${fonteNome}): ${dados.pesos.length} pesagens, ${dados.sonos.length} noites, ${dados.atividades.length} dias de atividade -> resumo de ${texto.length} chars`);
 
   // Efeitos colaterais, sem derrubar o dossiê se falharem
   const jid = perfil.jids?.[0];
@@ -371,7 +381,7 @@ export async function sincronizarSaude(perfil, arq, { pastaId, hoje } = {}) {
     if (relogio?.linha) await salvarPerfil({ jids: perfil.jids, relogio }).catch((e) => console.error('[saude] indicadores no perfil:', e.message));
   }
   if (pastaId) {
-    const md = `---\ntipo: saude\npessoa: ${perfil.nome}\natualizado: ${hoje || new Date().toISOString().slice(0, 10)}\nfonte: "${arq.name}"\ntags: [nutribot, pessoa, saude, galaxy-watch]\n---\n\n# Saúde de ${perfil.nome} (relógio)\n\n${texto}\n`;
+    const md = `---\ntipo: saude\npessoa: ${perfil.nome}\natualizado: ${hoje || new Date().toISOString().slice(0, 10)}\nfonte: "${fonteNome}"\ntags: [nutribot, pessoa, saude, galaxy-watch]\n---\n\n# Saúde de ${perfil.nome} (relógio)\n\n${texto}\n`;
     await salvarEmPasta(pastaId, ARQ_SAUDE, md).catch((e) => console.error('[saude] Nutri-Saude.md:', e.message));
   }
   return texto;

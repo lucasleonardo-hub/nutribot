@@ -1,0 +1,48 @@
+# Compila o app "Relógio" (android/) e publica o APK assinado na release "relogio" do repositório.
+# Ninguém precisa de Android Studio: o download fica em https://github.com/<repo>/releases/tag/relogio
+# Segredos: RELOGIO_KEYSTORE_B64 (keystore PKCS12 em base64) e RELOGIO_KEYSTORE_PASS (senha), pra assinatura ser sempre a mesma.
+name: android-relogio
+on:
+  push:
+    branches: [main]
+    paths: ['android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+      - name: keystore
+        env:
+          B64: ${{ secrets.RELOGIO_KEYSTORE_B64 }}
+        run: |
+          test -n "$B64" || { echo "segredo RELOGIO_KEYSTORE_B64 ausente"; exit 1; }
+          echo "$B64" | base64 -d > /tmp/relogio.p12
+      - name: build
+        env:
+          RELOGIO_KEYSTORE: /tmp/relogio.p12
+          RELOGIO_KEYSTORE_PASS: ${{ secrets.RELOGIO_KEYSTORE_PASS }}
+        run: gradle -p android --no-daemon assembleRelease
+      - name: renomear
+        run: cp android/app/build/outputs/apk/release/app-release.apk relogio-nutribot.apk && ls -la relogio-nutribot.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relogio-nutribot-apk
+          path: relogio-nutribot.apk
+      - name: release "relogio" (sempre a versão mais nova no mesmo link)
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view relogio >/dev/null 2>&1 || gh release create relogio --title "App Relógio (Health Connect -> NutriBot)" --notes "APK do app que manda peso, sono, passos e treinos do Health Connect pro bot. Instale no celular (permitir fontes desconhecidas), preencha nome e token, toque em Permissões e depois em Sincronizar." --latest=false
+          gh release upload relogio relogio-nutribot.apk --clobber
