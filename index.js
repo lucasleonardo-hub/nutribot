@@ -17,7 +17,7 @@ import express from 'express';
 import cron from 'node-cron';
 import QRCode from 'qrcode';
 
-import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemoria, persistirMemoria, carregarPersona, lerConfig, salvarConfig, refeicoesDoDia } from './mongo.js';
+import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemoria, persistirMemoria, carregarPersona, lerConfig, salvarConfig, refeicoesDoDia, carregarAprendizados } from './mongo.js';
 import { iniciarDrive, verificarCredencial } from './drive.js';
 import * as ia from './gemini.js';
 import { carregarConhecimento } from './conhecimento.js';
@@ -165,6 +165,10 @@ async function checarDrive() {
       .catch((e) => console.error('[pessoas] pré-carga falhou:', e.message));
 
     estado.persona = await carregarPersona().catch(() => '');
+    // regras ativas do caderno de aprendizado entram no prompt de toda resposta
+    const aprendizados = await carregarAprendizados().catch(() => null);
+    ia.definirLicoes(aprendizados?.regras || []);
+    if (aprendizados?.regras?.length) console.log(`[aprendizado] ${aprendizados.regras.length} regras ativas carregadas`);
     if (estado.persona) console.log(`[persona] carregada (${estado.persona.length} chars)`);
     estado.config = await lerConfig().catch(() => ({ apresentadoEm: {} }));
     estado.config.apresentadoEm ||= {};

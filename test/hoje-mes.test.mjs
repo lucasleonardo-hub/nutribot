@@ -11,6 +11,7 @@ import { acharRegistro } from '../resumo.js';
 import { aplicarAtualizacao } from '../perfis.js';
 import { normalizarEnvio, fundir, tokensRelogio } from '../relogio.js';
 import { codigosDeBarras, ehCodigoBarras, normalizarProduto, blocoRotulos } from '../off.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, contestacoesDoDia, blocoLicoes } from '../consciencia.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
@@ -358,6 +359,41 @@ test('linha REFEICAO estruturada e pedido PRODUTO são lidos e somem do texto', 
   assert.equal(p.texto, 'PRODUTO: whey concentrado Growth');
   assert.equal(separarAtualizacao('Oi! Sobre o whey...\nPRODUTO: x\nmais texto\ne mais').produto, null); // só vale como resposta inteira
   assert.equal(semLinhaAtualizar('Feito.\nREFEICAO: {"tipo": "cafe", "kcal": 300}'), 'Feito.');
+});
+
+test('consciência: contestação, totais conhecidos e números suspeitos na resposta', () => {
+  assert.equal(pareceContestacao('Remove esse almoço das 11:03 pois é um registro errado'), true);
+  assert.equal(pareceContestacao('Entao pq ta mostrando no resumo de hoje? tá errado'), true);
+  assert.equal(pareceContestacao('almocei arroz e feijão'), false);
+  const perfis = [{ nome: 'Lucas', jids: ['l'] }, { nome: 'Ale', jids: ['a'] }];
+  const refs = [
+    { jid: 'l', estimativa: { kcal: 580 } },
+    { jid: 'l', estimativa: { kcal: 930 } },
+    { jid: 'l', estimativa: { kcal: 799 } },
+    { jid: 'l', estimativa: { kcal: 670 } },
+    { jid: 'a', estimativa: { kcal: 526 } },
+  ];
+  const c = totaisConhecidos(refs, perfis);
+  assert.equal(c.porPessoa.get('Lucas').total, 2979);
+  assert.ok(c.todos.has(930));
+  // total inventado como "do dia" é suspeito; total certo não; meta e gasto não são checados; valor de refeição não
+  assert.deepEqual(numerosSuspeitos('seu dia de sábado bateu quase 4.700 calorias e mais de 240 g', c).map((s) => s.numero), [4700]);
+  assert.deepEqual(numerosSuspeitos('hoje você já tá em ~2.979 kcal, no rumo', c), []);
+  assert.deepEqual(numerosSuspeitos('sua meta é 3.500 kcal/dia e o gasto do relógio deu 3.102 kcal', c), []);
+  assert.deepEqual(numerosSuspeitos('esse almoço deu ~1.550 kcal, pesado', c), []); // não fala em total do dia
+  assert.deepEqual(numerosSuspeitos('somando com o de agora, o total do dia foi pra 3.650 kcal', c, { extras: [670, 3649] }), []); // total + refeição nova
+  assert.deepEqual(numerosSuspeitos('o total do dia foi pra 3.650 kcal', c).map((s) => s.numero), [3650]);
+  const hist = [
+    { hora: '20:26', nome: 'Dona Benta', tipo: 'bot', texto: 'Seu dia bateu 4.700 kcal!' },
+    { hora: '20:28', nome: 'Lucas', tipo: 'texto', texto: 'Remova esse almoço das 11h03 está errado' },
+    { hora: '20:30', nome: 'Ale', tipo: 'texto', texto: 'jantei salada' },
+  ];
+  const cs = contestacoesDoDia(hist);
+  assert.equal(cs.length, 1);
+  assert.equal(cs[0].pessoa, 'Lucas');
+  assert.match(cs[0].respostaAnterior, /4\.700/);
+  assert.match(blocoLicoes(['Número contestado se confere no registro antes de responder.']), /^MINHAS LIÇÕES[\s\S]*- Número contestado/);
+  assert.equal(blocoLicoes([]), '');
 });
 
 test('perfil: produto fixo com rótulo lido entra em produtos e substitui o de mesmo nome', () => {

@@ -18,6 +18,7 @@ import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
 import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarras } from './off.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos } from './consciencia.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
@@ -524,7 +525,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const citacao = citacaoDe(conteudo, perfis);
   // código de barras na mensagem vira rótulo do Open Food Facts antes mesmo de ela responder
   const rotulos = motivo && texto ? await comTempo(rotulosPara(texto), 10_000, 'rótulos').catch(() => '') : '';
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', rotulos };
+  // a pessoa está contestando algo que a bot disse? (resposta citando a bot, menção, ou logo depois de uma fala dela)
+  const anteriorFoiBot = historico.length >= 2 && historico[historico.length - 2]?.tipo === 'bot';
+  const contestacao = !temImagem && pareceContestacao(texto) && (Boolean(citacao && citacao.autor === ia.nomeDaBot()) || mencionaNome(texto, ia.nomeDaBot()) || anteriorFoiBot);
+  if (contestacao) console.log(`[consciencia] ${perfil.nome} está contestando: "${String(texto).slice(0, 80)}"`);
+  let rotulosAtuais = rotulos; // pode crescer se ela pedir PRODUTO
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', rotulos, contestacao };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -585,7 +591,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     const achados = await comTempo(ehCodigoBarras(produto) ? buscarPorCodigo(produto).then((p) => (p ? [p] : [])) : buscarPorNome(produto), 15_000, 'Open Food Facts').catch((e) => (console.warn('[rotulo]', e.message), []));
     const bloco = achados.length ? blocoRotulos(achados) : `(nenhum produto encontrado no Open Food Facts para "${produto}": estime pelo que sabe do tipo de produto e diga que é estimativa)`;
     console.log(`[rotulo] ${achados.length} produto(s) para "${produto}"`);
-    const r2 = await ia.responder({ ...base, rotulos: [base.rotulos, bloco].filter(Boolean).join('\n'), jaPesquisou: true, conhecimento });
+    rotulosAtuais = [base.rotulos, bloco].filter(Boolean).join('\n');
+    const r2 = await ia.responder({ ...base, rotulos: rotulosAtuais, jaPesquisou: true, conhecimento });
     resposta = r2.texto;
     atualizacao = r2.atualizacao || atualizacao;
     habito = r2.habito || habito;
@@ -593,6 +600,42 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     registro = r2.registro || registro;
     refeicao = r2.refeicao || refeicao;
     origemExterna = ia.ultimaFoiExterna();
+  }
+
+  // CONFERÊNCIA ANTES DE ENVIAR (a parte de "perceber o erro" que dá pra construir):
+  // (a) em código, sem IA: um total de calorias citado como "do dia" que não existe nos registros barra o envio;
+  // (b) quando a pessoa contestou, o modelo leve confere a resposta contra os registros.
+  // Nos dois casos ela responde de novo UMA vez com o problema apontado; se insistir, vai assim mesmo e fica no log.
+  if (resposta && !/^\s*PESQUISAR:/i.test(resposta) && motivo) {
+    const conhecidos = totaisConhecidos(refeicoesHoje, perfis);
+    const meu = conhecidos.porPessoa.get(perfil.nome) || { total: 0, refeicoes: [] };
+    const novaKcal = Number(refeicao?.kcal) || 0;
+    const extras = [novaKcal, meu.total + novaKcal].filter(Boolean);
+    let problema = '';
+    const suspeitos = numerosSuspeitos(resposta, conhecidos, { extras });
+    if (suspeitos.length) {
+      const totais = [...conhecidos.porPessoa.entries()].map(([n, v]) => `${n.split(' ')[0]} ${Math.round(v.total)} kcal`).join(', ');
+      problema = `sua resposta citou ${suspeitos.map((s) => `${s.numero} kcal ("${s.trecho}")`).join(' e ')} como total, e esse número NÃO existe nos registros. Totais oficiais de hoje: ${totais || 'nenhum'}${novaKcal ? ` (+ ${novaKcal} kcal desta refeição de ${perfil.nome.split(' ')[0]})` : ''}.`;
+    } else if (contestacao) {
+      const c = await ia.conferirResposta({ resposta, registradas, texto, nome: perfil.nome });
+      if (!c.ok && c.problema) problema = c.problema;
+    }
+    if (problema) {
+      console.warn(`[consciencia] resposta barrada e refeita: ${problema.slice(0, 200)}`);
+      const aviso = `\n\nCONFERÊNCIA DO SISTEMA (feita ANTES de enviar sua resposta anterior, que foi barrada): ${problema} Reescreva a resposta usando SÓ os números do bloco "REFEIÇÕES JÁ REGISTRADAS HOJE"; se a pessoa tiver razão, ceda e corrija (linha REGISTRO quando for registro). Não mencione esta conferência.`;
+      const r3 = await ia.responder({ ...base, rotulos: rotulosAtuais, jaPesquisou: true, conhecimento: `${conhecimento || ''}${aviso}` }).catch(() => null);
+      if (r3?.texto) {
+        resposta = r3.texto;
+        atualizacao = r3.atualizacao || atualizacao;
+        habito = r3.habito || habito;
+        querAudio = r3.audio || querAudio;
+        registro = r3.registro || registro;
+        refeicao = r3.refeicao || refeicao;
+        origemExterna = ia.ultimaFoiExterna();
+        const ainda = numerosSuspeitos(resposta, conhecidos, { extras: [Number(refeicao?.kcal) || 0, meu.total + (Number(refeicao?.kcal) || 0)].filter(Boolean) });
+        if (ainda.length) console.warn(`[consciencia] ainda suspeito depois de refazer: ${ainda.map((s) => s.numero).join(', ')} kcal (enviando assim mesmo)`);
+      }
+    }
   }
 
   // Foi refeição? Quando a análise traz "🕐 Refeição:" ou "O que eu vi" (comida consumida). "Estimativa" sozinha não basta:

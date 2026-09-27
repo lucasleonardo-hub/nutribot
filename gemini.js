@@ -6,6 +6,7 @@ import { blocoAncoras } from './taco.js';
 import { agora, dataExtenso, formatarDuracao, formatarTokens, pareceConsumo } from './util.js';
 import { avisarAdmin } from './avisos.js';
 import { readFileSync, existsSync } from 'node:fs';
+import { blocoLicoes } from './consciencia.js';
 
 // Mapa das últimas respostas: qual modelo/chave respondeu e por quê (pra !status e pro aviso no privado do admin)
 const ultimas = [];
@@ -169,8 +170,17 @@ export function montarSystem(persona, { documento = false } = {}) {
   }
   if (nomeBot) sys += `\n\nSEU NOME: o grupo te batizou de "${nomeBot}". Você responde por esse nome, se refere a si mesma assim e assina piadas com ele quando cabe. "Nutri" é só a sua profissão.`;
   if (persona?.trim()) sys += `\n\nSUA MEMÓRIA DE PERSONALIDADE (você construiu isso ao longo dos dias; use pra ser consistente, puxar piadas internas, apelidos e cobrar padrões):\n${persona.trim()}`;
+  const licoes = blocoLicoes(licoesAtivas);
+  if (licoes) sys += `\n\n${licoes}`;
   return sys;
 }
+
+// Regras ativas do caderno de aprendizado (Perfis/Nutri-Aprendizados.md): carregadas no boot e refeitas no fechamento do dia.
+let licoesAtivas = [];
+export function definirLicoes(regras) {
+  licoesAtivas = Array.isArray(regras) ? regras.filter((r) => typeof r === 'string' && r.trim()).slice(0, 8) : [];
+}
+export const licoesAtuais = () => [...licoesAtivas];
 
 // ============================================================
 // Helpers
@@ -565,7 +575,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, rotulos, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, rotulos, contestacao = false, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -596,6 +606,9 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
+    (contestacao
+      ? `A PESSOA ESTÁ CONTESTANDO O QUE VOCÊ DISSE. Antes de responder: (1) confira o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" e os dados do perfil; (2) NÃO defenda número, horário ou fato que não esteja nesses blocos, mesmo que você tenha dito antes na conversa: se você disse e não está lá, você errou; (3) se ela tiver razão, ceda de primeira, corrija (linha REGISTRO quando for registro) e agradeça, sem ironia e sem "bug do sistema"; (4) se os registros confirmarem você, mostre o registro com hora e valor, em uma linha, com calma. Nunca insista duas vezes sem evidência.\n\n`
+      : '') +
     `MENSAGEM ATUAL DE ${perfil.nome}${
       fotos.length > 1
         ? ` (com ${fotos.length} FOTOS anexadas, mandadas de uma vez pela mesma pessoa: olhe TODAS e faça UMA análise só, usando a legenda pra saber o que é cada uma. Se forem ângulos ou partes da MESMA refeição, some os itens sem contar o mesmo prato duas vezes; se forem coisas diferentes (prato + bebida + sobremesa), some tudo como uma refeição. Foto de RÓTULO de algo que ela disse que consumiu entra na soma pelos valores do rótulo vezes a quantidade dita; rótulo ou receita de algo que ela só quer avaliar, sem ter consumido, fica de fora da estimativa e você comenta à parte)`
@@ -1166,6 +1179,72 @@ export async function extrairDadosDocumento({ texto, nomeArquivo, hoje }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d.data || '')) || String(d.data) > hoje) d.data = null;
   d.exames = (d.exames || []).filter((e) => e?.nome && Number.isFinite(Number(e.valor))).slice(0, 60);
   return d;
+}
+
+// ============================================================
+// 8d) Caderno de aprendizado: erros do dia -> lições com causa e regra (com raciocínio ligado; é o texto mais
+// reflexivo que ela escreve). As regras ativas voltam pro system prompt (definirLicoes): é assim que vira comportamento.
+// ============================================================
+export async function revisarErros({ dia, documentoAtual, correcoes, contestacoes, diario, refeicoes }) {
+  const json = await gerar({
+    contents:
+      `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Este é o seu CADERNO DE APRENDIZADO: os erros que você cometeu com o grupo, por que aconteceram e as regras que você adotou pra não repetir. ` +
+      `Reescreva-o consolidado (até 12 lições) a partir do caderno atual e das evidências de hoje. Cada lição tem: Erro (o que você fez, concreto), Causa (por que aconteceu: confiou na memória em vez do registro, não conferiu, se emocionou, formato ambíguo...), Regra (o que você passa a fazer, verificável, em primeira pessoa), Vezes (quantas vezes já aconteceu; some 1 se repetiu hoje) e Última (data). ` +
+      `Erro repetido NÃO vira lição nova: atualize a existente. Lição que não se repete há 30 dias e já virou hábito pode ir pra uma seção curta "Aposentadas". ` +
+      `Use SÓ evidências: correções de registros, contestações das pessoas (com o que você tinha respondido), sua autocrítica do diário e os registros oficiais. Não invente erro que não aconteceu; sem evidência nova, devolva o caderno atual sem mudar os fatos. ` +
+      `Tom: honesto e adulto, sem autoflagelo e sem se desculpar no caderno; é um instrumento de trabalho.\n\n` +
+      `CADERNO ATUAL:\n${documentoAtual?.trim() || '(vazio: hoje é a primeira lição)'}\n\n` +
+      `CORREÇÕES DE REGISTRO FEITAS HOJE:\n${correcoes?.length ? correcoes.map((c) => `- ${c.texto || c}`).join('\n') : '(nenhuma)'}\n\n` +
+      `CONTESTAÇÕES DE HOJE (o que a pessoa disse e o que você tinha respondido antes):\n${contestacoes?.length ? contestacoes.map((c) => `- ${c.hora} ${c.pessoa}: "${c.texto}"\n  (você tinha dito: "${c.respostaAnterior}")`).join('\n') : '(nenhuma)'}\n\n` +
+      `SEU DIÁRIO DE HOJE:\n${diario?.trim() || '(sem entrada)'}\n\n` +
+      `REGISTROS OFICIAIS DO DIA (a verdade dos números):\n${refeicoes || '(nenhum)'}\n\n` +
+      `Devolva JSON com: "documento" (o caderno em markdown, sem cabeçalho #, lições como itens "- **Erro:** ... **Causa:** ... **Regra:** ... **Vezes:** N **Última:** AAAA-MM-DD") e "regras" (até 8 frases curtas em primeira pessoa com as regras ATIVAS mais importantes, ordenadas da mais recorrente pra menos, pra você ler antes de cada resposta).`,
+    config: {
+      systemInstruction: montarSystem('', { documento: true }),
+      temperature: 0.4,
+      estrito: true,
+      maxOutputTokens: 4000,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: { documento: { type: 'string' }, regras: { type: 'array', items: { type: 'string' } } },
+        required: ['documento', 'regras'],
+      },
+    },
+  });
+  const r = JSON.parse(json);
+  r.regras = (r.regras || []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8);
+  return r;
+}
+
+/**
+ * Segunda olhada (modelo leve) quando a pessoa contestou: a resposta pronta contradiz os registros oficiais ou defende
+ * número que não está lá? Devolve { ok, problema }. Nunca lança (na dúvida, ok).
+ */
+export async function conferirResposta({ resposta, registradas, texto, nome }) {
+  try {
+    const json = await gerar({
+      contents:
+        `Você confere a resposta de uma nutricionista de grupo de WhatsApp ANTES de ela ser enviada. A pessoa (${nome}) acabou de contestar algo que a nutricionista disse.\n\n` +
+        `MENSAGEM DA PESSOA:\n"""${String(texto || '').slice(0, 600)}"""\n\n` +
+        `REGISTROS OFICIAIS DE HOJE (a verdade; totais e refeições por pessoa):\n${registradas || '(nenhum)'}\n\n` +
+        `RESPOSTA PRONTA DA NUTRICIONISTA:\n"""${String(resposta || '').slice(0, 2500)}"""\n\n` +
+        `Responda em JSON: ok=true se a resposta é coerente com os registros (números, horários, refeições citadas existem lá, ou ela cede/corrige quando a pessoa tem razão); ok=false se ela defende número, horário ou refeição que NÃO está nos registros, insiste sem evidência, ou culpa "bug do sistema" sem base. "problema": uma frase dizendo exatamente o que está errado e qual é o dado certo (vazio se ok).`,
+      config: {
+        temperature: 0.1,
+        pensar: false,
+        leve: true,
+        maxOutputTokens: 400,
+        responseMimeType: 'application/json',
+        responseSchema: { type: 'object', properties: { ok: { type: 'boolean' }, problema: { type: 'string' } }, required: ['ok', 'problema'] },
+      },
+    });
+    const r = JSON.parse(json);
+    return { ok: r.ok !== false, problema: String(r.problema || '').slice(0, 300) };
+  } catch (e) {
+    console.warn('[consciencia] conferência falhou:', String(e.message).slice(0, 120));
+    return { ok: true, problema: '' };
+  }
 }
 
 // ============================================================

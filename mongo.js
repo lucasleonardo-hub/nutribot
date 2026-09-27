@@ -209,6 +209,19 @@ export async function atualizarRefeicao(id, set) {
   await colecao('refeicoes').updateOne({ _id: id }, { $set: { ...set, atualizadoEm: new Date() } });
 }
 
+// ---------- Caderno de aprendizado (lições com causa e regra; as regras ativas entram no prompt) ----------
+export async function carregarAprendizados() {
+  return colecao('aprendizados').findOne({ _id: 'nutri' });
+}
+export async function salvarAprendizados({ documento, regras, dia }) {
+  const anterior = await colecao('aprendizados').findOne({ _id: 'nutri' });
+  if (anterior?.documento && anterior.documento !== documento) {
+    const { _id, ...resto } = anterior;
+    await colecao('aprendizados_historico').insertOne({ ...resto, substituidoEm: new Date() }).catch(() => {});
+  }
+  await colecao('aprendizados').replaceOne({ _id: 'nutri' }, { _id: 'nutri', documento, regras: regras || [], dia: dia || null, atualizadoEm: new Date() }, { upsert: true });
+}
+
 // ---------- Correções do dia (registro apagado/corrigido depois de a IA já ter falado sobre ele) ----------
 // Entram nos textos noturnos (resumo, momentos, diário, memória, notas): o que foi dito na conversa antes da correção
 // não pode virar "fato" na memória dela. Já aconteceu: "4.700 kcal" de registros duplicados ficou no diário e na persona.

@@ -1,6 +1,6 @@
 // comandos.js - Comandos do grupo (!id, !nome, !perfil, !dossie, !fontes, !estudar, !persona, !status, !reset, !resumo, !ajuda).
 
-import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao, refeicoesDesde, pesagensDesde, habitosDoDia, salvarConfig, apagarRefeicaoPorId, registrarCorrecao } from './mongo.js';
+import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao, refeicoesDesde, pesagensDesde, habitosDoDia, salvarConfig, apagarRefeicaoPorId, registrarCorrecao, carregarAprendizados } from './mongo.js';
 import { configGrafico, renderizar } from './graficos.js';
 import { salvarEmPasta } from './drive.js';
 import { pastaDe } from './pessoas.js';
@@ -21,7 +21,7 @@ import { situacaoRelogio } from './relogio.js';
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras, salvo na sua pasta do Drive), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras, salvo na sua pasta do Drive), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -91,6 +91,17 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
   if (cmd === '!estudar') {
     await enviar(jidGrupo, 'Tá, vou revisar meu material. Isso leva uns minutos, já volto. 📚', msg);
     estudar({ dia, motivo: 'pedido no grupo' }).catch((e) => console.error('[conhecimento] falha ao estudar:', e.message));
+    return true;
+  }
+  if (cmd === '!licoes' || cmd === '!lições') {
+    // Caderno de aprendizado: erros, causas e regras que ela adotou (Perfis/Nutri-Aprendizados.md)
+    const a = await carregarAprendizados().catch(() => null);
+    if (!a?.documento) {
+      await enviar(jidGrupo, 'Meu caderno de aprendizado ainda está vazio: nenhuma correção ou contestação virou lição até agora. Quando eu errar e vocês me corrigirem, ele começa.', msg, { rapido: true });
+      return true;
+    }
+    const regras = (a.regras || []).map((r, i) => `${i + 1}. ${r}`).join('\n');
+    await enviar(jidGrupo, `📓 *Meu caderno de aprendizado* (atualizado em ${a.dia || '?'})\n\n*Regras que eu sigo hoje:*\n${regras || '(nenhuma ativa)'}\n\n${a.documento.slice(0, 2500)}${a.documento.length > 2500 ? '\n(...) completo em Perfis/Nutri-Aprendizados.md' : ''}`, msg, { rapido: true });
     return true;
   }
   if (cmd === '!persona') {

@@ -3,7 +3,8 @@
 
 import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde, ultimaPesagem, salvarPrevisao, previsaoAberta, marcarPrevisaoConferida } from './mongo.js';
 import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil } from './drive.js';
-import { correcoesDoDia } from './mongo.js';
+import { correcoesDoDia, carregarAprendizados, salvarAprendizados } from './mongo.js';
+import { contestacoesDoDia } from './consciencia.js';
 import * as ia from './gemini.js';
 import { atualizarConhecimento, docsPara } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
@@ -220,6 +221,29 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
         }
       } catch (e) {
         console.error('[diario-nutri] falha:', e.message);
+      }
+
+      // Caderno de aprendizado: correções, contestações e autocrítica do dia viram lições com causa e regra (com raciocínio
+      // ligado), e as regras ativas entram no prompt de toda resposta. Só chama a IA quando houve evidência nova.
+      try {
+        const contestacoes = contestacoesDoDia(historico);
+        if (correcoes.length || contestacoes.length) {
+          const atual = await carregarAprendizados().catch(() => null);
+          const r = await ia.revisarErros({ dia, documentoAtual: atual?.documento || '', correcoes, contestacoes, diario: entradaDiario, refeicoes: compilado.texto });
+          if (r?.documento?.trim()) {
+            await salvarAprendizados({ documento: r.documento.trim(), regras: r.regras, dia });
+            ia.definirLicoes(r.regras);
+            await salvarMarkdown(
+              'Perfis',
+              'Nutri-Aprendizados.md',
+              frontmatter({ tipo: 'aprendizados', atualizado: dia, tags: ['nutribot', 'aprendizados'] }) +
+                `\n# Caderno de aprendizado da ${ia.nomeDaBot()}\n\n${r.documento.trim()}\n\n## Regras ativas (entram em toda resposta)\n${r.regras.map((x) => `- ${x}`).join('\n')}\n`
+            ).catch(() => {});
+            console.log(`[aprendizado] caderno atualizado: ${r.regras.length} regras ativas (${correcoes.length} correções, ${contestacoes.length} contestações)`);
+          }
+        }
+      } catch (e) {
+        console.error('[aprendizado] falha:', e.message);
       }
 
       // Memória de longo prazo por significado (Atlas Vector Search): o que cada um disse, o resumo, os momentos e o diário
