@@ -3,7 +3,7 @@
 
 import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, apagarRefeicaoPorId, registrarHabito } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, apagarRefeicaoPorId, registrarHabito, registrarCorrecao } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
@@ -675,6 +675,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       if (reg.apagar != null) {
         await apagarRefeicaoPorId(alvo._id);
         console.log(`[refeicoes] ${perfil.nome} apagou o registro das ${alvo.horaLocal || alvo.hora} (${alvo.slot}, ~${alvo.estimativa?.kcal || '?'} kcal)`);
+        registrarCorrecao({ dia, pessoa: perfil.nome, texto: `registro de ${nomeDoSlot(alvo.slot)} das ${alvo.horaLocal || alvo.hora} (~${alvo.estimativa?.kcal || '?'} kcal) APAGADO a pedido de ${perfil.nome.split(' ')[0]}: era duplicado ou errado; qualquer total do dia dito na conversa antes disso está errado` }).catch(() => {});
         continue;
       }
       const set = {};
@@ -690,6 +691,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       if (Object.keys(set).length) {
         await atualizarRefeicao(alvo._id, set);
         console.log(`[refeicoes] ${perfil.nome} corrigiu o registro das ${alvo.horaLocal || alvo.hora}: ${JSON.stringify(set)}`);
+        registrarCorrecao({ dia, pessoa: perfil.nome, texto: `registro das ${alvo.horaLocal || alvo.hora} CORRIGIDO a pedido de ${perfil.nome.split(' ')[0]}${set.estimativa ? ` para ~${set.estimativa.kcal} kcal` : ''}${set.slot ? ` (tipo: ${nomeDoSlot(set.slot)})` : ''}; o valor dito antes na conversa está errado` }).catch(() => {});
       }
     } catch (e) {
       console.error('[refeicoes] REGISTRO falhou:', e.message);

@@ -3,6 +3,7 @@
 
 import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde, ultimaPesagem, salvarPrevisao, previsaoAberta, marcarPrevisaoConferida } from './mongo.js';
 import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil } from './drive.js';
+import { correcoesDoDia } from './mongo.js';
 import * as ia from './gemini.js';
 import { atualizarConhecimento, docsPara } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
@@ -128,6 +129,11 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
 
     if (grupo && (perfis.length || forcado)) {
       const compilado = compilarRefeicoes(historico, perfis);
+      // registros apagados/corrigidos durante o dia: os textos noturnos precisam saber que o que foi dito antes está errado
+      const correcoes = await correcoesDoDia(dia).catch(() => []);
+      if (correcoes.length) {
+        compilado.texto += `\n\nCORREÇÕES FEITAS HOJE (depois delas, os totais acima são os certos; o que a conversa disse antes está ERRADO e não pode virar memória, momento, diário nem nota):\n${correcoes.map((c) => `- ${c.texto}`).join('\n')}`;
+      }
       console.log(`[resumo] refeições compiladas:\n${compilado.texto}`);
       // Visão de 7/30 dias e balanço energético por pessoa (código): vai pro resumo do dia e pra reflexão da Nutri
       const acompanhamentos = await Promise.all(perfis.map(async (p) => ({ nome: p.nome, texto: await visaoDe(p, dia) })));
@@ -145,7 +151,7 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       // Momentos memoráveis do dia -> memória de longo prazo (Mongo + Perfis/Nutri-Momentos.md, só acrescenta)
       let momentosDoDia = [];
       try {
-        const momentos = await ia.extrairMomentos({ dia, perfis, historico });
+        const momentos = await ia.extrairMomentos({ dia, perfis, historico, refeicoes: compilado.texto });
         momentosDoDia = momentos;
         if (momentos.length) {
           await registrarMomentos(momentos);
@@ -182,7 +188,7 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
         try {
           const notasAtuais = await notasDe(p);
           const dossieDocs = (await dossieDe(p)).split('--- Suas notas sobre')[0];
-          const notas = await ia.atualizarNotas({ perfil: p, notasAtuais, dossieDocs, historico, dia });
+          const notas = await ia.atualizarNotas({ perfil: p, notasAtuais, dossieDocs, historico, dia, refeicoes: compilado.texto });
           const encolheuDemais = notasAtuais.trim().length > 300 && (notas?.trim().length || 0) < notasAtuais.trim().length * 0.4;
           if (encolheuDemais) console.warn(`[pessoas] notas de ${p.nome} descartadas: reescrita perdeu mais de 60% do conteúdo`);
           if (notas?.trim() && !encolheuDemais && notas.trim() !== notasAtuais.trim()) {
@@ -199,7 +205,7 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       // Diário pessoal dela (só acrescenta): Mongo + Perfis/Nutri-Diario.md
       let entradaDiario = '';
       try {
-        let entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona, resultados }))?.trim();
+        let entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona, resultados, refeicoes: compilado.texto }))?.trim();
         // rede de segurança: nenhum texto gravado pode ser a palavra de silêncio do papo (já aconteceu com o modelo leve)
         if (entrada && /^sil[êe]ncio\W*$/i.test(entrada)) {
           console.warn('[diario-nutri] modelo devolveu "SILENCIO" no lugar do diário; descartado');
@@ -223,7 +229,7 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       try {
         const momentos = await momentosRecentes(30).catch(() => []);
         const diario = await diarioNutriRecente(3).catch(() => []);
-        const nova = await ia.evoluirPersona({ dia, personaAtual: estado.persona, perfis, historico, momentos, diario });
+        const nova = await ia.evoluirPersona({ dia, personaAtual: estado.persona, perfis, historico, momentos, diario, refeicoes: compilado.texto });
         if (estado.persona.length > 300 && (nova?.trim().length || 0) < estado.persona.length * 0.4) {
           console.warn('[persona] reescrita descartada: perdeu mais de 60% do conteúdo');
         } else if (nova?.trim()) {

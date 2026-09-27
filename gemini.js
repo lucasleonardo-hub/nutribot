@@ -444,12 +444,14 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         });
         const texto = res.text?.trim();
         const fim = res.candidates?.[0]?.finishReason;
-        if (!texto && fim === 'MAX_TOKENS' && !configApi._dobrado) {
-          // Modelos que não desligam o raciocínio (3.8 Flash) gastam a saída pensando: repete com o dobro do limite
+        if (fim === 'MAX_TOKENS' && !configApi._dobrado) {
+          // Saída cortada (vazia ou pela metade): os modelos 3.x gastam parte do limite raciocinando, então o texto some
+          // ou para no meio da frase. Repete UMA vez com o dobro do limite antes de aceitar/recusar; nada sai cortado
+          // pro grupo sem essa segunda chance (o resumo do dia 26/09 saiu pela metade por isso).
           const atual = configApi.maxOutputTokens || 1024;
           configApi.maxOutputTokens = Math.min(atual * 2, 8192);
           configApi._dobrado = true;
-          console.warn(`[gemini] ${model} devolveu vazio por MAX_TOKENS; repetindo com maxOutputTokens=${configApi.maxOutputTokens}`);
+          console.warn(`[gemini] ${model} ${texto ? 'cortou a resposta' : 'devolveu vazio'} por MAX_TOKENS; repetindo com maxOutputTokens=${configApi.maxOutputTokens}`);
           i--;
           continue;
         }
@@ -771,8 +773,9 @@ export async function resumoDiario({ dia, perfis, historico, persona, refeicoes 
       `Se a pessoa não registrou nada: "*Nome*: nada registrado hoje" + uma frase cobrando com carinho.\n` +
       `Feche com UMA linha: "🏆 Placar do dia:" com o ranking com humor leve.\n` +
       `Se o bloco trouxer ACOMPANHAMENTO de alguém (balanço energético do relógio, média de 7 dias), a frase dessa pessoa pode dizer em meia linha se está no rumo do objetivo.\n` +
-      `REGRAS: números copiados do bloco (não recalcule, não invente refeição); nutrientes por extenso; no máximo 1 emoji por linha; sem [[links]] neste resumo; sem lista de refeições, sem dica de amanhã, sem nota.`,
-    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 2000 },
+      `REGRAS: números copiados do bloco (não recalcule, não invente refeição; se a conversa citar outro total, o bloco vence, porque registros são corrigidos ao longo do dia); nutrientes por extenso; no máximo 1 emoji por linha; sem [[links]] neste resumo; sem lista de refeições, sem dica de amanhã, sem agenda, sem nota.`,
+    // pensar:false: o raciocínio dos 3.x consumia o limite de saída e o resumo saía cortado; 200 palavras não precisam dele
+    config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 3000 },
   });
 }
 
@@ -839,9 +842,10 @@ export async function extrairGirias({ perfis, historico }) {
 // ============================================================
 // 6) Evolução da personalidade (roda junto com o resumo diário)
 // ============================================================
-export async function evoluirPersona({ dia, personaAtual, perfis, historico, momentos, diario }) {
+export async function evoluirPersona({ dia, personaAtual, perfis, historico, momentos, diario, refeicoes }) {
   if (!historico?.length) return personaAtual || '';
   const diarioTxt = diario?.length ? `SEU DIÁRIO (últimos dias, escrito por você):\n${diario.map((d) => `[${d.dia}] ${d.texto}`).join('\n\n')}\n\n` : '';
+  const registrosTxt = refeicoes ? `REGISTROS OFICIAIS DE HOJE (compilados pelo sistema depois das correções; se a transcrição, a memória ou um momento citar outro total de calorias, ESTE vence e o outro deve ser corrigido ou sumir):\n${refeicoes}\n\n` : '';
   return gerar({
     contents:
       `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Abaixo está sua MEMÓRIA DE PERSONALIDADE atual, seus momentos memoráveis, seu diário e a transcrição do dia. ` +
@@ -851,6 +855,7 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico, mom
       `COMO EU TÔ ME SENTINDO COM ESSE GRUPO; MEU ESTILO AGORA e o que quero ajustar amanhã. Mantenha o que ainda vale, incorpore o de hoje, corte o irrelevante. ` +
       `Não invente fatos sobre as pessoas que não estejam na memória, nos momentos, no diário ou na transcrição; opiniões e sentimentos seus são livres.\n\n` +
       `PERFIS:\n${blocoPerfis(perfis)}\n\nMEMÓRIA ATUAL:\n${personaAtual?.trim() || '(vazia, hoje é meu primeiro dia com eles)'}\n\n` +
+      registrosTxt +
       blocoMomentos(momentos) +
       diarioTxt +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 400)}`,
@@ -859,15 +864,17 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico, mom
 }
 
 /** Diário pessoal da Nutri: uma entrada por noite, em primeira pessoa, sobre o dia com o grupo. Só acrescenta. */
-export async function diarioDaNutri({ dia, perfis, historico, personaAtual, resultados }) {
+export async function diarioDaNutri({ dia, perfis, historico, personaAtual, resultados, refeicoes }) {
   if (!historico?.length) return '';
   return gerar({
     contents:
       `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Escreva a entrada de HOJE do seu diário pessoal: 100 a 180 palavras, primeira pessoa, no seu tom, sem markdown de cabeçalho (#). ` +
       `Fale do que aconteceu no grupo hoje do seu ponto de vista: o que te orgulhou, o que te decepcionou, de quem você tá mais próxima, o que você tá achando de cada um. ` +
       `Depois avalie o SEU trabalho, com os números do bloco RESULTADOS quando houver: o que você sugeriu e foi seguido, o que ignoraram, quem está indo na direção do objetivo e quem não, se você cobrou demais ou de menos, o que vai fazer diferente amanhã (uma coisa concreta). ` +
-      `É um diário: pode ter sentimento, opinião e humor. Não invente fatos; sentimentos são seus.\n\n` +
+      `É um diário: pode ter sentimento, opinião e humor. Não invente fatos; sentimentos são seus. ` +
+      `NÚMEROS: calorias e proteína de cada um vêm SÓ do bloco REGISTROS OFICIAIS; o que foi dito na conversa (inclusive por você) pode ter sido corrigido depois, e nesse caso o registro vence. Se você errou um número durante o dia e foi corrigida, isso pode entrar no diário como autocrítica, mas o número certo é o do bloco.\n\n` +
       `PERFIS:\n${blocoPerfis(perfis)}\n\nSUA MEMÓRIA DE PERSONALIDADE:\n${personaAtual?.trim() || '(vazia)'}\n\n` +
+      (refeicoes ? `REGISTROS OFICIAIS DO DIA (compilados pelo sistema, depois das correções):\n${refeicoes}\n\n` : '') +
       (resultados ? `RESULTADOS (calculados pelo sistema: 7 e 30 dias, peso, balanço energético de quem tem relógio):\n${resultados}\n\n` : '') +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 300)}`,
     config: { systemInstruction: montarSystem('', { documento: true }), temperature: 0.9, pensar: false, maxOutputTokens: 600, leve: true },
@@ -980,12 +987,14 @@ export async function revisarRespostaReserva({ perfil, texto, imagem, mimeType, 
 }
 
 /** Momentos memoráveis do dia (vexames, acertos, frases, promessas) -> memória de longo prazo que só cresce. */
-export async function extrairMomentos({ dia, perfis, historico }) {
+export async function extrairMomentos({ dia, perfis, historico, refeicoes }) {
   if (!historico?.length || !perfis?.length) return [];
   const json = await gerar({
     contents:
       `Você é a ${nomeDaBot()}. Da transcrição de hoje (${dataExtenso(dia)}), extraia de 0 a 4 MOMENTOS que valem lembrar daqui a semanas: vexames alimentares, acertos raros, frases marcantes, promessas/metas que a pessoa fez, mudanças de rotina, piadas que pegaram. ` +
-      `Cada momento: uma frase curta (até 25 palavras), concreta, em terceira pessoa, com o nome da pessoa (${perfis.map((p) => p.nome).join(', ')}). Só o que realmente aconteceu. Dia comum sem nada marcante = lista vazia.\n\n` +
+      `Cada momento: uma frase curta (até 25 palavras), concreta, em terceira pessoa, com o nome da pessoa (${perfis.map((p) => p.nome).join(', ')}). Só o que realmente aconteceu. Dia comum sem nada marcante = lista vazia.\n` +
+      `NÚMEROS: calorias e proteína do dia só podem vir do bloco REGISTROS OFICIAIS abaixo. Totais ditos na conversa (inclusive por você) podem ter sido corrigidos depois: se a conversa disser "4.700 kcal" e o bloco disser 2.979, o bloco vence e a conversa está errada. Momento sobre "comeu demais/de menos" só se o bloco confirmar.\n\n` +
+      (refeicoes ? `REGISTROS OFICIAIS DO DIA (compilados pelo sistema, depois das correções):\n${refeicoes}\n\n` : '') +
       `TRANSCRIÇÃO:\n${blocoHistorico(historico, 400)}`,
     config: {
       temperature: 0.3,
@@ -1221,13 +1230,14 @@ export async function descreverImagemDocumento(buffer, mimeType) {
   });
 }
 
-export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historico, dia }) {
+export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historico, dia, refeicoes }) {
   const falas = falasDe(historico, perfil.nome);
   if (!falas.length) return notasAtuais || '';
   return gerar({
     contents:
       `Você é a ${nomeDaBot()}, nutricionista. Hoje é ${dataExtenso(dia)}. Reescreva SUAS NOTAS sobre ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n\n` +
       `NOTAS ATUAIS:\n${notasAtuais?.trim() || '(nenhuma ainda)'}\n\n` +
+      (refeicoes ? `REGISTROS OFICIAIS DE HOJE (compilados pelo sistema depois das correções; totais de calorias e proteína SÓ daqui, nunca da conversa, que pode ter número já corrigido):\n${refeicoes}\n\n` : '') +
       `DOCUMENTOS QUE A PESSOA DEIXOU NA PASTA (você NÃO precisa repetir isso nas notas, só complementar ou registrar mudanças):\n${(dossieDocs || '(nenhum)').slice(0, 6000)}\n\n` +
       `TRANSCRIÇÃO DE HOJE (só falas dela e suas respostas a ela; NÃO há nada de outras pessoas do grupo aqui, e nada delas deve entrar nas notas):\n${blocoHistorico(falas, 150)}\n\n` +
       `Escreva as notas atualizadas em até 300 palavras, em tópicos curtos (linhas começando com "- "), terceira pessoa, só FATOS que a pessoa disse ou que você observou, SEMPRE com data quando for medida, meta ou dado que muda (ex: "- 2026-09-16: pesou 73,2 kg"; "- 2026-09-18: mora em Curitiba"). Dado novo SUBSTITUI o antigo (mantenha só o mais recente de peso, cidade, dieta, objetivo; pode registrar a evolução como "peso: 73,2 (09-16) -> 74,5 (09-18)"). Cubra o que importa pro seu trabalho: idade, cidade/fuso, dieta e restrições, trabalho/estudo e horários, treinos/esportes e dias, preferências e aversões alimentares, sono, álcool, metas numéricas, respostas a perguntas que você fez, e detalhes pessoais que ajudam a brincar com carinho. Corte o irrelevante. Se não houver nada novo, devolva as notas atuais. Sem markdown de cabeçalho (#), sem emojis.`,

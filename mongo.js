@@ -209,6 +209,16 @@ export async function atualizarRefeicao(id, set) {
   await colecao('refeicoes').updateOne({ _id: id }, { $set: { ...set, atualizadoEm: new Date() } });
 }
 
+// ---------- Correções do dia (registro apagado/corrigido depois de a IA já ter falado sobre ele) ----------
+// Entram nos textos noturnos (resumo, momentos, diário, memória, notas): o que foi dito na conversa antes da correção
+// não pode virar "fato" na memória dela. Já aconteceu: "4.700 kcal" de registros duplicados ficou no diário e na persona.
+export async function registrarCorrecao({ dia, pessoa, texto }) {
+  await colecao('correcoes_dia').insertOne({ dia, pessoa, texto: String(texto).slice(0, 300), em: new Date() });
+}
+export async function correcoesDoDia(dia) {
+  return colecao('correcoes_dia').find({ dia }).sort({ em: 1 }).toArray();
+}
+
 /** Apaga um registro pelo _id (pedido da pessoa: "remove esse almoço das 11:03", ou !apagar). */
 export async function apagarRefeicaoPorId(id) {
   const r = await colecao('refeicoes').deleteOne({ _id: id });

@@ -1,6 +1,6 @@
 // comandos.js - Comandos do grupo (!id, !nome, !perfil, !dossie, !fontes, !estudar, !persona, !status, !reset, !resumo, !ajuda).
 
-import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao, refeicoesDesde, pesagensDesde, habitosDoDia, salvarConfig, apagarRefeicaoPorId } from './mongo.js';
+import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao, refeicoesDesde, pesagensDesde, habitosDoDia, salvarConfig, apagarRefeicaoPorId, registrarCorrecao } from './mongo.js';
 import { configGrafico, renderizar } from './graficos.js';
 import { salvarEmPasta } from './drive.js';
 import { pastaDe } from './pessoas.js';
@@ -147,6 +147,7 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     }
     await apagarRefeicaoPorId(alvo._id);
     console.log(`[refeicoes] !apagar de ${p.nome}: ${alvo.horaLocal || alvo.hora} ${alvo.slot} (~${alvo.estimativa?.kcal || '?'} kcal)`);
+    registrarCorrecao({ dia, pessoa: p.nome, texto: `registro de ${nomeDoSlot(alvo.slot)} das ${alvo.horaLocal || alvo.hora} (~${alvo.estimativa?.kcal || '?'} kcal) APAGADO por ${p.nome.split(' ')[0]} (!apagar): era duplicado ou errado; qualquer total do dia dito na conversa antes disso está errado` }).catch(() => {});
     await enviar(jidGrupo, `🗑️ Apagado: ${nomeDoSlot(alvo.slot)} das ${alvo.horaLocal || alvo.hora}${alvo.estimativa?.kcal ? ` (~${Math.round(alvo.estimativa.kcal)} kcal)` : ''}. O !hoje já reflete.`, msg, { rapido: true });
     return true;
   }
