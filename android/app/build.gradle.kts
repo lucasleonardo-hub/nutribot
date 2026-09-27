@@ -11,8 +11,8 @@ android {
         applicationId = "br.nutribot.relogio"
         minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1" // 1.1: batimento de repouso (calculado no sono), HRV e média de batimentos por treino
     }
 
     // Assinatura estável (mesma chave em todo build, senão o Android recusa atualizar por cima):

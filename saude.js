@@ -176,6 +176,48 @@ const diasAtras = (dia, n) => {
 };
 
 /** Texto compacto pro dossiê da Nutri (e pro Nutri-Saude.md). `hoje` = dia de referência (YYYY-MM-DD). */
+/**
+ * Recuperação pelo batimento de repouso (e HRV quando houver), medidos no sono pelo app Relógio.
+ * Não entra na conta de calorias: é o sinal de "o corpo está aguentando o plano?". Últimos dias contra a média de 14.
+ * Devolve null sem dado. status: 'acima' (>= +5 bpm por 2+ dias: cansaço/doença/sobrecarga), 'abaixo' (<= -5), 'normal'.
+ */
+export function recuperacao(atividades, hoje) {
+  const dias = (atividades || []).filter((a) => a.fcRepouso && a.dia >= diasAtras(hoje, 13) && a.dia <= hoje).sort((a, b) => a.dia.localeCompare(b.dia));
+  if (dias.length < 2) return null;
+  const media14 = media(dias.map((a) => a.fcRepouso));
+  const ultimo = dias[dias.length - 1];
+  let diasAcima = 0;
+  for (let i = dias.length - 1; i >= 0 && dias[i].fcRepouso >= media14 + 5; i--) diasAcima++;
+  const delta = ultimo.fcRepouso - media14;
+  const status = diasAcima >= 2 ? 'acima' : delta <= -5 ? 'abaixo' : 'normal';
+  const hrvs = dias.filter((a) => a.hrv);
+  const hrvMedia = hrvs.length >= 3 ? media(hrvs.map((a) => a.hrv)) : null;
+  const hrvUltimo = hrvs.length ? hrvs[hrvs.length - 1] : null;
+  const hrvBaixo = hrvMedia && hrvUltimo && hrvUltimo.dia === ultimo.dia && hrvUltimo.hrv < hrvMedia * 0.8;
+  const frase =
+    status === 'acima'
+      ? `batimento de repouso acima do normal há ${diasAcima} dias (${ultimo.fcRepouso} bpm contra média de ${Math.round(media14)}): sinal de cansaço, doença chegando ou treino pesado demais. Semana de segurar, dormir e hidratar, não de empurrar.`
+      : status === 'abaixo'
+        ? `batimento de repouso ${ultimo.fcRepouso} bpm, abaixo da média de ${Math.round(media14)}: recuperação boa, pode manter ou puxar o ritmo.`
+        : `batimento de repouso ${ultimo.fcRepouso} bpm, na média (${Math.round(media14)}): recuperação normal.`;
+  const curta =
+    status === 'acima'
+      ? `batimento de repouso ${ultimo.fcRepouso} bpm, acima do normal há ${diasAcima} dias (média ${Math.round(media14)}): sinal de cansaço`
+      : `batimento de repouso ${ultimo.fcRepouso} bpm (média ${Math.round(media14)}${status === 'abaixo' ? ', recuperação boa' : ', na média'})`;
+  return {
+    dias: dias.slice(-7).reverse(),
+    ultimo: ultimo.fcRepouso,
+    media14: Math.round(media14),
+    delta: Math.round(delta),
+    diasAcima,
+    status,
+    hrvMedia: hrvMedia ? Math.round(hrvMedia) : null,
+    hrvUltimo: hrvUltimo?.hrv || null,
+    frase: frase + (hrvBaixo ? ` HRV ${hrvUltimo.hrv} ms bem abaixo da sua média (${Math.round(hrvMedia)}): reforça o sinal de estresse.` : ''),
+    curta: curta + (hrvBaixo ? `, HRV baixa` : ''),
+  };
+}
+
 export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha = 'planilha de saúde', comHevy = false } = {}) {
   hoje ||= [...pesos, ...sonos, ...atividades].map((x) => x.dia).sort().pop() || new Date().toISOString().slice(0, 10);
   const linhas = [];
@@ -242,6 +284,14 @@ export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha =
       const hDeitar = md == null ? '' : ` · deita em média ${String(Math.floor(md / 60) % 24).padStart(2, '0')}:${String(Math.round(md % 60)).padStart(2, '0')}`;
       linhas.push(`- Média das noites completas nos últimos 7 dias: ${hm(mt)} dormindo (profundo ${hm(mProf)})${hDeitar}. Referência: 7 a 9 h; profundo 1 a 2 h.`);
     }
+  }
+
+  // ---- recuperação (batimento de repouso e HRV, do app Relógio; a planilha antiga não traz)
+  const rec = recuperacao(atividades, hoje);
+  if (rec) {
+    linhas.push('', 'RECUPERAÇÃO (batimento cardíaco de repouso medido no sono; mais recente primeiro; NÃO entra na conta de calorias):');
+    for (const d of rec.dias) linhas.push(`- ${dm(d.dia)}: ${d.fcRepouso} bpm${d.hrv ? ` · HRV ${d.hrv} ms` : ''}`);
+    linhas.push(`- Leitura: ${rec.frase}`);
   }
 
   // ---- atividade
@@ -318,6 +368,12 @@ export function indicadoresRelogio({ pesos, sonos, atividades }, { hoje, comHevy
   if (mPassos) {
     Object.assign(r, { passosMedia: Math.round(mPassos), treinos7d: treinos });
     partes.push(`~${milhar(mPassos)} passos/dia e ${treinos} treino(s) de musculação/esporte nos últimos 7 dias`);
+  }
+  // recuperação: batimento de repouso contra a média (sinal pra segurar ou empurrar; não entra na conta de calorias)
+  const rec = recuperacao(atividades, hoje);
+  if (rec) {
+    Object.assign(r, { fcRepouso: rec.ultimo, fcMedia: rec.media14, recuperacao: rec.status, hrv: rec.hrvUltimo });
+    partes.push(rec.curta);
   }
   // gasto total por dia (últimos 30 dias) pro balanço energético em código (resumo.js visaoPeriodo)
   const gastos = {};

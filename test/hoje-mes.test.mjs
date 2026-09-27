@@ -15,7 +15,7 @@ import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
 import { classificar, blocoAgenda, ocupadoAgora, limparAnonimos, normalizarEventoApi } from '../agenda.js';
 import { estacaoDoAno, hemisferio, descricaoTempo, sensacao, linhaClima } from '../clima.js';
-import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio } from '../saude.js';
+import { interpretarAbas, resumoSaude, ehPlanilhaSaude, indicadoresRelogio, recuperacao } from '../saude.js';
 import { falasDe } from '../gemini.js';
 
 const perfis = [
@@ -293,13 +293,39 @@ test('relógio (app): envio vira pesos/sonos/atividades no fuso da pessoa e fund
   assert.equal(hoje.passos, 8342);
   assert.equal(hoje.calorias, 2450);
   assert.equal(hoje.fcRepouso, 58);
-  assert.deepEqual(hoje.treinos, [{ nome: 'Musculação', min: 62, hora: '17:00', fonte: 'com.sec.android.app.shealth', kcal: null }]);
+  assert.deepEqual(hoje.treinos, [{ nome: 'Musculação', min: 62, hora: '17:00', fonte: 'com.sec.android.app.shealth', kcal: null, fcMedia: null }]);
   // fusão: o novo vence no mesmo dia, o antigo fica, e o que passou de 90 dias sai
   const f = fundir({ pesos: [{ dia: '2026-09-25', peso: 77.5 }, { dia: '2026-05-01', peso: 70 }], sonos: [], atividades: [{ dia: '2026-09-26', passos: 100, treinos: [] }] }, d, '2026-09-26');
   assert.deepEqual(f.pesos.map((p) => [p.dia, p.peso]), [['2026-09-25', 77.5], ['2026-09-26', 77.14]]);
   assert.equal(f.atividades.find((a) => a.dia === '2026-09-26').passos, 8342);
   assert.deepEqual(tokensRelogio('Lucas=abc123, heitor=d=ef'), { lucas: 'abc123', heitor: 'd=ef' });
   assert.deepEqual(tokensRelogio(''), {});
+});
+
+test('recuperação: batimento de repouso acima da média por 2+ dias vira sinal de segurar; na média ou abaixo, sinal verde', () => {
+  const base = (fc, i) => ({ dia: `2026-09-${String(13 + i).padStart(2, '0')}`, fcRepouso: fc, treinos: [] });
+  const normal = [55, 54, 56, 55, 54, 55, 56, 55, 54, 55, 56, 55].map(base);
+  const r1 = recuperacao([...normal, base(56, 12), base(55, 13)], '2026-09-26');
+  assert.equal(r1.status, 'normal');
+  assert.equal(r1.media14, 55);
+  assert.match(r1.curta, /^batimento de repouso 55 bpm \(média 55, na média\)$/);
+  const r2 = recuperacao([...normal, base(61, 12), base(63, 13)], '2026-09-26');
+  assert.equal(r2.status, 'acima');
+  assert.equal(r2.diasAcima, 2);
+  assert.match(r2.frase, /acima do normal há 2 dias \(63 bpm contra média de 56\)/);
+  const r3 = recuperacao([...normal, base(55, 12), base(49, 13)], '2026-09-26');
+  assert.equal(r3.status, 'abaixo');
+  assert.match(r3.curta, /recuperação boa/);
+  // um dia isolado alto não é tendência
+  assert.equal(recuperacao([...normal, base(55, 12), base(64, 13)], '2026-09-26').status, 'normal');
+  assert.equal(recuperacao([base(55, 0)], '2026-09-26'), null);
+  // HRV bem abaixo da média reforça o sinal
+  const comHrv = [...normal.map((d, i) => ({ ...d, hrv: 40 + (i % 3) })), { ...base(62, 12), hrv: 41 }, { ...base(63, 13), hrv: 28 }];
+  assert.match(recuperacao(comHrv, '2026-09-26').frase, /HRV 28 ms bem abaixo/);
+  // a linha do perfil carrega o sinal
+  const ind = indicadoresRelogio({ pesos: [], sonos: [], atividades: [...normal, base(61, 12), base(63, 13)].map((a) => ({ ...a, passos: 8000 })) }, { hoje: '2026-09-26' });
+  assert.equal(ind.recuperacao, 'acima');
+  assert.match(ind.linha, /acima do normal há 2 dias/);
 });
 
 test('perfil: produto fixo com rótulo lido entra em produtos e substitui o de mesmo nome', () => {

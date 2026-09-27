@@ -94,7 +94,8 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
     if (passos && (!a.passos || passos > a.passos)) a.passos = Math.round(passos);
     const cal = n(d.calorias);
     if (cal && cal > 300) a.calorias = Math.round(cal); // aggregate do dia (gasto total); valores minúsculos são dia incompleto
-    if (n(d.fcRepouso)) a.fcRepouso = Math.round(n(d.fcRepouso));
+    if (n(d.fcRepouso) && n(d.fcRepouso) >= 30 && n(d.fcRepouso) <= 120) a.fcRepouso = Math.round(n(d.fcRepouso));
+    if (n(d.hrv) && n(d.hrv) > 0) a.hrv = Math.round(n(d.hrv));
   }
   for (const t of corpo?.treinos || []) {
     const ini = localDe(t.inicio, fuso);
@@ -104,7 +105,7 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
     const min = t.fim ? Math.round((new Date(t.fim) - new Date(t.inicio)) / 60000) : n(t.min);
     const nome = String(t.tipo || t.nome || 'Exercício').trim();
     if (a.treinos.some((x) => x.hora === ini.hora && x.nome === nome)) continue;
-    a.treinos.push({ nome, min: min && min > 0 ? min : null, hora: ini.hora, fonte: t.fonte || '', kcal: n(t.kcal) });
+    a.treinos.push({ nome, min: min && min > 0 ? min : null, hora: ini.hora, fonte: t.fonte || '', kcal: n(t.kcal), fcMedia: n(t.fcMedia) ? Math.round(n(t.fcMedia)) : null });
   }
 
   const ordenar = (m) => [...m.values()].sort((x, y) => x.dia.localeCompare(y.dia));
