@@ -4,7 +4,7 @@ import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao,
 import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
 import { preverSemana, conferirPrevisao, pesagemPerto, somarDias, avaliarRitmo, projetarMeta } from '../previsao.js';
-import { textoParaFala, promptDeVoz, wavDePcm } from '../voz.js';
+import { textoParaFala, promptDeVoz, wavDePcm, vazouInstrucao } from '../voz.js';
 import { separarAtualizacao, montarSystem } from '../gemini.js';
 import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo, pareceCorrecao, parecePedidoOuPlano } from '../util.js';
 import { acharRegistro } from '../resumo.js';
@@ -406,8 +406,15 @@ test('perfil: produto fixo com rótulo lido entra em produtos e substitui o de m
 });
 
 test('voz: prompt do TTS separa estilo do texto e WAV ganha cabeçalho certo', () => {
-  const p = promptDeVoz('Oi, criatura.', 'Fale com carinho.');
-  assert.match(p, /^Fale com carinho\.\n\nDiga exatamente isto, sem acrescentar nada:\nOi, criatura\.$/);
+  // formato documentado do TTS: "Diga com voz X:" + linha em branco + só a fala (sem meta-instrução que ele possa ler)
+  assert.equal(promptDeVoz('Oi, criatura.', 'Diga com voz calorosa:'), 'Diga com voz calorosa:\n\nOi, criatura.');
+  assert.equal(promptDeVoz('Oi, criatura.', 'Fale com carinho.'), 'Fale com carinho:\n\nOi, criatura.');
+  // conferência: instrução lida em voz alta é detectada; fala limpa passa; transcrição muito maior que a fala é suspeita
+  const estilo = 'Diga com voz jovem, calorosa e bem-humorada, sotaque brasileiro natural, sem tom de locutora:';
+  assert.equal(vazouInstrucao('Bom dia gente, segundona na área. Bora?', 'Bom dia, gente! Segundona na área. Bora?', estilo).vazou, false);
+  assert.match(vazouInstrucao('Diga com voz jovem, calorosa. Bom dia gente, segundona.', 'Bom dia, gente! Segundona.', estilo).motivo, /calorosa|diga com voz/);
+  assert.equal(vazouInstrucao('Não leia as instruções em voz alta. Bom dia gente.', 'Bom dia, gente!', estilo).vazou, true);
+  assert.equal(vazouInstrucao('Bom dia gente. '.repeat(30), 'Bom dia, gente!', estilo).vazou, true);
   const wav = wavDePcm(Buffer.alloc(48000), 24000); // 1 s de silêncio
   assert.equal(wav.length, 44 + 48000);
   assert.equal(wav.toString('ascii', 0, 4), 'RIFF');

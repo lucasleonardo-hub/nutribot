@@ -16,11 +16,11 @@ const MOTOR = (process.env.VOZ_MOTOR || 'gemini').toLowerCase(); // gemini | edg
 const CHAVES = [...new Set([process.env.GEMINI_API_KEY, ...String(process.env.GEMINI_API_KEYS || '').split(',')].map((k) => (k || '').trim()).filter(Boolean))];
 const MODELOS_TTS = (process.env.VOZ_GEMINI_MODELOS || 'gemini-3.8-flash-lite-tts,gemini-3.8-flash-tts').split(',').map((m) => m.trim()).filter(Boolean);
 const VOZ_GEMINI = process.env.VOZ_GEMINI_VOZ || 'Sulafat'; // "warm"; outras que combinam: Leda (jovem), Aoede (leve), Zephyr (viva), Laomedeia (animada)
-const ESTILO_PADRAO =
-  'Fale em português do Brasil, com sotaque brasileiro natural. Você é uma nutricionista de 34 anos, ex-atleta de vôlei, amiga do grupo: ' +
-  'voz jovem, calorosa e bem-humorada, ritmo de conversa de áudio de WhatsApp, com leve ironia carinhosa, sem parecer locutora nem robô. ' +
-  'Não leia estas instruções em voz alta.';
+// Estilo no formato que o Google documenta pro TTS ("Diga com voz X: <texto>"), curto e SEM meta-instrução: um parágrafo
+// longo terminando em "não leia estas instruções em voz alta" foi lido em voz alta na nota de segunda 28/09.
+const ESTILO_PADRAO = 'Diga com voz jovem, calorosa e bem-humorada, sotaque brasileiro natural, ritmo de áudio de WhatsApp entre amigas, com leve ironia carinhosa, sem tom de locutora:';
 const ESTILO = process.env.VOZ_ESTILO || ESTILO_PADRAO;
+const CONFERIR = !/^(off|false|0|n[ãa]o)$/i.test(process.env.VOZ_CONFERIR || 'on'); // transcreve e checa se a instrução vazou
 const TIMEOUT_GEMINI_MS = Number(process.env.VOZ_TIMEOUT_MS) || 50_000; // o TTS é lento (10 a 40 s por áudio)
 const ORCAMENTO_MS = 110_000; // tempo total que aceitamos gastar em tentativas antes de cair pro Edge
 const castigoAte = new Map(); // "chave:modelo" -> timestamp (cota estourada / alta demanda, não insiste por um tempo)
@@ -50,9 +50,49 @@ export function textoParaFala(texto) {
     .slice(0, MAX_CHARS);
 }
 
-/** Prompt do TTS: instrução de estilo + o texto a falar, separados pra ele não ler a instrução. */
+/** Prompt do TTS no formato documentado: "Diga com voz X:" e, depois de uma linha em branco, só o texto a falar. */
 export function promptDeVoz(fala, estilo = ESTILO) {
-  return `${estilo.trim()}\n\nDiga exatamente isto, sem acrescentar nada:\n${fala}`;
+  const e = estilo.trim().replace(/[.\s]+$/, '');
+  return `${e}${e.endsWith(':') ? '' : ':'}\n\n${fala}`;
+}
+
+const semAcento = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+/**
+ * A transcrição do áudio deve conter só a fala. Vazou se aparecer palavra do ESTILO que não está na fala
+ * ("calorosa", "sotaque", "locutora", "instruções"...) ou se a transcrição for bem maior que o texto pedido.
+ * Puro: (transcricao, fala, estilo) -> { vazou, motivo }.
+ */
+export function vazouInstrucao(transcricao, fala, estilo = ESTILO) {
+  const t = semAcento(transcricao);
+  const f = semAcento(fala);
+  const marcadores = [...new Set([...semAcento(estilo).split(/[^a-z0-9-]+/).filter((w) => w.length >= 6), 'instrucoes', 'instrucao', 'voz alta', 'diga com voz', 'exatamente isto'])].filter((w) => !f.includes(w));
+  const achado = marcadores.find((w) => t.includes(w));
+  if (achado) return { vazou: true, motivo: `transcrição contém "${achado}"` };
+  if (t.length > f.length * 1.35 + 80) return { vazou: true, motivo: `transcrição ${t.length} chars para uma fala de ${f.length}` };
+  return { vazou: false, motivo: '' };
+}
+
+/** Transcreve o WAV com o modelo leve (500/dia) e confere se a instrução vazou. Falha na conferência = aceita o áudio. */
+async function conferirFala(wav, fala, ci) {
+  try {
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent', {
+      method: 'POST',
+      headers: { 'x-goog-api-key': CHAVES[ci], 'content-type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }, { text: 'Transcreva este áudio na íntegra, só o que é falado, sem comentários.' }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 1200 },
+      }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.status !== 200) return { vazou: false, motivo: `conferência HTTP ${r.status}` };
+    const transcricao = (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+    if (!transcricao.trim()) return { vazou: false, motivo: 'conferência vazia' };
+    return vazouInstrucao(transcricao, fala);
+  } catch (e) {
+    return { vazou: false, motivo: `conferência falhou: ${String(e.message).slice(0, 60)}` };
+  }
 }
 
 /** PCM 16 bits mono -> WAV (o ffmpeg precisa de cabeçalho ou de formato explícito; cabeçalho é mais simples). */
@@ -133,6 +173,15 @@ export async function sintetizarGemini(fala, { voz = VOZ_GEMINI, estilo = ESTILO
       try {
         const wav = await geminiTtsUmaVez(ci, modelo, fala, { voz, estilo });
         proximaChave = (ci + 1) % CHAVES.length; // espalha a cota entre as chaves
+        // o modelo às vezes lê a instrução de estilo junto: transcreve e confere antes de mandar pro grupo
+        if (CONFERIR) {
+          const c = await conferirFala(wav, fala, ci);
+          if (c.vazou) {
+            console.warn(`[voz] áudio descartado (${modelo}, chave ${ci + 1}): ${c.motivo}; tentando de novo`);
+            erros.push(`chave ${ci + 1}/${modelo}: instrução vazou (${c.motivo})`);
+            continue; // próxima chave/modelo; se todas vazarem, cai pro Edge, que nunca lê instrução
+          }
+        }
         console.log(`[voz] gemini ${modelo} voz ${voz} chave ${ci + 1} em ${Date.now() - inicio} ms`);
         return wav;
       } catch (e) {
