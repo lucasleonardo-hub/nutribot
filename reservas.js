@@ -115,6 +115,12 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
   const precisaVisao = imagens.length > 0;
   const candidatos = PROVEDORES.filter((p) => p.chave() && (precisaVisao ? p.visao : p.texto));
   if (!candidatos.length) throw new Error(`nenhum provedor reserva disponível para ${precisaVisao ? 'imagem' : 'texto'}`);
+  // Foto: os modelos de visão maiores primeiro. Em 28/09 o command-a-vision inventou abacate e queijo num prato e repetiu
+  // itens já negados; o Qwen3.8 27B e o Qwen3-VL leem prato melhor (quando não estão em 429, e aí a lista segue).
+  if (precisaVisao) {
+    const ordem = (process.env.RESERVA_VISAO_ORDEM || 'openrouter-visao,huggingface-2,huggingface,cohere').split(',').map((s) => s.trim());
+    candidatos.sort((a, b) => (ordem.indexOf(a.id) === -1 ? 99 : ordem.indexOf(a.id)) - (ordem.indexOf(b.id) === -1 ? 99 : ordem.indexOf(b.id)));
+  }
 
   const systemFinal =
     `${system || ''}\n\nVOCÊ É A PERSONAGEM descrita acima e está respondendo dentro do grupo. Nunca fale dela em terceira pessoa nem responda como se fosse outra pessoa do grupo. ` +

@@ -5,7 +5,7 @@ import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
 import { preverSemana, conferirPrevisao, pesagemPerto, somarDias, avaliarRitmo, projetarMeta } from '../previsao.js';
 import { textoParaFala, promptDeVoz, wavDePcm, vazouInstrucao } from '../voz.js';
-import { separarAtualizacao, montarSystem } from '../gemini.js';
+import { separarAtualizacao, montarSystem, limparEco } from '../gemini.js';
 import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo, pareceCorrecao, parecePedidoOuPlano } from '../util.js';
 import { acharRegistro } from '../resumo.js';
 import { aplicarAtualizacao } from '../perfis.js';
@@ -344,6 +344,18 @@ test('rótulos (Open Food Facts): código de barras no texto, normalização e b
   assert.match(bloco, /por 100 g\/ml: 151 kcal · Proteína 5\.1 g · Carboidratos 16 g · Gorduras 7\.5 g \(açúcares 14\.2 g\)/);
   assert.match(bloco, /porção do rótulo: 100 g = 151 kcal · NOVA 4 \(ultraprocessado\)/);
   assert.equal(blocoRotulos([]), '');
+});
+
+test('limparEco: eco da mensagem, "Nome:" solto e lixo de outro alfabeto saem do começo da resposta da reserva', () => {
+  const nome = 'Lucas Leonardo Alves da Silveira Vitória';
+  const msg = '@202563576148209 almocooo 130g de carne assasa, 200g de macarrao, 70g de arroz e salada de maionese 70g';
+  const eco = `${nome}: ${msg}\n🕐 *Refeição:* Almoço\n🍽️ *O que eu vi:* 130 g de carne assada`;
+  assert.equal(limparEco(eco, nome, msg), '🕐 *Refeição:* Almoço\n🍽️ *O que eu vi:* 130 g de carne assada');
+  assert.equal(limparEco('илемAle, minha guerreira, vamos ajustar aqui! 🌸', 'Ale', 'Tem alface'), 'Ale, minha guerreira, vamos ajustar aqui! 🌸');
+  assert.equal(limparEco('Lucas: Mano, que pratão!', nome, 'foto'), 'Mano, que pratão!');
+  assert.equal(limparEco('Lucas, que pratão! Depois eu falo do Heitor: ele acertou.', nome, 'foto'), 'Lucas, que pratão! Depois eu falo do Heitor: ele acertou.'); // vocativo e ":" no meio ficam
+  assert.equal(limparEco('MENSAGEM ATUAL DE Ale: almoço\nBoa, Ale!', 'Ale', 'almoço'), 'Boa, Ale!');
+  assert.equal(limparEco('  Bom dia! ', 'Ale', ''), 'Bom dia!');
 });
 
 test('linha REFEICAO estruturada e pedido PRODUTO são lidos e somem do texto', () => {

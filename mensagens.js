@@ -530,7 +530,13 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const contestacao = !temImagem && pareceContestacao(texto) && (Boolean(citacao && citacao.autor === ia.nomeDaBot()) || mencionaNome(texto, ia.nomeDaBot()) || anteriorFoiBot);
   if (contestacao) console.log(`[consciencia] ${perfil.nome} está contestando: "${String(texto).slice(0, 80)}"`);
   let rotulosAtuais = rotulos; // pode crescer se ela pedir PRODUTO
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', rotulos, contestacao };
+  // Mensagem parcelada da MESMA refeição (foto de mais um item, "tem X", "não tem Y", "pra substituir Z") até 30 min
+  // depois do último registro: entra como refeição em andamento, e o registro é ajustado em vez de duplicado
+  const minutosDesdeUltima = minhaUltima ? minutosDe(horaLocal) - minhaUltima.minutos : Infinity;
+  const parteDaMesma = minhaUltima && minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30 && !temAudio && ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
+  const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
+  if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', rotulos, contestacao, emAndamento };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -659,7 +665,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const TIPOS = new Set(['cafe', 'lanche_manha', 'almoco', 'lanche', 'jantar', 'ceia']);
   const estruturada = refeicao && Number(refeicao.kcal) > 0 && Number(refeicao.kcal) < 8000 ? refeicao : null;
   const correcaoEstruturada = Boolean(estruturada?.correcao) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 45;
-  const correcaoRecente = correcaoEstruturada || (!temAudio && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30 && Boolean(estruturada || lerEstimativa(resposta)));
+  // parte da mesma refeição (mensagem parcelada) com números novos também é correção do registro anterior, não refeição nova
+  const correcaoRecente = correcaoEstruturada || ((parteDaMesma || (!temAudio && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30)) && Boolean(estruturada || lerEstimativa(resposta)));
   const foiRefeicao = !ehPedido && !blocoDeSugestao && (Boolean(estruturada) || temBloco || correcaoRecente || (temImagem && Boolean(resposta) && !naoEhComida));
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN

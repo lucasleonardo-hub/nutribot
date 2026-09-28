@@ -182,6 +182,35 @@ export function definirLicoes(regras) {
 }
 export const licoesAtuais = () => [...licoesAtivas];
 
+/**
+ * Limpeza do que os modelos reserva (e às vezes o leve) devolvem: eco da mensagem da pessoa com o nome na frente
+ * ("Lucas ...: @2025... almocooo ..."), rótulo "MENSAGEM ATUAL", lixo em outro alfabeto no começo ("илем"),
+ * e "Nome:" solto na primeira linha. Puro; nunca mexe no meio do texto.
+ */
+export function limparEco(texto, nome = '', mensagem = '') {
+  let t = String(texto || '').replace(/^\s+/, '');
+  // lixo inicial fora do alfabeto latino (cirílico, CJK, árabe, hebraico), colado ou não na primeira palavra
+  t = t.replace(/^[Ѐ-ӿԀ-ԯ؀-ۿ֐-׿぀-ヿ一-鿿가-힯]+\s*/u, '');
+  const linhas = t.split('\n');
+  const primeiro = (nome || '').split(' ')[0];
+  const msg = String(mensagem || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const ehEco = (l) => {
+    const s = l.replace(/\s+/g, ' ').trim();
+    if (!s) return false;
+    if (/^mensagem atual/i.test(s)) return true;
+    if (nome && (s.startsWith(`${nome}:`) || s.startsWith(`${nome} :`) || s.startsWith(`[[${nome}]]:`))) return true;
+    if (msg.length >= 12 && s.toLowerCase().includes(msg.slice(0, Math.min(60, msg.length)))) return true; // repete a mensagem da pessoa
+    return false;
+  };
+  // tira só ecos no COMEÇO (até 2 linhas); "Nome:" no meio de uma frase de resposta legítima fica
+  let i = 0;
+  while (i < Math.min(2, linhas.length) && ehEco(linhas[i])) i++;
+  t = linhas.slice(i).join('\n').trim();
+  // "Lucas:" ou "Lucas Leonardo...:" sobrando na frente da resposta (sem ser vocativo "Lucas, ...")
+  if (nome && new RegExp(`^(?:${nome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|${primeiro})\\s*:\\s*`, 'i').test(t) && !/^\S+,/.test(t)) t = t.replace(/^[^:\n]{1,60}:\s*/, '');
+  return t;
+}
+
 // ============================================================
 // Helpers
 // ============================================================
@@ -575,7 +604,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, rotulos, contestacao = false, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, rotulos, contestacao = false, emAndamento = null, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -606,6 +635,10 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
+    (emAndamento
+      ? `REFEIÇÃO EM ANDAMENTO DESTA PESSOA (registrada às ${emAndamento.hora}, ~${emAndamento.kcal || '?'} kcal): ${emAndamento.descricao || '(sem descrição)'}\n` +
+        `A mensagem atual chegou poucos minutos depois e é PARTE DA MESMA refeição (mais um item na foto, "tem X", "não tem Y", "pra substituir Z", "uma porção"). NÃO refaça a análise do zero e NÃO repita item que ela negou: parta da lista acima, aplique a mudança, e responda CURTO com "🔥 *Estimativa corrigida:*" do TOTAL da refeição inteira e a linha REFEICAO com "correcao": true e "itens" = a lista COMPLETA e correta depois da mudança. Se for claramente uma refeição nova e diferente (outro horário de comer, outro tipo), aí sim analise como nova.\n\n`
+      : '') +
     (contestacao
       ? `A PESSOA ESTÁ CONTESTANDO O QUE VOCÊ DISSE. Antes de responder: (1) confira o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" e os dados do perfil; (2) NÃO defenda número, horário ou fato que não esteja nesses blocos, mesmo que você tenha dito antes na conversa: se você disse e não está lá, você errou; (3) se ela tiver razão, ceda de primeira, corrija (linha REGISTRO quando for registro) e agradeça, sem ironia e sem "bug do sistema"; (4) se os registros confirmarem você, mostre o registro com hora e valor, em uma linha, com calma. Nunca insista duas vezes sem evidência.\n\n`
       : '') +
@@ -625,7 +658,8 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     contents: [{ role: 'user', parts }],
     config: { systemInstruction: montarSystem(persona), pensar: false, leve, validar: fotos.length ? validadorDeFoto(texto) : undefined },
   });
-  return separarAtualizacao(bruto);
+  // eco da mensagem, "Nome:" solto e lixo de outro alfabeto no começo (coisa de modelo reserva) saem antes de tudo
+  return separarAtualizacao(limparEco(bruto, perfil.nome, texto));
 }
 
 /**
