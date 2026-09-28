@@ -11,7 +11,7 @@ import { acharRegistro } from '../resumo.js';
 import { aplicarAtualizacao } from '../perfis.js';
 import { normalizarEnvio, fundir, tokensRelogio } from '../relogio.js';
 import { codigosDeBarras, ehCodigoBarras, normalizarProduto, blocoRotulos } from '../off.js';
-import { pareceContestacao, totaisConhecidos, numerosSuspeitos, contestacoesDoDia, blocoLicoes, candidatoAFragmento } from '../consciencia.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, contestacoesDoDia, blocoLicoes, candidatoAFragmento, ladoDoObjetivo, vocabularioErrado, removerFrasesCom } from '../consciencia.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
@@ -344,6 +344,22 @@ test('rótulos (Open Food Facts): código de barras no texto, normalização e b
   assert.match(bloco, /por 100 g\/ml: 151 kcal · Proteína 5\.1 g · Carboidratos 16 g · Gorduras 7\.5 g \(açúcares 14\.2 g\)/);
   assert.match(bloco, /porção do rótulo: 100 g = 151 kcal · NOVA 4 \(ultraprocessado\)/);
   assert.equal(blocoRotulos([]), '');
+});
+
+test('objetivo trocado: vocabulário do objetivo oposto é detectado e, no limite, a frase sai sem estragar o bloco', () => {
+  assert.equal(ladoDoObjetivo('emagrecer e definir'), 'perda');
+  assert.equal(ladoDoObjetivo('Hipertrofia'), 'ganho');
+  assert.equal(ladoDoObjetivo('perda de peso e reduzir índice de gordura abdominal'), 'perda');
+  assert.equal(ladoDoObjetivo(''), null);
+  const heitor = '💡 *Dica:* Essa refeição tá ótima. Pode adicionar tofu ao final do jantar. E se quiser, troque a massa por aveia — mantém o ritmo da [[Hipertrofia]] mesmo com dieta vegetariana. Bora manter até domingo? 💪';
+  assert.deepEqual(vocabularioErrado(heitor, 'emagrecer e definir'), ['[[hipertrofia]]']);
+  assert.deepEqual(vocabularioErrado('perfeito pra manter a massa magra durante o déficit e a definição', 'emagrecer e definir'), []); // massa magra e definição não contam
+  assert.deepEqual(vocabularioErrado('capricha no carbo pro [[Déficit Calórico]]... digo, pra crescer', 'Hipertrofia'), ['[[déficit calórico]]']);
+  assert.deepEqual(vocabularioErrado(heitor, 'Hipertrofia'), []);
+  const limpo = removerFrasesCom(heitor, ['[[hipertrofia]]']);
+  assert.equal(limpo, '💡 *Dica:* Essa refeição tá ótima. Pode adicionar tofu ao final do jantar. Bora manter até domingo? 💪');
+  assert.equal(removerFrasesCom('💡 *Dica:* foca na [[Hipertrofia]].', ['[[hipertrofia]]']), '💡 *Dica:* segue no seu objetivo.'); // rótulo não some
+  assert.equal(removerFrasesCom('Linha boa.\nSó hipertrofia aqui.\nOutra boa.', ['hipertrofia']), 'Linha boa.\nOutra boa.');
 });
 
 test('candidatoAFragmento: só mensagem curta de quem registrou refeição há pouco vai pro julgamento da IA', () => {

@@ -18,7 +18,7 @@ import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
 import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarras } from './off.js';
-import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento } from './consciencia.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom } from './consciencia.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
@@ -721,6 +721,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       const c = await ia.conferirResposta({ resposta, registradas, texto, nome: perfil.nome });
       if (!c.ok && c.problema) problema = c.problema;
     }
+    // (c) objetivo trocado: vocabulário do objetivo OPOSTO ao da pessoa ("[[Hipertrofia]]" pra quem quer emagrecer) barra o
+    // envio; reserva externa faz isso com frequência (Heitor, 28/09 14:15, pelo Qwen3-VL)
+    const termosErrados = eu.objetivo ? vocabularioErrado(resposta, eu.objetivo) : [];
+    if (!problema && termosErrados.length) {
+      problema = `sua resposta para ${perfil.nome.split(' ')[0]} usou vocabulário do objetivo OPOSTO ao dela(e): ${termosErrados.join(', ')}. O objetivo de ${perfil.nome.split(' ')[0]} é "${eu.objetivo}". Reescreva sem esses termos, com veredito, dica e [[links]] alinhados a ESSE objetivo.`;
+    }
     if (problema) {
       console.warn(`[consciencia] resposta barrada e refeita: ${problema.slice(0, 200)}`);
       const aviso = `\n\nCONFERÊNCIA DO SISTEMA (feita ANTES de enviar sua resposta anterior, que foi barrada): ${problema} Reescreva a resposta usando SÓ os números do bloco "REFEIÇÕES JÁ REGISTRADAS HOJE"; se a pessoa tiver razão, ceda e corrija (linha REGISTRO quando for registro). Não mencione esta conferência.`;
@@ -735,6 +741,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
         origemExterna = ia.ultimaFoiExterna();
         const ainda = numerosSuspeitos(resposta, conhecidos, { extras: [Number(refeicao?.kcal) || 0, meu.total + (Number(refeicao?.kcal) || 0)].filter(Boolean) });
         if (ainda.length) console.warn(`[consciencia] ainda suspeito depois de refazer: ${ainda.map((s) => s.numero).join(', ')} kcal (enviando assim mesmo)`);
+      }
+      // objetivo trocado não passa de jeito nenhum: se a reescrita (ou a falta dela) ainda trouxer o termo, a frase sai
+      const aindaErrados = eu.objetivo ? vocabularioErrado(resposta, eu.objetivo) : [];
+      if (aindaErrados.length) {
+        resposta = removerFrasesCom(resposta, aindaErrados);
+        console.warn(`[consciencia] frases com objetivo trocado removidas da resposta pra ${perfil.nome}: ${aindaErrados.join(', ')}`);
       }
     }
   }
@@ -793,16 +805,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
         .catch((e) => console.warn('[voz] resposta sem áudio:', e.message));
     }
   }
-  // rede de segurança: se a resposta falar do objetivo de OUTRA pessoa, fica no log pra eu ver (não reescreve nada)
-  if (resposta && eu.objetivo) {
-    const querEmagrecer = /emagre|perd|reduz|defin|secar|gordura/i.test(eu.objetivo);
-    const querGanhar = /hipertrof|ganh|massa|bulk|for[çc]a/i.test(eu.objetivo);
-    const falouGanho = /hipertrofia|ganho de massa|super[áa]vit|bulking/i.test(resposta);
-    const falouPerda = /d[ée]ficit cal[óo]rico|emagrecimento|secar/i.test(resposta);
-    if ((querEmagrecer && falouGanho && !falouPerda) || (querGanhar && falouPerda && !falouGanho)) {
-      console.warn(`[objetivo] resposta pra ${eu.nome} (objetivo: ${eu.objetivo}) usou vocabulário do objetivo oposto`);
-    }
-  }
+  // (a checagem de objetivo trocado agora acontece ANTES do envio, no bloco de conferência acima)
   // água/álcool ditos agora (linha oculta HABITO da IA) -> somados no dia; aparecem no !hoje
   if (habito && typeof habito === 'object') {
     registrarHabito({ jid: jids[0], nome: perfil.nome, dia, agua_ml: Number(habito.agua_ml) || 0, alcool_doses: Number(habito.alcool_doses) || 0 }).catch((e) => console.error('[habitos]', e.message));

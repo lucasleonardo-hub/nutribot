@@ -81,6 +81,49 @@ export function candidatoAFragmento({ texto, temImagem = false, temAudio = false
   return t.length > 0 && t.length <= 80 && !/\?\s*$/.test(t);
 }
 
+// ---------- Objetivo da pessoa x vocabulário da resposta ----------
+const semAcentoC = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const RE_VOCAB_GANHO = /\[\[hipertrofia\]\]|hipertrofia|ganho de massa|ganhar massa|ganhar peso|super[áa]vit|bulk(?:ing)?|massa muscular subir|engordar/gi;
+const RE_VOCAB_PERDA = /\[\[d[ée]ficit cal[óo]rico\]\]|d[ée]ficit cal[óo]rico|emagrec\w*|secar|perder gordura|queimar gordura|cutting|\[\[perda de peso\]\]/gi;
+
+/** 'perda' (emagrecer/definir/secar), 'ganho' (hipertrofia/massa/força) ou null. */
+export function ladoDoObjetivo(objetivo) {
+  const t = semAcentoC(objetivo);
+  if (!t) return null;
+  if (/emagre|perd|reduz|defin|secar|gordura|deficit/.test(t)) return 'perda';
+  if (/hipertrof|ganh|massa|bulk|forca|volume|crescer/.test(t)) return 'ganho';
+  return null;
+}
+
+/** Termos do objetivo OPOSTO que apareceram na resposta (vazios = ok). "massa magra" e "definição" não contam. */
+export function vocabularioErrado(resposta, objetivo) {
+  const lado = ladoDoObjetivo(objetivo);
+  if (!lado) return [];
+  const re = new RegExp((lado === 'perda' ? RE_VOCAB_GANHO : RE_VOCAB_PERDA).source, 'gi');
+  return [...new Set([...String(resposta || '').matchAll(re)].map((m) => m[0].toLowerCase()))];
+}
+
+/** Última defesa: tira as frases que contêm os termos (linha a linha, sem mexer no resto). */
+export function removerFrasesCom(texto, termos) {
+  if (!termos?.length) return texto;
+  const tem = (s) => termos.some((t) => s.toLowerCase().includes(t.toLowerCase()));
+  return String(texto || '')
+    .split('\n')
+    .map((linha) => {
+      if (!tem(linha)) return linha;
+      const rotulo = linha.match(/^(\s*(?:[🕐🍽️🔥⚖️💡]\s*)?\*[^*]+:\*\s*)/u)?.[1] || '';
+      const corpo = linha.slice(rotulo.length);
+      const frases = corpo.split(/(?<=[.!?…])\s+/).filter((f) => !tem(f));
+      const resto = frases.join(' ').trim();
+      if (!resto && rotulo) return `${rotulo}segue no seu objetivo.`;
+      return resto ? `${rotulo}${resto}` : null;
+    })
+    .filter((l) => l !== null)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 /** Bloco das regras ativas pro system prompt. '' sem regras. */
 export function blocoLicoes(regras) {
   const lista = (regras || []).map((r) => String(r || '').trim()).filter(Boolean).slice(0, 8);
