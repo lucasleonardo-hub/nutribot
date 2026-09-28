@@ -11,7 +11,7 @@ import { acharRegistro } from '../resumo.js';
 import { aplicarAtualizacao } from '../perfis.js';
 import { normalizarEnvio, fundir, tokensRelogio } from '../relogio.js';
 import { codigosDeBarras, ehCodigoBarras, normalizarProduto, blocoRotulos } from '../off.js';
-import { pareceContestacao, totaisConhecidos, numerosSuspeitos, contestacoesDoDia, blocoLicoes } from '../consciencia.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, contestacoesDoDia, blocoLicoes, candidatoAFragmento } from '../consciencia.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
@@ -344,6 +344,18 @@ test('rótulos (Open Food Facts): código de barras no texto, normalização e b
   assert.match(bloco, /por 100 g\/ml: 151 kcal · Proteína 5\.1 g · Carboidratos 16 g · Gorduras 7\.5 g \(açúcares 14\.2 g\)/);
   assert.match(bloco, /porção do rótulo: 100 g = 151 kcal · NOVA 4 \(ultraprocessado\)/);
   assert.equal(blocoRotulos([]), '');
+});
+
+test('candidatoAFragmento: só mensagem curta de quem registrou refeição há pouco vai pro julgamento da IA', () => {
+  assert.equal(candidatoAFragmento({ texto: 'Abóbora uma porção', temImagem: true, minutosDesdeUltima: 4 }), true);
+  assert.equal(candidatoAFragmento({ texto: 'Tem alface rúcula couve, abóbora 1 pedaço só', minutosDesdeUltima: 3 }), true);
+  assert.equal(candidatoAFragmento({ texto: 'Pra substituir o arroz', minutosDesdeUltima: 6 }), true);
+  assert.equal(candidatoAFragmento({ texto: 'Abóbora', temImagem: true, minutosDesdeUltima: 45 }), false); // longe do último registro
+  assert.equal(candidatoAFragmento({ texto: 'almocei 200 g de arroz, 150 g de feijão, sobrecoxa assada, salada de alface e tomate e 1 laranja de sobremesa', minutosDesdeUltima: 5 }), false); // mensagem completa
+  assert.equal(candidatoAFragmento({ texto: 'isso é bom pra mim?', minutosDesdeUltima: 5 }), false); // pergunta
+  assert.equal(candidatoAFragmento({ texto: '!hoje', minutosDesdeUltima: 5 }), false);
+  assert.equal(candidatoAFragmento({ texto: '', temAudio: true, minutosDesdeUltima: 5 }), false);
+  assert.equal(candidatoAFragmento({ texto: '', temImagem: true }), false); // sem registro recente
 });
 
 test('limparEco: eco da mensagem, "Nome:" solto e lixo de outro alfabeto saem do começo da resposta da reserva', () => {

@@ -80,6 +80,13 @@ export async function enviarAudio(jid, buffer, quoted) {
   return r;
 }
 
+/** Reação (emoji) numa mensagem: "vi, já respondo". Nunca lança. */
+export async function reagir(jid, key, emoji = '👀') {
+  const sock = estado.sock;
+  if (!sock || !key) return;
+  await sock.sendMessage(jid, { react: { text: emoji, key } }).catch(() => {});
+}
+
 /** Baixa a mídia (foto/áudio) de uma mensagem como Buffer. */
 export function baixarMidia(msg) {
   return downloadMediaMessage(msg, 'buffer', {}, { logger, reuploadRequest: estado.sock.updateMediaMessage });

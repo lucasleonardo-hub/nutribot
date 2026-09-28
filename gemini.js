@@ -637,7 +637,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
     (emAndamento
       ? `REFEIÇÃO EM ANDAMENTO DESTA PESSOA (registrada às ${emAndamento.hora}, ~${emAndamento.kcal || '?'} kcal): ${emAndamento.descricao || '(sem descrição)'}\n` +
-        `A mensagem atual chegou poucos minutos depois e é PARTE DA MESMA refeição (mais um item na foto, "tem X", "não tem Y", "pra substituir Z", "uma porção"). NÃO refaça a análise do zero e NÃO repita item que ela negou: parta da lista acima, aplique a mudança, e responda CURTO com "🔥 *Estimativa corrigida:*" do TOTAL da refeição inteira e a linha REFEICAO com "correcao": true e "itens" = a lista COMPLETA e correta depois da mudança. Se for claramente uma refeição nova e diferente (outro horário de comer, outro tipo), aí sim analise como nova.\n\n`
+        `A mensagem atual chegou poucos minutos depois e é PARTE DA MESMA refeição (mais um item na foto, "tem X", "não tem Y", "pra substituir Z", "uma porção"). NÃO refaça a análise do zero e NÃO repita item que ela negou: parta da lista acima, aplique a mudança, e responda CURTO com "🔥 *Estimativa corrigida:*" do TOTAL da refeição inteira e a linha REFEICAO com "correcao": true e "itens" = a lista COMPLETA e correta depois da mudança. Se for claramente uma refeição nova e diferente (outro horário de comer, outro tipo), aí sim analise como nova. Se NÃO der pra saber se é parte dela ou coisa nova (fora do habitual), NÃO analise: pergunte em UMA linha, no seu tom ("isso aí é parte do almoço de agora ou outra coisa?"), sem bloco e sem linha REFEICAO.\n\n`
       : '') +
     (contestacao
       ? `A PESSOA ESTÁ CONTESTANDO O QUE VOCÊ DISSE. Antes de responder: (1) confira o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" e os dados do perfil; (2) NÃO defenda número, horário ou fato que não esteja nesses blocos, mesmo que você tenha dito antes na conversa: se você disse e não está lá, você errou; (3) se ela tiver razão, ceda de primeira, corrija (linha REGISTRO quando for registro) e agradeça, sem ironia e sem "bug do sistema"; (4) se os registros confirmarem você, mostre o registro com hora e valor, em uma linha, com calma. Nunca insista duas vezes sem evidência.\n\n`
@@ -1278,6 +1278,35 @@ export async function conferirResposta({ resposta, registradas, texto, nome }) {
   } catch (e) {
     console.warn('[consciencia] conferência falhou:', String(e.message).slice(0, 120));
     return { ok: true, problema: '' };
+  }
+}
+
+// ============================================================
+// 8e) "Isto parece só um pedaço de informação?" (modelo leve): a IA julga, o código executa a espera.
+// ============================================================
+export async function julgarFragmento({ nome, texto, temImagem, emAndamento, ultimas }) {
+  try {
+    const json = await gerar({
+      contents:
+        `Você acompanha um grupo de WhatsApp como nutricionista. ${nome} acabou de mandar ${temImagem ? 'uma FOTO' : 'uma mensagem'}${texto ? ` com o texto: """${String(texto).slice(0, 300)}"""` : ' sem texto'}.\n` +
+        (emAndamento ? `Há ${emAndamento.minutos} min você registrou uma refeição dela: "${emAndamento.descricao}" (~${emAndamento.kcal || '?'} kcal).\n` : '') +
+        (ultimas?.length ? `ÚLTIMAS MENSAGENS DA CONVERSA:\n${ultimas.map((m) => `- ${m.hora} ${m.nome}: ${String(m.texto || '').slice(0, 160)}`).join('\n')}\n` : '') +
+        `\nJulgue como uma pessoa julgaria: isto é uma mensagem completa (refeição nova, pergunta, papo) ou parece SÓ UM PEDAÇO de informação que continua a refeição em andamento (mais um item, "tem X", "não tem Y", "uma porção", "pra substituir Z", legenda de uma palavra) e provavelmente vem mais coisa em seguida?\n` +
+        `Responda em JSON: "fragmento" (true se é pedaço da refeição em andamento), "esperar" (true SÓ se parece que a pessoa ainda está mandando partes e vale esperar até um minuto pra responder tudo de uma vez; false se é um pedaço único e fechado ou uma mensagem completa), "motivo" (até 15 palavras).`,
+      config: {
+        temperature: 0.1,
+        pensar: false,
+        leve: true,
+        maxOutputTokens: 200,
+        responseMimeType: 'application/json',
+        responseSchema: { type: 'object', properties: { fragmento: { type: 'boolean' }, esperar: { type: 'boolean' }, motivo: { type: 'string' } }, required: ['fragmento', 'esperar', 'motivo'] },
+      },
+    });
+    const r = JSON.parse(json);
+    return { fragmento: Boolean(r.fragmento), esperar: Boolean(r.esperar), motivo: String(r.motivo || '').slice(0, 120) };
+  } catch (e) {
+    console.warn('[fragmento] julgamento falhou:', String(e.message).slice(0, 100));
+    return { fragmento: false, esperar: false, motivo: 'falha' };
   }
 }
 

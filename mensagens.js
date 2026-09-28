@@ -13,12 +13,12 @@ import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojePara
 import { visaoDe } from './acompanhamento.js';
 import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
-import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso } from './whatsapp.js';
+import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso, reagir } from './whatsapp.js';
 import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
 import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarras } from './off.js';
-import { pareceContestacao, totaisConhecidos, numerosSuspeitos } from './consciencia.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento } from './consciencia.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
@@ -126,20 +126,112 @@ export function enfileirarMensagem(msg) {
   }, restante);
 }
 
+// "Isto parece só um pedaço de informação": quem manda a foto do almoço e vai completando ("abóbora", "batata",
+// "tem alface") não quer uma análise por mensagem. A IA leve julga se a mensagem parece pedaço de uma refeição em
+// andamento e se vale esperar; se sim, a resposta é segurada (👀 na mensagem) e tudo que a pessoa mandar em seguida entra
+// junto, até ESPERA_FRAGMENTO_MS de silêncio (teto ESPERA_FRAGMENTO_MAX_MS). Aí sai UMA resposta.
+const ESPERA_FRAGMENTO_MS = Number(process.env.ESPERA_FRAGMENTO_MS) || 45_000;
+const ESPERA_FRAGMENTO_MAX_MS = Number(process.env.ESPERA_FRAGMENTO_MAX_MS) || 90_000;
+const esperaFragmentos = new Map(); // jid da pessoa -> { msgs, desde, timer }
+
+function textoDe(m) {
+  const c = extractMessageContent(m?.message);
+  return (c?.conversation || c?.extendedTextMessage?.text || c?.imageMessage?.caption || '').trim();
+}
+
+/** Julga (pré-filtro em código + IA leve) se a mensagem parece pedaço de refeição em andamento e se vale esperar. */
+async function deveEsperarFragmento(msg) {
+  try {
+    const conteudo = extractMessageContent(msg.message);
+    if (!conteudo) return false;
+    const texto = textoDe(msg);
+    const temImagem = Boolean(conteudo.imageMessage);
+    const temAudio = Boolean(conteudo.audioMessage);
+    if (!texto && !temImagem) return false;
+    const jids = jidsDoRemetente(msg.key);
+    if (!jids.length) return false;
+    const perfil = await buscarPerfil(jids).catch(() => null);
+    if (!perfil?.onboarded) return false;
+    const { dia } = agora();
+    const horaLocal = agora(fusoDe(perfil)).hora;
+    const refs = await refeicoesDoDia(dia).catch(() => []);
+    const ultima = refs.filter((r) => jids.includes(r.jid)).sort((a, b) => b.minutos - a.minutos)[0];
+    const minutosDesdeUltima = ultima ? minutosDe(horaLocal) - ultima.minutos : Infinity;
+    if (!candidatoAFragmento({ texto, temImagem, temAudio, minutosDesdeUltima })) return false;
+    const ultimas = estado.memoria.mensagens.slice(-4);
+    const j = await comTempo(
+      ia.julgarFragmento({
+        nome: perfil.nome.split(' ')[0],
+        texto,
+        temImagem,
+        emAndamento: { minutos: minutosDesdeUltima, descricao: ultima.descricao || ultima.resumo || '', kcal: ultima.estimativa?.kcal ? Math.round(ultima.estimativa.kcal) : null },
+        ultimas,
+      }),
+      15_000,
+      'julgamento de fragmento'
+    );
+    console.log(`[fragmento] ${perfil.nome.split(' ')[0]} "${texto.slice(0, 40)}"${temImagem ? ' (foto)' : ''}: fragmento=${j.fragmento} esperar=${j.esperar} (${j.motivo})`);
+    return j.fragmento && j.esperar;
+  } catch (e) {
+    console.warn('[fragmento] não julgado:', String(e.message).slice(0, 100));
+    return false;
+  }
+}
+
+function liberarFragmentos(dono) {
+  const e = esperaFragmentos.get(dono);
+  if (!e) return;
+  esperaFragmentos.delete(dono);
+  const [primeira, ...resto] = e.msgs;
+  primeira._liberada = true;
+  primeira._fragmentos = resto;
+  console.log(`[fragmento] respondendo ${e.msgs.length} mensagem(ns) de uma vez depois de ${Math.round((Date.now() - e.desde) / 1000)} s`);
+  pendentes.push(primeira);
+  naFila('bot', drenar);
+}
+
+function iniciarEsperaFragmento(msg) {
+  const dono = remetenteDe(msg);
+  esperaFragmentos.set(dono, { msgs: [msg], desde: Date.now(), timer: setTimeout(() => liberarFragmentos(dono), ESPERA_FRAGMENTO_MS) });
+  reagir(msg.key.remoteJid, msg.key, '👀').catch(() => {});
+}
+
+function juntarFragmento(dono, msg) {
+  const e = esperaFragmentos.get(dono);
+  e.msgs.push(msg);
+  clearTimeout(e.timer);
+  const restante = Math.max(1000, Math.min(ESPERA_FRAGMENTO_MS, e.desde + ESPERA_FRAGMENTO_MAX_MS - Date.now()));
+  e.timer = setTimeout(() => liberarFragmentos(dono), restante);
+}
+
 async function drenar() {
   if (!pendentes.length) return;
   const lote = pendentes.splice(0, pendentes.length);
-  if (lote.length > 1) console.log(`[bot] ${lote.length} mensagens juntas: lendo tudo e respondendo de uma vez`);
-  const grupos = agruparFotos(lote);
+  // mensagens de quem está com fragmentos em espera entram no buffer dela (sem IA) e reiniciam a espera
+  const restantes = [];
+  for (const m of lote) {
+    const dono = remetenteDe(m);
+    if (!m._liberada && esperaFragmentos.has(dono)) juntarFragmento(dono, m);
+    else restantes.push(m);
+  }
+  if (!restantes.length) return;
+  if (restantes.length > 1) console.log(`[bot] ${restantes.length} mensagens juntas: lendo tudo e respondendo de uma vez`);
+  const grupos = agruparFotos(restantes);
   for (let i = 0; i < grupos.length; i++) {
-    const { msg, extras } = grupos[i];
+    const { msg, extras: extrasDoLote } = grupos[i];
+    // parece só um pedaço de informação e vem mais? segura e junta (uma vez por mensagem; a liberada não volta a esperar)
+    if (!msg._liberada && !extrasDoLote.length && (await deveEsperarFragmento(msg))) {
+      iniciarEsperaFragmento(msg);
+      continue;
+    }
+    const extras = [...(msg._fragmentos || []), ...extrasDoLote];
     processando = msg;
     processandoExtras = extras;
     const ultimo = i === grupos.length - 1;
     try {
       // cão de guarda: nenhuma mensagem pode prender a fila por mais de 4 min (IA, Drive, Mongo e reservas somados)
       await comTempo(
-        processar(msg, { emLote: !ultimo, atrasadas: ultimo ? grupos.length - 1 : 0, fotosExtras: extras }),
+        processar(msg, { emLote: !ultimo, atrasadas: ultimo ? grupos.length - 1 + (msg._fragmentos?.length || 0) : msg._fragmentos?.length || 0, fotosExtras: extras }),
         4 * 60_000,
         'processamento da mensagem'
       );
@@ -316,7 +408,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     if (t) legendas.push(t);
   }
   const texto = legendas.map((t) => String(t).trim()).filter(Boolean).join(' ');
-  const temImagem = Boolean(conteudo.imageMessage);
+  // a foto pode estar na mensagem ou numa das que vieram junto (fragmentos: "tem alface" e depois a foto da abóbora)
+  const temImagem = Boolean(conteudo.imageMessage) || fotosExtras.some((e) => Boolean(extractMessageContent(e.message)?.imageMessage));
   const temAudio = Boolean(conteudo.audioMessage);
   if (!texto && !temImagem && !temAudio) return; // sticker, vídeo, documento etc.
 
@@ -414,13 +507,15 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   if (temImagem) {
     // aviso imediato: a análise da foto demora alguns segundos (um aviso só, mesmo com várias fotos)
     enviar(jidGrupo, acaso(ACKS_FOTO), msg, { rapido: true }).catch(() => {});
-    try {
-      imagem = await baixarMidia(msg);
-      mimeType = conteudo.imageMessage.mimetype || 'image/jpeg';
-      imagens.push({ data: imagem, mimeType });
-    } catch (e) {
-      console.error('[wa] falha ao baixar imagem:', e.message);
-      return avisarErro(jidGrupo, 'midia');
+    if (conteudo.imageMessage) {
+      try {
+        imagem = await baixarMidia(msg);
+        mimeType = conteudo.imageMessage.mimetype || 'image/jpeg';
+        imagens.push({ data: imagem, mimeType });
+      } catch (e) {
+        console.error('[wa] falha ao baixar imagem:', e.message);
+        return avisarErro(jidGrupo, 'midia');
+      }
     }
     for (const extra of fotosExtras) {
       const c = extractMessageContent(extra.message);

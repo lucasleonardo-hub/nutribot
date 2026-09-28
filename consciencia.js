@@ -69,6 +69,18 @@ export function contestacoesDoDia(historico) {
   return lista;
 }
 
+/**
+ * Pré-filtro barato (sem IA) de "isto pode ser só um pedaço de informação": mensagem curta, de quem registrou uma
+ * refeição há pouco. Só os candidatos vão pro julgamento da IA leve (julgarFragmento). Comando, áudio e texto longo não.
+ */
+export function candidatoAFragmento({ texto, temImagem = false, temAudio = false, minutosDesdeUltima = Infinity } = {}) {
+  const t = String(texto || '').trim();
+  if (temAudio || t.startsWith('!')) return false;
+  if (!(minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30)) return false;
+  if (temImagem) return t.length <= 60;
+  return t.length > 0 && t.length <= 80 && !/\?\s*$/.test(t);
+}
+
 /** Bloco das regras ativas pro system prompt. '' sem regras. */
 export function blocoLicoes(regras) {
   const lista = (regras || []).map((r) => String(r || '').trim()).filter(Boolean).slice(0, 8);
