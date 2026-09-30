@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
+import android.location.Location
+import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
@@ -37,20 +39,8 @@ object Local {
     suspend fun ponto(context: Context): JSONObject? {
         if (!temPermissao(context)) return null
         val cliente = LocationServices.getFusedLocationProviderClient(context)
-        val loc = try {
-            withTimeoutOrNull(25_000) {
-                suspendCancellableCoroutine { cont ->
-                    val cts = CancellationTokenSource()
-                    cliente.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, cts.token)
-                        .addOnSuccessListener { l -> if (cont.isActive) cont.resume(l) }
-                        .addOnFailureListener { if (cont.isActive) cont.resume(null) }
-                    cont.invokeOnCancellation { cts.cancel() }
-                }
-            } ?: suspendCancellableCoroutine { cont ->
-                cliente.lastLocation
-                    .addOnSuccessListener { l -> if (cont.isActive) cont.resume(l) }
-                    .addOnFailureListener { if (cont.isActive) cont.resume(null) }
-            }
+        val loc: Location = try {
+            atual(cliente) ?: ultima(cliente)
         } catch (_: SecurityException) {
             null
         } ?: return null
@@ -66,4 +56,22 @@ object Local {
     }
 
     fun lista(vararg pontos: JSONObject?): JSONArray = JSONArray().apply { pontos.filterNotNull().forEach { put(it) } }
+
+    /** Fix novo com precisão de quarteirão; null se não vier em 25 s. */
+    private suspend fun atual(cliente: FusedLocationProviderClient): Location? = withTimeoutOrNull(25_000) {
+        suspendCancellableCoroutine<Location?> { cont ->
+            val cts = CancellationTokenSource()
+            cliente.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, cts.token)
+                .addOnSuccessListener { l -> if (cont.isActive) cont.resume(l) }
+                .addOnFailureListener { if (cont.isActive) cont.resume(null) }
+            cont.invokeOnCancellation { cts.cancel() }
+        }
+    }
+
+    /** Última posição conhecida pelo sistema (pode ser velha; quem chama confere a idade). */
+    private suspend fun ultima(cliente: FusedLocationProviderClient): Location? = suspendCancellableCoroutine { cont ->
+        cliente.lastLocation
+            .addOnSuccessListener { l -> if (cont.isActive) cont.resume(l) }
+            .addOnFailureListener { if (cont.isActive) cont.resume(null) }
+    }
 }
