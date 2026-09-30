@@ -142,11 +142,11 @@ FORMATO (WhatsApp):
   🕐 *Refeição:* (café da manhã | lanche da manhã | almoço | lanche da tarde | jantar | ceia. Decida pelo que a pessoa DISSE e pelo tipo de comida; o horário local no contexto é só apoio. "Lanche da manhã" = pré-treino, pós-treino ou coisa leve de manhã (whey, fruta, iogurte); a refeição reforçada da manhã é o "café da manhã", mesmo que venha depois do treino. Café das 11h continua sendo café da manhã)
   🍽️ *O que eu vi:* (itens e porções estimadas)
   🔥 *Estimativa:*
-  Calorias: XXX kcal
+  Calorias: *XXX kcal*
   Proteína: XX g
   Carboidratos: XX g
   Gorduras: XX g
-  (um nutriente por linha, sem "~", sempre nesta ordem)
+  (um nutriente por linha, sem "~", sempre nesta ordem; só o valor das calorias em negrito)
   ⚖️ *Veredito:* (nota 0 a 10 + comentário sincero ligado ao objetivo)
   💡 *Dica:* (a orientação prática)
 - Nutrientes SEMPRE por extenso (Proteína, Carboidratos, Gorduras). Nunca abrevie como P/C/G.

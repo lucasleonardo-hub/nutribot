@@ -46,7 +46,7 @@ export const formatarEstimativa = (e) =>
 /** Versão em linhas pro WhatsApp: título em quem chama, aqui um nutriente por linha ("Calorias: 930 kcal"). */
 export const formatarEstimativaLinhas = (e, { metaP } = {}) =>
   [
-    `Calorias: ${Math.round(e.kcal).toLocaleString('pt-BR')} kcal`,
+    `Calorias: *${Math.round(e.kcal).toLocaleString('pt-BR')} kcal*`,
     `Proteína: ${Math.round(e.p)} g${metaP ? ` (meta ${metaP.min} a ${metaP.max} g)` : ''}`,
     `Carboidratos: ${Math.round(e.c)} g`,
     `Gorduras: ${Math.round(e.g)} g`,
@@ -200,7 +200,7 @@ export function resumirHoje(refeicoes, perfis, dia, habitos = []) {
       continue;
     }
     // título ("☕ *Café da manhã* · 08:20"), quebra de linha, e aí as informações
-    const linhas = minhas.map((r) => `${(NOME_SLOT[r.slot] || r.slot).replace(/^(\S+)\s+(.+)$/, '$1 *$2*')} · ${r.horaLocal || r.hora}\n${r.estimativa?.kcal ? `${Math.round(r.estimativa.kcal)} kcal` : 'sem estimativa'}${r.descricao ? ` · ${r.descricao.slice(0, 70)}` : ''}`);
+    const linhas = minhas.map((r) => `${(NOME_SLOT[r.slot] || r.slot).replace(/^(\S+)\s+(.+)$/, '$1 *$2*')} · ${r.horaLocal || r.hora}\n${r.estimativa?.kcal ? `*${Math.round(r.estimativa.kcal)} kcal*` : 'sem estimativa'}${r.descricao ? ` · ${r.descricao.slice(0, 70)}` : ''}`);
     const comEst = minhas.filter((r) => r.estimativa?.kcal);
     const tot = comEst.reduce((a, r) => soma(a, r.estimativa), { kcal: 0, p: 0, c: 0, g: 0 });
     const metaP = p.peso ? { min: Math.round(p.peso * 1.6), max: Math.round(p.peso * 2.2) } : null;

@@ -6,7 +6,7 @@ import { configGrafico } from '../graficos.js';
 import { preverSemana, conferirPrevisao, pesagemPerto, somarDias, avaliarRitmo, projetarMeta } from '../previsao.js';
 import { textoParaFala, promptDeVoz, wavDePcm, vazouInstrucao } from '../voz.js';
 import { separarAtualizacao, montarSystem, limparEco } from '../gemini.js';
-import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo, pareceCorrecao, parecePedidoOuPlano } from '../util.js';
+import { pedidoDeAudio, semLinhaAtualizar, pareceConsumo, pareceCorrecao, parecePedidoOuPlano, protegerNumeros } from '../util.js';
 import { acharRegistro } from '../resumo.js';
 import { aplicarAtualizacao } from '../perfis.js';
 import { normalizarEnvio, fundir, tokensRelogio } from '../relogio.js';
@@ -34,7 +34,7 @@ test('resumirHoje soma o dia por pessoa e mostra quem não registrou', () => {
   ];
   const t = resumirHoje(refeicoes, perfis, '2026-09-22');
   assert.match(t, /\*Lucas\* \(2 refeições\)/);
-  assert.match(t, /📊 \*Total do dia\*\nCalorias: 1\.100 kcal\nProteína: 70 g/);
+  assert.match(t, /📊 \*Total do dia\*\nCalorias: \*1\.100 kcal\*\nProteína: 70 g/);
   assert.match(t, /Proteína: 70 g \(meta 117 a 161 g\)/);
   assert.match(t, /\*Alezinha\*: nada registrado hoje ainda/);
 });
@@ -348,7 +348,10 @@ test('rótulos (Open Food Facts): código de barras no texto, normalização e b
 });
 
 test('formato novo: estimativa em linhas, bloco novo lido, !hoje com título e informações abaixo', () => {
-  assert.equal(formatarEstimativaLinhas({ kcal: 4227, p: 294, c: 544, g: 109 }, { metaP: { min: 121, max: 167 } }), 'Calorias: 4.227 kcal\nProteína: 294 g (meta 121 a 167 g)\nCarboidratos: 544 g\nGorduras: 109 g');
+  assert.equal(formatarEstimativaLinhas({ kcal: 4227, p: 294, c: 544, g: 109 }, { metaP: { min: 121, max: 167 } }), 'Calorias: *4.227 kcal*\nProteína: 294 g (meta 121 a 167 g)\nCarboidratos: 544 g\nGorduras: 109 g');
+  // WhatsApp pinta número de 4+ dígitos de azul (acha que é telefone): separador invisível quebra isso sem mudar a aparência
+  assert.equal(protegerNumeros('Calorias: *4.227 kcal* · 75,7 kg · 08:20 · código 7891000100103 · 16.925 passos · 630 kcal'), 'Calorias: *4⁠.227 kcal* · 75,7 kg · 08:20 · código 7⁠891000100103 · 1⁠6.925 passos · 630 kcal');
+  assert.equal(protegerNumeros('nota 9,5 e 300 ml'), 'nota 9,5 e 300 ml');
   // o bloco novo da análise (um nutriente por linha) continua sendo lido pelo sistema
   const bloco = '🕐 *Refeição:* almoço\n🍽️ *O que eu vi:* arroz, feijão e frango\n🔥 *Estimativa:*\nCalorias: 830 kcal\nProteína: 62 g\nCarboidratos: 105 g\nGorduras: 20 g\n⚖️ *Veredito:* 9/10\n💡 *Dica:* segue.';
   assert.deepEqual(lerEstimativaResumo(bloco), { kcal: 830, p: 62, c: 105, g: 20 });
@@ -358,7 +361,7 @@ test('formato novo: estimativa em linhas, bloco novo lido, !hoje com título e i
     { dia: '2026-09-29', jid: 'l', horaLocal: '11:43', minutos: 703, slot: 'almoco', descricao: 'arroz, feijão e frango', estimativa: { kcal: 830, p: 62, c: 105, g: 20 } },
   ];
   const t = resumirHoje(refs, perfis, '2026-09-29');
-  assert.match(t, /^\*Lucas\* \(2 refeições\)\n\n☕ \*Café da manhã\* · 08:20\n630 kcal · 4 fatias de pão, queijo e geleia\n\n🍽️ \*Almoço\* · 11:43\n830 kcal · arroz, feijão e frango\n\n📊 \*Total do dia\*\nCalorias: 1\.460 kcal\nProteína: 106 g \(meta 120 a 165 g\)\nCarboidratos: 192 g\nGorduras: 36 g$/);
+  assert.match(t, /^\*Lucas\* \(2 refeições\)\n\n☕ \*Café da manhã\* · 08:20\n\*630 kcal\* · 4 fatias de pão, queijo e geleia\n\n🍽️ \*Almoço\* · 11:43\n\*830 kcal\* · arroz, feijão e frango\n\n📊 \*Total do dia\*\nCalorias: \*1\.460 kcal\*\nProteína: 106 g \(meta 120 a 165 g\)\nCarboidratos: 192 g\nGorduras: 36 g$/);
   assert.ok(!/~/.test(t));
 });
 

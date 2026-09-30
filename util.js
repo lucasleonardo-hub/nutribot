@@ -165,6 +165,13 @@ export const semLinhaAtualizar = (texto) =>
     .trim();
 
 // ============================================================
+// Números que o WhatsApp pinta de azul (acha que é telefone): 4+ dígitos, com ou sem ponto/vírgula ("4.227", "16.925",
+// código de barras). Um separador invisível (word joiner, U+2060) depois do primeiro dígito quebra a detecção sem mudar
+// a aparência. Só na hora de ENVIAR: memória, banco e voz continuam com o número limpo.
+// ============================================================
+export const protegerNumeros = (texto) => String(texto || '').replace(/\d(?:[.,]?\d){3,}/g, (m) => `${m[0]}⁠${m.slice(1)}`);
+
+// ============================================================
 // Menção ao nome da bot
 // ============================================================
 export const semAcento = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();

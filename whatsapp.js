@@ -22,6 +22,8 @@ const ALERTA_DESCONEXAO_MIN = Number(process.env.ALERTA_DESCONEXAO_MIN) || 10; /
 const URL_PUBLICA = (process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/$/, '');
 const PORT = Number(process.env.PORT) || 3000;
 
+import { protegerNumeros } from './util.js';
+
 export const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
 // IDs das mensagens que o próprio bot enviou (pra não responder a si mesmo quando roda no número de um dos usuários)
@@ -52,7 +54,7 @@ export async function enviar(jid, texto, quoted, { rapido = false } = {}) {
   await sock.sendPresenceUpdate('composing', jid).catch(() => {});
   if (!rapido) await new Promise((r) => setTimeout(r, pausaHumana(texto)));
   await sock.sendPresenceUpdate('paused', jid).catch(() => {});
-  const r = await sock.sendMessage(jid, { text: paraWhatsApp(semLinhaAtualizar(texto)) }, quoted ? { quoted } : undefined);
+  const r = await sock.sendMessage(jid, { text: protegerNumeros(paraWhatsApp(semLinhaAtualizar(texto))) }, quoted ? { quoted } : undefined);
   if (r?.key?.id) {
     enviadosPeloBot.add(r.key.id);
     if (enviadosPeloBot.size > 500) enviadosPeloBot.delete(enviadosPeloBot.values().next().value);
@@ -64,7 +66,7 @@ export async function enviar(jid, texto, quoted, { rapido = false } = {}) {
 export async function enviarImagem(jid, buffer, legenda, quoted) {
   const sock = estado.sock;
   if (!sock) throw new Error('WhatsApp ainda não conectado');
-  const r = await sock.sendMessage(jid, { image: buffer, caption: legenda ? paraWhatsApp(legenda) : undefined }, quoted ? { quoted } : undefined);
+  const r = await sock.sendMessage(jid, { image: buffer, caption: legenda ? protegerNumeros(paraWhatsApp(legenda)) : undefined }, quoted ? { quoted } : undefined);
   if (r?.key?.id) enviadosPeloBot.add(r.key.id);
   return r;
 }
