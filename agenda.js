@@ -362,6 +362,29 @@ export function blocoAgenda(lista, { perfil, dias = 2 } = {}) {
   return linhas.join('\n');
 }
 
+/** Versão pro WhatsApp (!agenda): um compromisso por linha, janelas livres em linha própria. */
+export function agendaZap(lista, { perfil, dias = 2 } = {}) {
+  if (!lista?.length) return '';
+  const fuso = fusoDe(perfil);
+  const hoje = agora(fuso).dia;
+  const amanha = new Date(new Date(`${hoje}T12:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10);
+  const porDia = new Map();
+  for (const e of lista) {
+    const d = diaLocal(e.inicio, fuso);
+    if (!porDia.has(d)) porDia.set(d, []);
+    porDia.get(d).push(e);
+  }
+  const blocos = [];
+  for (const [d, doDia] of [...porDia.entries()].sort().slice(0, dias)) {
+    const itens = doDia
+      .sort((a, b) => String(a.inicio).localeCompare(String(b.inicio)))
+      .map((e) => (e.diaTodo ? `• ${e.titulo} (${e.tipo}, dia todo)` : `• ${hhmm(e.inicio, fuso)}–${hhmm(e.fim, fuso)} ${e.titulo} (${e.tipo})`));
+    const livres = janelasLivres(doDia, fuso);
+    blocos.push([`*${rotuloDia(d, hoje, amanha)}*`, ...(itens.length ? itens : ['• Sem compromisso']), livres.length ? `• Janelas livres: ${livres.join(', ')}` : null].filter(Boolean).join('\n'));
+  }
+  return blocos.join('\n\n');
+}
+
 /** A pessoa está ocupada agora? Usado pra não cobrar refeição no meio de aula/reunião. */
 export function ocupadoAgora(lista, { perfil, minutos, hoje } = {}) {
   if (!lista?.length) return null;

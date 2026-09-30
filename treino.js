@@ -202,6 +202,28 @@ export function blocoTreino(a, { nome } = {}) {
     .join('\n');
 }
 
+/** Versão pro WhatsApp (!treino): um dado por linha, sem o texto corrido do prompt. */
+export function treinoZap(a, { nome } = {}) {
+  const cab = nome ? `*${nome}*` : '*Treino de força* (Hevy, 7 dias)';
+  if (!a || !a.sessoes) return `${cab}\n• Nenhum treino de força no Hevy nos últimos 7 dias`;
+  const grupos = [...a.seriesPorGrupo.entries()].sort((x, y) => y[1] - x[1]).map(([g, s]) => `${grupoEmPortugues(g)} ${Math.round(s)}`);
+  const sobe = a.progressao.filter((p) => p.variacao > 0.02).slice(0, 3);
+  const desce = a.progressao.filter((p) => p.variacao < -0.02).slice(-3).reverse();
+  const linha = (p) => `${p.nome} ${pct(p.variacao)} (1RM ${p.rm.toFixed(0)} kg, antes ${p.antes.toFixed(0)} kg)`;
+  return [
+    cab,
+    `• Sessões: ${a.sessoes} em 7 dias`,
+    `• Séries válidas: ${a.series}`,
+    `• Volume: ${n0(a.volume)} kg${a.variacaoVolume != null ? ` (${pct(a.variacaoVolume)} vs ${a.semanasComTreino} semana(s) anteriores)` : ''}`,
+    a.rpeMedio ? `• Esforço médio: RPE ${a.rpeMedio.toFixed(1).replace('.', ',')}` : null,
+    `• Séries por grupo: ${grupos.join(', ')}`,
+    sobe.length ? `• Carga subindo:\n${sobe.map((p) => `  - ${linha(p)}`).join('\n')}` : '• Carga subindo: nenhum exercício repetido esta semana',
+    desce.length ? `• Carga caindo:\n${desce.map((p) => `  - ${linha(p)}`).join('\n')}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 /**
  * Sincroniza (se tiver chave), analisa e devolve { analise, linha, bloco }. Nunca lança.
  */

@@ -361,7 +361,7 @@ test('formato novo: estimativa em linhas, bloco novo lido, !hoje com título e i
     { dia: '2026-09-29', jid: 'l', horaLocal: '11:43', minutos: 703, slot: 'almoco', descricao: 'arroz, feijão e frango', estimativa: { kcal: 830, p: 62, c: 105, g: 20 } },
   ];
   const t = resumirHoje(refs, perfis, '2026-09-29');
-  assert.match(t, /^\*Lucas\* \(2 refeições\)\n\n☕ \*Café da manhã\* · 08:20\n\*630 kcal\* · 4 fatias de pão, queijo e geleia\n\n🍽️ \*Almoço\* · 11:43\n\*830 kcal\* · arroz, feijão e frango\n\n📊 \*Total do dia\*\nCalorias: \*1\.460 kcal\*\nProteína: 106 g \(meta 120 a 165 g\)\nCarboidratos: 192 g\nGorduras: 36 g$/);
+  assert.match(t, /^\*Lucas\* \(2 refeições\)\n\n☕ \*Café da manhã\* · 08:20\n\*630 kcal\*\n4 fatias de pão, queijo e geleia\n\n🍽️ \*Almoço\* · 11:43\n\*830 kcal\*\narroz, feijão e frango\n\n📊 \*Total do dia\*\nCalorias: \*1\.460 kcal\*\nProteína: 106 g \(meta 120 a 165 g\)\nCarboidratos: 192 g\nGorduras: 36 g$/);
   assert.ok(!/~/.test(t));
 });
 
@@ -414,10 +414,10 @@ test('visão 7/30 dias: critério único de "dia com registro" e formato em tóp
   assert.equal(v.sequencia, 5); // 5 dias completos seguidos (3 registros/dia), com ou sem estimativa
   assert.equal(v.balanco.situacao, 'dentro'); // (2700-2400 + 2700-2500)/2 = +250 kcal/dia, no limite de baixo do alvo
   const zap = visaoZap({ refeicoes, pesagens, perfil, dia, gastos });
-  assert.match(zap, /^\*Últimos 7 dias\*\n• Registro: 5 de 7 dias\n• Média: 2\.700 kcal · Proteína 150 g\/dia \(meta 120 a 165 g\) · sobre 3 dias com estimativa\n• Peso: 77 kg \(23\/09\) → 75,7 kg \(29\/09\) · -1,3 kg/m);
-  assert.match(zap, /\*Sequência\*: 5 dias seguidos com o dia completo/);
-  assert.match(zap, /\*Balanço energético\* \(relógio\)\n• Hoje: 2\.700 kcal comidas · 2\.515 kcal gastas → \+185 kcal \(dia ainda incompleto\)/);
-  assert.match(zap, /• Últimos 2 dias: \+250 kcal\/dia · objetivo pede \+250 a \+500 kcal\/dia → no alvo ✅/);
+  assert.match(zap, /^\*Últimos 7 dias\*\n• Registro: 5 de 7 dias\n• Média: 2\.700 kcal\/dia \(sobre 3 dias com estimativa\)\n• Proteína: 150 g\/dia \(meta 120 a 165 g\)\n• Peso: 77 kg \(23\/09\) → 75,7 kg \(29\/09\), −1,3 kg/m);
+  assert.match(zap, /\*Sequência\*\n• 5 dias seguidos com o dia completo/);
+  assert.match(zap, /\*Balanço energético\* \(relógio\)\n• Hoje: comeu 2\.700 kcal, gastou 2\.515 kcal\n• Saldo de hoje: \+185 kcal \(dia ainda incompleto\)/);
+  assert.match(zap, /• Últimos 2 dias: \+250 kcal\/dia\n• Objetivo pede: \+250 a \+500 kcal\/dia → no alvo ✅/);
   // o texto do prompt continua com as dicas anti-confusão e o mesmo critério
   const prompt = visaoPeriodo({ refeicoes, pesagens, perfil, dia, gastos });
   assert.match(prompt, /ÚLTIMOS 7 DIAS: 5 de 7 dias com registro · média nos dias registrados 2\.700 kcal e proteína 150 g\/dia \(meta 120 a 165 g\) \(média sobre os 3 dias com estimativa\)/);

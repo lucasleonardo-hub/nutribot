@@ -200,7 +200,7 @@ export function resumirHoje(refeicoes, perfis, dia, habitos = []) {
       continue;
     }
     // título ("☕ *Café da manhã* · 08:20"), quebra de linha, e aí as informações
-    const linhas = minhas.map((r) => `${(NOME_SLOT[r.slot] || r.slot).replace(/^(\S+)\s+(.+)$/, '$1 *$2*')} · ${r.horaLocal || r.hora}\n${r.estimativa?.kcal ? `*${Math.round(r.estimativa.kcal)} kcal*` : 'sem estimativa'}${r.descricao ? ` · ${r.descricao.slice(0, 70)}` : ''}`);
+    const linhas = minhas.map((r) => `${(NOME_SLOT[r.slot] || r.slot).replace(/^(\S+)\s+(.+)$/, '$1 *$2*')} · ${r.horaLocal || r.hora}\n${r.estimativa?.kcal ? `*${Math.round(r.estimativa.kcal)} kcal*` : 'sem estimativa'}${r.descricao ? `\n${r.descricao.slice(0, 90)}` : ''}`);
     const comEst = minhas.filter((r) => r.estimativa?.kcal);
     const tot = comEst.reduce((a, r) => soma(a, r.estimativa), { kcal: 0, p: 0, c: 0, g: 0 });
     const metaP = p.peso ? { min: Math.round(p.peso * 1.6), max: Math.round(p.peso * 2.2) } : null;
@@ -510,45 +510,59 @@ export function visaoPeriodo(params) {
   return linhas.join('\n');
 }
 
-/** Texto pro !hoje (WhatsApp), em tópicos, sem as dicas de prompt. '' sem dados. */
+/** Texto pro !hoje (WhatsApp): um dado por linha, sem as dicas de prompt. '' sem dados. */
 export function visaoZap(params) {
   const v = calcularVisao(params);
   if (!v) return '';
-  const { perfil = {} } = params;
-  const seta = ' → ';
+  const kg1 = (n) => `${Number(n).toFixed(1).replace('.', ',')} kg`;
   const bloco = (titulo, x) => {
-    if (!x.comRegistro) return `*${titulo}*\n• Sem registros`;
-    const linhas = [`*${titulo}*`, `• Registro: ${x.comRegistro} de ${x.n} dias`];
-    if (x.kcal != null) linhas.push(`• Média: ${_kcal(x.kcal)} · Proteína ${Math.round(x.prot)} g/dia${v.metaP ? ` (meta ${v.metaP.min} a ${v.metaP.max} g)` : ''}${x.comEstimativa < x.comRegistro ? ` · sobre ${x.comEstimativa} dias com estimativa` : ''}`);
+    const linhas = [`*${titulo}*`];
+    if (!x.comRegistro) return `${linhas[0]}\n• Sem registros`;
+    linhas.push(`• Registro: ${x.comRegistro} de ${x.n} dias`);
+    if (x.kcal != null) {
+      linhas.push(`• Média: ${_kcal(x.kcal)}/dia${x.comEstimativa < x.comRegistro ? ` (sobre ${x.comEstimativa} dias com estimativa)` : ''}`);
+      linhas.push(`• Proteína: ${Math.round(x.prot)} g/dia${v.metaP ? ` (meta ${v.metaP.min} a ${v.metaP.max} g)` : ''}`);
+    }
     if (x.pesoInicio && x.pesoFim && x.pesoInicio.dia !== x.pesoFim.dia) {
       const dif = Math.round((x.pesoFim.peso - x.pesoInicio.peso) * 10) / 10;
-      const medias = x.pesoMediaRecente != null && x.pesoMediaAnterior != null ? ` · média ${x.pesoMediaAnterior.toFixed(1).replace('.', ',')} → ${x.pesoMediaRecente.toFixed(1).replace('.', ',')} kg` : '';
-      linhas.push(`• Peso: ${_kg(x.pesoInicio.peso)} (${_dm(x.pesoInicio.dia)})${seta}${_kg(x.pesoFim.peso)} (${_dm(x.pesoFim.dia)}) · ${dif > 0 ? '+' : ''}${String(dif).replace('.', ',')} kg${medias}`);
+      linhas.push(`• Peso: ${_kg(x.pesoInicio.peso)} (${_dm(x.pesoInicio.dia)}) → ${_kg(x.pesoFim.peso)} (${_dm(x.pesoFim.dia)}), ${dif > 0 ? '+' : dif < 0 ? '−' : ''}${Math.abs(dif).toFixed(1).replace('.', ',')} kg`);
+      if (x.pesoMediaRecente != null && x.pesoMediaAnterior != null) linhas.push(`• Média de peso: ${kg1(x.pesoMediaAnterior)} → ${kg1(x.pesoMediaRecente)}`);
     } else if (x.pesoFim) linhas.push(`• Peso: ${_kg(x.pesoFim.peso)} (${_dm(x.pesoFim.dia)})`);
     return linhas.join('\n');
   };
   const partes = [bloco('Últimos 7 dias', v.sete), bloco('Últimos 30 dias', v.trinta)];
-  if (v.sequencia >= 2) partes.push(`*Sequência*: ${v.sequencia} dias seguidos com o dia completo`);
+  if (v.sequencia >= 2) partes.push(`*Sequência*\n• ${v.sequencia} dias seguidos com o dia completo`);
   const m = v.meta;
   if (m?.status === 'calibrado') {
     const t = m.tendenciaKgSemana;
-    partes.push(`*Meta* (adaptativa, ${m.diasCompletos} dias): gasto real ~${_kcal(m.gasto)}/dia · peso ${Math.abs(t) < 0.05 ? 'estável' : `${t > 0 ? '+' : ''}${String(t).replace('.', ',')} kg/semana`}${seta}comer ${_kcal(m.alvo.min)} a ${_kcal(m.alvo.max)}`);
+    partes.push([`*Meta adaptativa* (${m.diasCompletos} dias completos)`, `• Gasto real: ${_kcal(m.gasto)}/dia`, `• Tendência de peso: ${Math.abs(t) < 0.05 ? 'estável' : `${t > 0 ? '+' : ''}${String(t).replace('.', ',')} kg/semana`}`, `• Comer: ${_kcal(m.alvo.min)} a ${_kcal(m.alvo.max)}/dia`].join('\n'));
   } else if (m?.status === 'relogio') {
-    partes.push(`*Meta* (pelo relógio, provisória): gasto ~${_kcal(m.gasto)}/dia${seta}comer ${_kcal(m.alvo.min)} a ${_kcal(m.alvo.max)}${m.diasCompletos < 10 ? ` · adaptativa em ${10 - m.diasCompletos} dia(s)` : ''}`);
+    partes.push([`*Meta provisória* (pelo relógio)`, `• Gasto: ${_kcal(m.gasto)}/dia`, `• Comer: ${_kcal(m.alvo.min)} a ${_kcal(m.alvo.max)}/dia`, m.diasCompletos < 10 ? `• Meta adaptativa em ${10 - m.diasCompletos} dia(s) completo(s)` : null].filter(Boolean).join('\n'));
   } else if (m) {
-    partes.push(`*Meta*: ainda calibrando (${m.diasCompletos} de 10 dias completos)`);
+    partes.push(`*Meta*\n• Ainda calibrando (${m.diasCompletos} de 10 dias completos)`);
   }
   if (v.balanco) {
     const b = v.balanco;
     const linhas = ['*Balanço energético* (relógio)'];
-    if (b.hoje) linhas.push(`• Hoje: ${_kcal(b.hoje.kcal)} comidas${b.hoje.gasto ? ` · ${_kcal(b.hoje.gasto)} gastas${seta}${_sinal(b.hoje.kcal - b.hoje.gasto)} kcal (dia ainda incompleto)` : ''}`);
-    if (b.ultimoCompleto) linhas.push(`• ${_dm(b.ultimoCompleto.dia)}: ${_kcal(b.ultimoCompleto.kcal)} comidas · ${_kcal(b.ultimoCompleto.gasto)} gastas${seta}${_sinal(b.ultimoCompleto.kcal - b.ultimoCompleto.gasto)} kcal`);
-    const alvoTxt = `${_sinal(b.alvo.min)} a ${_sinal(b.alvo.max)} kcal/dia`;
-    if (b.media7 != null) linhas.push(`• Últimos ${b.diasMedia7} dias: ${_sinal(b.media7)} kcal/dia · objetivo pede ${alvoTxt}${seta}${b.situacao === 'dentro' ? 'no alvo ✅' : b.situacao === 'acima' ? 'acima do alvo' : 'abaixo do alvo'}`);
-    else linhas.push(`• Objetivo pede ${alvoTxt}`);
+    if (b.hoje) {
+      linhas.push(`• Hoje: comeu ${_kcal(b.hoje.kcal)}${b.hoje.gasto ? `, gastou ${_kcal(b.hoje.gasto)}` : ''}`);
+      if (b.hoje.gasto) linhas.push(`• Saldo de hoje: ${_sinal(b.hoje.kcal - b.hoje.gasto)} kcal (dia ainda incompleto)`);
+    }
+    if (b.ultimoCompleto) linhas.push(`• ${_dm(b.ultimoCompleto.dia)}: comeu ${_kcal(b.ultimoCompleto.kcal)}, gastou ${_kcal(b.ultimoCompleto.gasto)}, saldo ${_sinal(b.ultimoCompleto.kcal - b.ultimoCompleto.gasto)} kcal`);
+    if (b.media7 != null) linhas.push(`• Últimos ${b.diasMedia7} dias: ${_sinal(b.media7)} kcal/dia`);
+    linhas.push(`• Objetivo pede: ${_sinal(b.alvo.min)} a ${_sinal(b.alvo.max)} kcal/dia${b.media7 != null ? ` → ${b.situacao === 'dentro' ? 'no alvo ✅' : b.situacao === 'acima' ? 'acima do alvo' : 'abaixo do alvo'}` : ''}`);
     partes.push(linhas.join('\n'));
   }
-  if (v.amanha) partes.push(v.amanha.zap);
+  if (v.amanha) {
+    const a = v.amanha;
+    const desvio = a.mediaGeral ? (a.previsto - a.mediaGeral) / a.mediaGeral : 0;
+    partes.push([
+      `*Amanhã* (${a.diaSemana})`,
+      `• Gasto previsto: ${_kcal(a.previsto)}`,
+      Math.abs(desvio) >= 0.08 ? `• ${a.diaSemana.charAt(0).toUpperCase()}${a.diaSemana.slice(1)} costuma gastar ${desvio > 0 ? 'mais' : 'menos'} que sua média geral (${_kcal(a.mediaGeral)})` : null,
+      `• Mire: ${_kcal(a.alvo.min)} a ${_kcal(a.alvo.max)}`,
+    ].filter(Boolean).join('\n'));
+  }
   return partes.join('\n\n');
 }
 

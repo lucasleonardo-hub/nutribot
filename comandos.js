@@ -17,6 +17,8 @@ import { enviar, enviarImagem } from './whatsapp.js';
 import { fecharDia, estudar } from './dia.js';
 import { enriquecerPerfis } from './perfis.js';
 import { situacaoRelogio } from './relogio.js';
+import { treinoZap } from './treino.js';
+import { agendaZap } from './agenda.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
@@ -66,7 +68,23 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     const [pe] = p?.onboarded ? await enriquecerPerfis([p], dia) : [null];
     const em = (c) => (pe?.atualizacoes?.[c] ? ` (desde ${pe.atualizacoes[c]})` : '');
     const ficha = pe
-      ? `${pe.nome}: ${pe.peso} kg${em('peso')}, ${pe.altura} cm, objetivo: ${pe.objetivo}${em('objetivo')}${pe.metaPeso ? `\nMeta: ${String(pe.metaPeso).replace('.', ',')} kg${pe.metaPrazo ? ` até ${pe.metaPrazo}` : ''}` : ''}.\nMora em: ${pe.cidade ? `${pe.cidade} (fuso ${fusoDe(pe)})` : 'ainda não me contou 🗺️'}\nDieta: ${pe.dieta || 'ainda não me contou'}${pe.restricoes ? ` · restrições: ${pe.restricoes}` : ''}\nGírias que eu já peguei: ${(pe.girias || []).join(', ') || 'nenhuma ainda'}\nHorários (no seu fuso): ${pe.horarios}\nRotina: ${pe.rotina || 'ainda te observando 👀'}`
+      ? [
+          `*${pe.nome}*`,
+          `• Peso: ${pe.peso} kg${em('peso')}`,
+          `• Altura: ${pe.altura} cm`,
+          `• Objetivo: ${pe.objetivo}${em('objetivo')}`,
+          pe.metaPeso ? `• Meta: ${String(pe.metaPeso).replace('.', ',')} kg${pe.metaPrazo ? ` até ${pe.metaPrazo}` : ''}` : null,
+          `• Mora em: ${pe.cidade ? `${pe.cidade} (fuso ${fusoDe(pe)})` : 'ainda não me contou 🗺️'}`,
+          `• Dieta: ${pe.dieta || 'ainda não me contou'}${pe.restricoes ? ` · restrições: ${pe.restricoes}` : ''}`,
+          pe.produtos?.length ? `• Produtos fixos: ${pe.produtos.map((x) => `${x.nome} (${x.kcal} kcal)`).join(', ')}` : null,
+          `• Gírias que eu já peguei: ${(pe.girias || []).join(', ') || 'nenhuma ainda'}`,
+          `• Horários (no seu fuso): ${pe.horarios}`,
+          '',
+          '*Rotina que eu observei*',
+          pe.rotina || 'ainda te observando 👀',
+        ]
+          .filter((l) => l !== null)
+          .join('\n')
       : SEM_CADASTRO;
     await enviar(jidGrupo, ficha, msg);
     return true;
@@ -271,7 +289,7 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       await enviar(jidGrupo, 'Não tenho tua agenda ligada aqui 🗓️ (só leio a agenda de quem configurou a conta Google no bot).', msg, { rapido: true });
       return true;
     }
-    await enviar(jidGrupo, `🗓️ *Sua agenda*\n\n${eu._agenda.bloco}`, msg, { rapido: true });
+    await enviar(jidGrupo, `🗓️ *Sua agenda*\n\n${(eu._agenda.lista?.length && agendaZap(eu._agenda.lista, { perfil: eu })) || eu._agenda.bloco}`, msg, { rapido: true });
     return true;
   }
 
@@ -282,8 +300,8 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       await enviar(jidGrupo, SEM_CADASTRO, msg);
       return true;
     }
-    const partes = alvo.map((p) => (p._treino?.bloco ? p._treino.bloco : `${p.nome.split(' ')[0]}: sem treino sincronizado (o Hevy só entra pra quem tem a chave configurada).`));
-    await enviar(jidGrupo, `🏋️ *Treino da semana*\n\n${partes.join('\n\n')}`, msg, { rapido: true });
+    const partes = alvo.map((p) => (p._treino?.analise ? treinoZap(p._treino.analise, { nome: alvo.length > 1 ? p.nome.split(' ')[0] : null }) : `*${p.nome.split(' ')[0]}*\n• Sem treino sincronizado (o Hevy só entra pra quem tem a chave configurada)`));
+    await enviar(jidGrupo, `🏋️ *Treino da semana* (Hevy, últimos 7 dias)\n\n${partes.join('\n\n')}`, msg, { rapido: true });
     return true;
   }
 
