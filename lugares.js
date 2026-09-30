@@ -135,7 +135,7 @@ export function estatisticasDosLugares(lugares, visitas) {
     else if (diasIdx.length === 2 && diasIdx.includes(0) && diasIdx.includes(6)) diasTxt = 'fim de semana';
     else diasTxt = diasIdx.map((i) => NOME_DOW[i]).join(', ');
     const padrao = s.visitas ? `${diasTxt}${s.hIni.length ? ` · ${hStr(med(s.hIni))} às ${hStr(med(s.hFim))}` : ''}` : '';
-    saida.push({ ...s, dias: s.dias.size, dows: undefined, hIni: undefined, hFim: undefined, somaLat: undefined, somaLon: undefined, n: undefined, novo: undefined, padrao, horaTipica: med(s.hIni) });
+    saida.push({ ...s, dias: s.dias.size, dows: undefined, hIni: undefined, hFim: undefined, somaLat: undefined, somaLon: undefined, n: undefined, novo: undefined, padrao, horaTipica: med(s.hIni), horaFim: med(s.hFim), diasIdx });
   }
   // casa = onde mais dorme; sem noites (primeiros dias), onde mais fica
   // casa marcada à mão manda: nenhum outro lugar vira casa
@@ -617,6 +617,60 @@ export async function mercadosProximos(perfil) {
   const texto = linhas.length ? `MERCADOS E FEIRAS PERTO (OpenStreetMap, até 800 m dos lugares dela(e); a lista de compras pode citar):\n${linhas.join('\n')}` : null;
   await salvarPerfil({ jids: perfil.jids, mercados: { em: new Date().toISOString(), texto } }).catch(() => {});
   return texto;
+}
+
+// ---------- roteiro do dia: cruza padrão de lugares, agenda e treino, com as janelas apertadas ----------
+const hDec = (h) => (h == null ? null : Math.floor(h) + ((h % 1) * 60) / 60);
+const hTxt = (h) => `${String(Math.floor(h)).padStart(2, '0')}:${String(Math.round((h % 1) * 60)).padStart(2, '0')}`;
+/**
+ * Puro. lugares = perfil.lugares; agenda = eventos de hoje [{ titulo, tipo, inicio, fim (ISO) }]; treinos = sessões de hoje
+ * [{ nome, hora: 'HH:MM', min }]; dow = dia da semana de hoje; fuso = da pessoa; horaAgora = decimal.
+ * Devolve texto tipo: "ROTEIRO PROVÁVEL DE HOJE (segunda): academia Garra 07:06–08:00 (padrão) → faculdade UFSC 10:00–12:36 (padrão) → aula X 14:00–16:00 (agenda). Janela apertada: 08:00→10:00 (2h)".
+ */
+export function roteiroDoDia({ lugares = [], agenda = [], treinos = [], dow, fuso = 'America/Sao_Paulo', horaAgora = null, nomeDia }) {
+  const itens = [];
+  for (const l of lugares) {
+    if (l.papel === 'casa' || !l.diasIdx?.includes(dow) || l.horaTipica == null) continue;
+    const ini = hDec(l.horaTipica);
+    let fim = hDec(l.horaFim ?? l.horaTipica);
+    if (fim < ini) fim = ini + 1;
+    itens.push({ ini, fim, rotulo: `${rotuloLugar(l)} (padrão)`, tipo: l.papel || l.tipo });
+  }
+  for (const e of agenda) {
+    const li = localDe(e.inicio, fuso);
+    const lf = localDe(e.fim || e.inicio, fuso);
+    if (e.diaTodo) continue;
+    itens.push({ ini: li.hora, fim: lf.hora < li.hora ? 24 : lf.hora, rotulo: `${e.tipo ? `${e.tipo}: ` : ''}${e.titulo} (agenda)`, tipo: e.tipo || 'agenda' });
+  }
+  for (const t of treinos) {
+    const m = /^(\d{1,2}):(\d{2})/.exec(t.hora || '');
+    if (!m) continue;
+    const ini = Number(m[1]) + Number(m[2]) / 60;
+    itens.push({ ini, fim: ini + (t.min || 60) / 60, rotulo: `treino ${t.nome || ''}${t.min ? ` ${t.min} min` : ''} (relógio, feito)`, tipo: 'treino' });
+  }
+  if (!itens.length) return '';
+  itens.sort((a, b) => a.ini - b.ini);
+  // mesmo lugar do padrão + treino do relógio no mesmo horário: não duplica
+  const unicos = [];
+  for (const it of itens) {
+    const igual = unicos.find((u) => Math.abs(u.ini - it.ini) < 0.75 && (u.tipo === it.tipo || (u.tipo === 'academia' && it.tipo === 'treino') || (u.tipo === 'treino' && it.tipo === 'academia')));
+    if (igual) {
+      if (it.tipo === 'treino') igual.rotulo = `${igual.rotulo.replace(' (padrão)', '')} · ${it.rotulo}`;
+      continue;
+    }
+    unicos.push(it);
+  }
+  const apertadas = [];
+  for (let i = 1; i < unicos.length; i++) {
+    const gap = unicos[i].ini - unicos[i - 1].fim;
+    if (gap >= 0 && gap <= 1.5) apertadas.push(`${hTxt(unicos[i - 1].fim)}→${hTxt(unicos[i].ini)} (${Math.round(gap * 60)} min entre ${unicos[i - 1].rotulo.split(' (')[0]} e ${unicos[i].rotulo.split(' (')[0]})`);
+  }
+  const marca = (it) => (horaAgora != null && it.fim < horaAgora ? ' ✓' : horaAgora != null && it.ini <= horaAgora && horaAgora <= it.fim ? ' ◀ agora' : '');
+  return (
+    `ROTEIRO PROVÁVEL DE HOJE (${nomeDia || NOME_DOW[dow]}; "padrão" = pelos lugares que ela costuma frequentar nesse dia, "agenda" = Google Agenda, "relógio" = já aconteceu): ` +
+    unicos.map((it) => `${hTxt(it.ini)}–${hTxt(it.fim)} ${it.rotulo}${marca(it)}`).join(' → ') +
+    (apertadas.length ? `\nJANELAS APERTADAS (pouco tempo pra comer entre um e outro; sugira algo pronto ou levado de casa): ${apertadas.join('; ')}` : '')
+  );
 }
 
 // ---------- semente: exportação da Linha do Tempo do Google ----------

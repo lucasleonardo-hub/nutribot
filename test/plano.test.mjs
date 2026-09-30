@@ -135,3 +135,23 @@ test('extrairSintese pega o parágrafo "Em uma frase" (ou o último), limpo e cu
   assert.equal(extrairSintese(''), '');
   assert.ok(extrairSintese('a\n\nEm uma frase: ' + 'x'.repeat(900)).length <= 600);
 });
+
+import { fundirHipoteses, aplicarVereditos } from '../reflexao.js';
+test('fundirHipoteses e aplicarVereditos: sem duplicar, com teto, fechando confirmadas/refutadas e inconclusivas', () => {
+  const abertas = [{ id: 'h1', texto: 'Come mais à noite em dia de faculdade', status: 'aberta', criadaEm: '2026-09-20' }];
+  const novas = [{ texto: 'come mais à noite em dia de faculdade!', como_verificar: 'kcal após 20h x dias de UFSC' }, { texto: 'Dorme menos em semana de prova', como_verificar: 'sono do relógio' }];
+  const f = fundirHipoteses(abertas, novas, '2026-09-27');
+  assert.equal(f.length, 2);
+  assert.equal(f[1].texto, 'Dorme menos em semana de prova');
+  assert.match(f[1].id, /^h20260927/);
+  const muitas = fundirHipoteses([], Array.from({ length: 12 }, (_, i) => ({ texto: `hipótese ${i}` })), '2026-09-27');
+  assert.equal(muitas.length, 8);
+  const v = aplicarVereditos(f, [{ id: 'h1', veredito: 'confirmada', evidencia: '3 de 3 noites de UFSC acima de 900 kcal' }, { id: f[1].id, veredito: 'aberta', evidencia: 'sem prova esta semana' }], '2026-10-04');
+  assert.equal(v.fechadas.length, 1);
+  assert.equal(v.fechadas[0].status, 'confirmada');
+  assert.equal(v.abertas.length, 1);
+  assert.equal(v.abertas[0].semanasAbertas, 1);
+  const velha = aplicarVereditos([{ id: 'x', texto: 'nunca decide', status: 'aberta', semanasAbertas: 5 }], [], '2026-10-04');
+  assert.equal(velha.abertas.length, 0);
+  assert.equal(velha.fechadas[0].status, 'inconclusiva');
+});

@@ -110,6 +110,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - TREINO DE FORÇA: quando o perfil trouxer a linha "Treino de força (Hevy)", você sabe quantas séries por grupo a pessoa fez na semana, o volume, o RPE e em quais exercícios a carga subiu ou caiu. Use isso naturalmente na conversa, como quem acompanha: elogie carga subindo, comente grupo muscular esquecido, ligue treino pesado com comida do dia ("treinou perna hoje, capricha no carboidrato"), e cruze com o objetivo (peso subindo sem carga subir = superávit virando gordura; em déficit, carga mantida = músculo preservado). A faixa de referência e o resto está no seu documento de treino. Comente quando fizer sentido, não em toda mensagem, e nunca prescreva treino: quem monta a planilha é o professor da pessoa.
 - AGENDA: o bloco "AGENDA" é do Google Agenda da PESSOA ATUAL e só existe pra ela. Use pra encaixar a comida na rotina real: não cobre refeição no meio de aula, reunião ou trabalho (comente depois, no primeiro intervalo); sugira o que cabe na janela livre que ela tem; avise na véspera quando o dia seguinte começa cedo ou emenda compromissos ("amanhã você tem aula 7h e reunião 8h30, deixa o café pronto hoje"); e ligue treino do dia com o que comer antes e depois. Cite o compromisso pelo nome quando ajudar ("depois da aula de Cálculo"). NUNCA comente a agenda de uma pessoa com outra pessoa do grupo, nem no resumo do dia: agenda é assunto entre você e o dono dela.
 - LUGARES: o bloco "LUGARES" vem da localização aproximada do celular da PESSOA ATUAL e só existe pra ela. Use como contexto de quem conhece a rotina dela: em casa dá pra cozinhar, na rua ou no trabalho a sugestão é o que se compra pronto; se ela está num restaurante na hora do almoço, espere a foto em vez de cobrar; academia hoje conta pra comida antes e depois; "faculdade à noite" pede jantar prático. Nunca escreva endereço, rua ou coordenada; a casa é só "casa"; nome de academia, restaurante ou mercado só na conversa com ela. Não anuncie que sabe onde ela está ("vi que você está em...") nem cite a localização em toda mensagem: use quando muda a dica. Se OUTRA pessoa perguntar onde alguém está, não sabe e não comenta.
+- CRUZE AS FONTES: agenda, lugares, roteiro do dia, treino, relógio e acompanhamento são pedaços da MESMA pessoa. Antes de dar dica, junte: academia às 7h + aula às 10h = café que caiba na mochila e proteína logo depois do treino; faculdade até 22h = jantar precisa estar pronto ou ser simples; gasto alto no relógio hoje + almoço leve = a fome da noite vai vir, antecipe; janela apertada entre dois compromissos = comida pronta, não receita. Uma dica que ignora o roteiro do dia dela é dica genérica; evite.
 - CLIMA E ESTAÇÃO: quando o contexto de hora trouxer a estação do ano e o tempo na cidade da pessoa, use como quem olha pela janela: sopa em noite fria "cai bem", dia de calorão pede água e comida leve, chuva combina com treino em casa, amanhã quente pede hidratar mais. Só quando encaixar, não em toda mensagem. Cada um pode estar numa cidade e estação diferentes (quem mora no outro hemisfério tem a estação oposta): use a da pessoa com quem fala. Se NÃO houver linha de tempo no contexto, você não sabe como está o dia: não invente "dia lindo" nem "friozinho".
 - DADOS DO RELÓGIO: quando o perfil trouxer a linha "Relógio" ou o dossiê trouxer "DADOS DO RELÓGIO" (peso, gordura, sono, passos, treinos do Galaxy Watch), você SABE disso sem perguntar: não peça peso nem pergunte como dormiu se está ali. Use como quem conhece a rotina da pessoa: café chegando às 8h de quem levantou 05:56 ("já tá há 2 horas em pé sem comer?"), levantou às 9h quem costuma levantar às 6h ("dormiu até tarde hoje, hein"), dia com 3 mil passos, semana sem treino, noite de 5h e pedindo doce ("faz sentido"). Comente quando couber, não em toda mensagem. Compare com a média da pessoa, não com regra de livro. Bioimpedância de relógio oscila: fale de tendência, não de décimos.
 - RECUPERAÇÃO (batimento de repouso): quando a linha do relógio trouxer "batimento de repouso", ele NÃO entra na conta de calorias (o gasto do dia já usa isso). É sinal de recuperação: acima do normal há 2 dias ou mais = corpo cansado, gripando ou sobrecarregado; aí segure a cobrança, priorize sono e hidratação e não empurre volume de comida ou treino. Na média ou abaixo, com sono bom = pode cobrar ritmo. Use uma vez, quando encaixar, sem repetir o número em toda mensagem.
@@ -614,7 +615,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, rotulos, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, roteiro, rotulos, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -643,6 +644,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (visao ? `ACOMPANHAMENTO DE ${perfil.nome} (calculado pelo sistema; use pra situar a conversa e as dicas no rumo do objetivo, sem recalcular e sem despejar tudo de uma vez):\n${visao}\n\n` : '') +
     (agenda ? `AGENDA DE ${perfil.nome} (Google Agenda DELA(E), só pra falar COM ELA(E)):\n${agenda}\n\n` : '') +
     (lugares ? `${lugares}\n\n` : '') +
+    (roteiro ? `${roteiro}\n\n` : '') +
     (perfil.reflexao?.sintese ? `COMO VOCÊ ENTENDE ${perfil.nome.split(' ')[0]} (sua reflexão de ${perfil.reflexao.dia}; pano de fundo pra escolher tom e dica, use só quando encaixar e sem dizer que "refletiu"): ${perfil.reflexao.sintese}\n\n` : '') +
     (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
@@ -1402,11 +1404,57 @@ export async function descreverImagemDocumento(buffer, mimeType) {
   });
 }
 
+/** Confere cada hipótese aberta nos dados da semana. Devolve [{ id, veredito: confirmada|refutada|aberta, evidencia }]. */
+export async function verificarHipoteses({ perfil, hipoteses, fontes, dia }) {
+  const json = await gerar({
+    contents:
+      `Hoje é ${dataExtenso(dia)}. Você levantou estas hipóteses sobre ${perfil.nome} nas últimas semanas. Confira cada uma SÓ com os dados abaixo, como uma cientista: confirmada quando os dados desta semana mostram claramente; refutada quando mostram o contrário; aberta quando não dá pra decidir (diga o que faltou). Não invente número.\n\n` +
+      `HIPÓTESES:\n${hipoteses.map((h) => `- id ${h.id}: ${h.texto}${h.comoVerificar ? ` (como conferir: ${h.comoVerificar})` : ''}`).join('\n')}\n\n` +
+      (fontes.semana ? `SEMANA (registros compilados pelo sistema):\n${fontes.semana}\n\n` : '') +
+      (fontes.visao ? `NÚMEROS:\n${fontes.visao}\n\n` : '') +
+      (fontes.padrao ? `${fontes.padrao}\n\n` : '') +
+      (fontes.relogio ? `RELÓGIO:\n${String(fontes.relogio).slice(0, 2500)}\n\n` : '') +
+      (fontes.treino ? `TREINO:\n${String(fontes.treino).slice(0, 1500)}\n\n` : '') +
+      (fontes.lugares ? `${fontes.lugares}\n\n` : '') +
+      `Responda em JSON: lista de objetos { "id", "veredito" ("confirmada" | "refutada" | "aberta"), "evidencia" (até 30 palavras, com o dado que decidiu ou o que faltou) }, um por hipótese.`,
+    config: {
+      temperature: 0.2,
+      pensar: false,
+      maxOutputTokens: 900,
+      responseMimeType: 'application/json',
+      responseSchema: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, veredito: { type: 'string', enum: ['confirmada', 'refutada', 'aberta'] }, evidencia: { type: 'string' } }, required: ['id', 'veredito', 'evidencia'] } },
+    },
+  });
+  const r = JSON.parse(json);
+  return Array.isArray(r) ? r : [];
+}
+
+/** Tira do texto da reflexão as suspeitas novas (não repetir as já abertas). Devolve [{ texto, como_verificar }] (até 4). */
+export async function extrairHipoteses({ perfil, texto, abertas = [], dia }) {
+  const json = await gerar({
+    contents:
+      `Hoje é ${dataExtenso(dia)}. Abaixo está SUA reflexão sobre ${perfil.nome}. Liste as suspeitas/hipóteses que você levantou nela e que dá pra conferir com dados nas próximas semanas (registros de refeição, calorias por dia, sono, passos, gasto, treino, lugares e horários). Cada uma numa frase curta e verificável, com "como_verificar" dizendo que dado decide. Só o que é dúvida de verdade, não o que já é fato. Até 4. Não repita as já abertas.\n\n` +
+      (abertas.length ? `JÁ ABERTAS (não repetir):\n${abertas.map((h) => `- ${h.texto}`).join('\n')}\n\n` : '') +
+      `REFLEXÃO:\n${String(texto).slice(0, 6000)}\n\n` +
+      `Responda em JSON: lista de { "texto", "como_verificar" }. Lista vazia se não houver suspeita nova verificável.`,
+    config: {
+      temperature: 0.2,
+      pensar: false,
+      leve: true,
+      maxOutputTokens: 600,
+      responseMimeType: 'application/json',
+      responseSchema: { type: 'array', items: { type: 'object', properties: { texto: { type: 'string' }, como_verificar: { type: 'string' } }, required: ['texto', 'como_verificar'] } },
+    },
+  });
+  const r = JSON.parse(json);
+  return Array.isArray(r) ? r.slice(0, 4) : [];
+}
+
 /**
  * Reflexão livre sobre uma pessoa: sem formato fixo, primeira pessoa, pensando em voz alta sobre tudo que ela sabe.
  * O último parágrafo ("Em uma frase") vira a síntese que entra nas conversas com a pessoa.
  */
-export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, persona, dia }) {
+export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, hipoteses, persona, dia }) {
   const primeiro = perfil.nome.split(' ')[0];
   return gerar({
     contents:
@@ -1419,7 +1467,8 @@ export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugare
       (treino ? `TREINO:\n${String(treino).slice(0, 1500)}\n\n` : '') +
       (lugares ? `${lugares}\n\n` : '') +
       (documentos ? `DOCUMENTOS DA PASTA (bioimpedância, exames):\n${documentos}\n\n` : '') +
-      `Escreva, em primeira pessoa e no seu jeito, O QUE VOCÊ PENSA sobre ${primeiro}: como essa pessoa funciona (rotina real, onde passa o dia, quanto gasta e quanto come, como dorme, quando treina, quando desanda), o que os dados dizem que ela talvez não perceba, o que você suspeita mas ainda não tem certeza e quer observar, o que te preocupa e o que te impressiona, e como isso muda o jeito de você falar com ela. Ligue os pontos entre fontes diferentes (ex.: dia de faculdade à noite x jantar tarde; gasto do relógio x apetite; lugar x escolha de comida). Pode ser em parágrafos corridos, pode ter uma lista se ajudar, sem títulos obrigatórios e sem tom de relatório: é reflexão, não ficha. Sem endereço, rua ou coordenada (bairro pode). Nada sobre outras pessoas do grupo. Até 700 palavras.\n` +
+      (hipoteses ? `${hipoteses}\n\n` : '') +
+      `Escreva, em primeira pessoa e no seu jeito, O QUE VOCÊ PENSA sobre ${primeiro}: como essa pessoa funciona (rotina real, onde passa o dia, quanto gasta e quanto come, como dorme, quando treina, quando desanda), o que os dados dizem que ela talvez não perceba, o que você suspeita mas ainda não tem certeza e quer observar (escreva essas suspeitas de forma explícita, começando por "Suspeito que" ou "Quero observar se": elas serão conferidas nos dados da semana que vem), o que te preocupa e o que te impressiona, e como isso muda o jeito de você falar com ela. Ligue os pontos entre fontes diferentes (ex.: dia de faculdade à noite x jantar tarde; gasto do relógio x apetite; lugar x escolha de comida). Pode ser em parágrafos corridos, pode ter uma lista se ajudar, sem títulos obrigatórios e sem tom de relatório: é reflexão, não ficha. Sem endereço, rua ou coordenada (bairro pode). Nada sobre outras pessoas do grupo. Até 700 palavras.\n` +
       `Termine com um parágrafo separado começando exatamente com "Em uma frase:" resumindo como você entende ${primeiro} hoje, em no máximo 60 palavras, do jeito que você usaria na cabeça antes de responder uma mensagem dela(e). Sem linha ATUALIZAR. Sem [[links]].`,
     config: { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.8, maxOutputTokens: 2200 },
   });

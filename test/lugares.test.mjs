@@ -189,3 +189,23 @@ test('estatisticasDosLugares: casa e trabalho marcados à mão mandam; o cálcul
   assert.equal(por.campus.tipo, 'faculdade');
   assert.equal(por.campus.papel ?? null, null);
 });
+
+import { roteiroDoDia } from '../lugares.js';
+test('roteiroDoDia cruza padrão de lugares, agenda e treino e aponta janela apertada', () => {
+  const lugares = [
+    { id: 'casa', papel: 'casa', diasIdx: [0, 1, 2, 3, 4, 5, 6], horaTipica: 22, horaFim: 7 },
+    { id: 'acad', tipo: 'academia', nome: 'Garra', bairro: 'Córrego Grande', diasIdx: [1, 2, 3, 4, 5], horaTipica: 7.1, horaFim: 8 },
+    { id: 'ufsc', tipo: 'faculdade', nome: 'UFSC', diasIdx: [1, 3], horaTipica: 10, horaFim: 12.6 },
+    { id: 'sab', tipo: 'praia', diasIdx: [6], horaTipica: 10, horaFim: 12 },
+  ];
+  const agenda = [{ titulo: 'Aula de Madeira', tipo: 'aula', inicio: '2026-09-28T17:00:00Z', fim: '2026-09-28T19:00:00Z' }]; // 14:00–16:00 SP
+  const treinos = [{ nome: 'Musculação', hora: '07:12', min: 52 }];
+  const r = roteiroDoDia({ lugares, agenda, treinos, dow: 1, fuso: 'America/Sao_Paulo', horaAgora: 11, nomeDia: 'segunda' });
+  assert.match(r, /^ROTEIRO PROVÁVEL DE HOJE \(segunda/);
+  assert.match(r, /07:06–08:00 academia Garra \(Córrego Grande\) · treino Musculação 52 min \(relógio, feito\) ✓/);
+  assert.match(r, /10:00–12:36 faculdade UFSC \(padrão\) ◀ agora/);
+  assert.match(r, /14:00–16:00 aula: Aula de Madeira \(agenda\)/);
+  assert.doesNotMatch(r, /\d{2}:\d{2} (casa|praia)/);
+  assert.match(r, /JANELAS APERTADAS[^\n]*12:36→14:00 \(84 min entre faculdade UFSC e aula: Aula de Madeira\)/);
+  assert.equal(roteiroDoDia({ lugares, agenda: [], treinos: [], dow: 0 }), '');
+});

@@ -3,7 +3,9 @@
 import { refeicoesDesde } from './mongo.js';
 import { treinoDe } from './treino.js';
 import { agendaDe } from './agenda.js';
-import { contextoLugares } from './lugares.js';
+import { contextoLugares, roteiroDoDia, localDe } from './lugares.js';
+import { situacaoRelogio } from './relogio.js';
+import { fusoDe } from './util.js';
 import { diasAnteriores, horariosHabituais, descreverHorarios, fusoValido } from './util.js';
 
 export const DIAS_ROTINA = 21; // janela pra aprender horários
@@ -30,7 +32,18 @@ export async function enriquecerPerfis(perfis, dia) {
       const ag = await agendaDe(p).catch(() => null);
       // lugares (localização do app Relógio): só de quem ligou no celular; só entra na conversa com a própria pessoa
       const lg = p.lugaresAtivo ? await contextoLugares(p).catch(() => null) : null;
-      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t, _agenda: ag, _lugares: lg };
+      // roteiro provável de hoje: padrão de lugares no dia da semana + agenda de hoje + treino já feito (relógio), com janelas apertadas
+      let roteiro = '';
+      try {
+        const fuso = fusoDe(p);
+        const agoraLocal = localDe(new Date(), fuso);
+        const agendaHoje = (ag?.lista || []).filter((e) => localDe(e.inicio, fuso).dia === agoraLocal.dia);
+        const rel = p.relogio ? await situacaoRelogio(p, agoraLocal.dia).catch(() => null) : null;
+        roteiro = roteiroDoDia({ lugares: p.lugares || [], agenda: agendaHoje, treinos: rel?.treinosHoje || [], dow: agoraLocal.dow, fuso, horaAgora: agoraLocal.hora });
+      } catch (e) {
+        console.warn('[perfis] roteiro:', e.message);
+      }
+      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t, _agenda: ag, _lugares: lg, _roteiro: roteiro };
     })
   );
 }
