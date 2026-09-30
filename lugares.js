@@ -631,6 +631,7 @@ export function roteiroDoDia({ lugares = [], agenda = [], treinos = [], dow, fus
   const itens = [];
   for (const l of lugares) {
     if (l.papel === 'casa' || !l.diasIdx?.includes(dow) || l.horaTipica == null) continue;
+    if (l.dias != null && l.dias < 3 && !l.manual && !l.papel) continue; // lugar visto em 1 ou 2 dias não é rotina
     const ini = hDec(l.horaTipica);
     let fim = hDec(l.horaFim ?? l.horaTipica);
     if (fim < ini) fim = ini + 1;
@@ -645,6 +646,8 @@ export function roteiroDoDia({ lugares = [], agenda = [], treinos = [], dow, fus
   for (const t of treinos) {
     const m = /^(\d{1,2}):(\d{2})/.exec(t.hora || '');
     if (!m) continue;
+    // caminhada curta detectada sozinha pelo relógio (ir até o ponto, atravessar o campus) não é treino nem compromisso
+    if ((t.min || 0) < 20 && /caminhada|walk|corrida leve/i.test(t.nome || '')) continue;
     const ini = Number(m[1]) + Number(m[2]) / 60;
     itens.push({ ini, fim: ini + (t.min || 60) / 60, rotulo: `treino ${t.nome || ''}${t.min ? ` ${t.min} min` : ''} (relógio, feito)`, tipo: 'treino' });
   }
