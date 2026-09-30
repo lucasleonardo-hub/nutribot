@@ -138,7 +138,9 @@ export function estatisticasDosLugares(lugares, visitas) {
     saida.push({ ...s, dias: s.dias.size, dows: undefined, hIni: undefined, hFim: undefined, somaLat: undefined, somaLon: undefined, n: undefined, novo: undefined, padrao, horaTipica: med(s.hIni) });
   }
   // casa = onde mais dorme; sem noites (primeiros dias), onde mais fica
-  const candidataCasa = saida.filter((l) => !l.manual || l.papel === 'casa').sort((a, b) => b.noites - a.noites || b.minutos - a.minutos)[0];
+  // casa marcada à mão manda: nenhum outro lugar vira casa
+  const casaManual = saida.some((l) => l.manual && l.papel === 'casa');
+  const candidataCasa = casaManual ? null : saida.filter((l) => !l.manual).sort((a, b) => b.noites - a.noites || b.minutos - a.minutos)[0];
   for (const l of saida) {
     if (l.manual) continue;
     if (candidataCasa && l.id === candidataCasa.id && (l.noites >= 2 || (!saida.some((x) => x.noites >= 2) && l.minutos >= 600))) l.papel = 'casa';
@@ -147,7 +149,8 @@ export function estatisticasDosLugares(lugares, visitas) {
   // trabalho é UM lugar: o que mais tem dias úteis em horário comercial (empate: o que o Google já chamava de trabalho), e nunca
   // um lugar que o mapa diz ser academia, faculdade, restaurante, mercado etc.
   const podeSerTrabalho = (l) => !l.manual && l.papel !== 'casa' && (!l.tipo || ['trabalho', 'outro', 'residência', 'loja', 'café'].includes(l.tipo));
-  const candidatoTrab = saida.filter((l) => podeSerTrabalho(l) && l.diasUteisDia >= 3).sort((a, b) => b.diasUteisDia - a.diasUteisDia || (b.papel === 'trabalho') - (a.papel === 'trabalho') || b.minutos - a.minutos)[0];
+  const trabalhoManual = saida.some((l) => l.manual && l.papel === 'trabalho');
+  const candidatoTrab = trabalhoManual ? null : saida.filter((l) => podeSerTrabalho(l) && l.diasUteisDia >= 3).sort((a, b) => b.diasUteisDia - a.diasUteisDia || (b.papel === 'trabalho') - (a.papel === 'trabalho') || b.minutos - a.minutos)[0];
   for (const l of saida) {
     if (l.manual || l.papel === 'casa') continue;
     if (l.papel === 'trabalho' && (!candidatoTrab || l.id !== candidatoTrab.id)) l.papel = null;

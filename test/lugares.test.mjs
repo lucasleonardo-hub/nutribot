@@ -162,3 +162,30 @@ test('estatisticasDosLugares: "todo dia" pra casa, um único trabalho, e o padr�
   assert.equal(por.cafe.papel ?? null, null, 'café com 2 dias úteis por semana não vira trabalho quando já existe um melhor');
   assert.match(por.outro.padrao, /^ter, qui · 10h às 13h$/);
 });
+
+test('estatisticasDosLugares: casa e trabalho marcados à mão mandam; o cálculo não cria outra casa nem outro trabalho', () => {
+  const lugares = [
+    { id: 'casaManual', ...CASA, manual: true, papel: 'casa', tipo: 'residência' },
+    { id: 'dorme', lat: CASA.lat + 0.01, lon: CASA.lon }, // dorme mais aqui, mas a casa manual vale
+    { id: 'celta', ...TRAB, manual: true, papel: 'trabalho', tipo: 'trabalho', nome: 'CELTA' },
+    { id: 'campus', ...ACAD, manual: true, tipo: 'faculdade', nome: 'UFSC' },
+    { id: 'outro', lat: TRAB.lat + 0.01, lon: TRAB.lon },
+  ];
+  const visitas = [];
+  for (let d = 1; d <= 20; d++) {
+    const dia = `2026-09-${String(d).padStart(2, '0')}`;
+    const dow = new Date(`${dia}T12:00:00Z`).getUTCDay();
+    visitas.push({ lugarId: 'dorme', inicio: new Date(`${dia}T01:00:00Z`), fim: new Date(`${dia}T10:00:00Z`), min: 540, dia, dow, hIni: 22, hFim: 7 });
+    if (dow >= 1 && dow <= 5) {
+      visitas.push({ lugarId: 'outro', inicio: new Date(`${dia}T12:00:00Z`), fim: new Date(`${dia}T21:00:00Z`), min: 540, dia, dow, hIni: 9, hFim: 18 });
+      visitas.push({ lugarId: 'campus', inicio: new Date(`${dia}T13:00:00Z`), fim: new Date(`${dia}T18:00:00Z`), min: 300, dia, dow, hIni: 10, hFim: 15 });
+    }
+  }
+  const por = Object.fromEntries(estatisticasDosLugares(lugares, visitas).map((l) => [l.id, l]));
+  assert.equal(por.casaManual.papel, 'casa');
+  assert.equal(por.dorme.papel ?? null, null);
+  assert.equal(por.celta.papel, 'trabalho');
+  assert.equal(por.outro.papel ?? null, null);
+  assert.equal(por.campus.tipo, 'faculdade');
+  assert.equal(por.campus.papel ?? null, null);
+});
