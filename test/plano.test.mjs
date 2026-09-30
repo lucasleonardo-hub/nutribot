@@ -126,3 +126,12 @@ test('digitandoRecente: só composing/recording dentro da janela, por qualquer j
   assert.equal(digitandoRecente(reg, ['x@lid', '1@s.whatsapp.net'], agoraMs), true);
   assert.equal(digitandoRecente(null, ['1@s.whatsapp.net'], agoraMs), false);
 });
+
+import { extrairSintese } from '../reflexao.js';
+test('extrairSintese pega o parágrafo "Em uma frase" (ou o último), limpo e curto', () => {
+  const t = 'Penso que o Lucas treina cedo e come tarde.\n\nOutro parágrafo com *negrito*.\n\n*Em uma frase:* engenheiro disciplinado de manhã, **frouxo** à noite, que precisa de jantar pronto.\n';
+  assert.equal(extrairSintese(t), 'engenheiro disciplinado de manhã, frouxo à noite, que precisa de jantar pronto.');
+  assert.equal(extrairSintese('Só um parágrafo, sem marcador.'), 'Só um parágrafo, sem marcador.');
+  assert.equal(extrairSintese(''), '');
+  assert.ok(extrairSintese('a\n\nEm uma frase: ' + 'x'.repeat(900)).length <= 600);
+});

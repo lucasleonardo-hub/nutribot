@@ -643,6 +643,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (visao ? `ACOMPANHAMENTO DE ${perfil.nome} (calculado pelo sistema; use pra situar a conversa e as dicas no rumo do objetivo, sem recalcular e sem despejar tudo de uma vez):\n${visao}\n\n` : '') +
     (agenda ? `AGENDA DE ${perfil.nome} (Google Agenda DELA(E), só pra falar COM ELA(E)):\n${agenda}\n\n` : '') +
     (lugares ? `${lugares}\n\n` : '') +
+    (perfil.reflexao?.sintese ? `COMO VOCÊ ENTENDE ${perfil.nome.split(' ')[0]} (sua reflexão de ${perfil.reflexao.dia}; pano de fundo pra escolher tom e dica, use só quando encaixar e sem dizer que "refletiu"): ${perfil.reflexao.sintese}\n\n` : '') +
     (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
@@ -1401,6 +1402,29 @@ export async function descreverImagemDocumento(buffer, mimeType) {
   });
 }
 
+/**
+ * Reflexão livre sobre uma pessoa: sem formato fixo, primeira pessoa, pensando em voz alta sobre tudo que ela sabe.
+ * O último parágrafo ("Em uma frase") vira a síntese que entra nas conversas com a pessoa.
+ */
+export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, persona, dia }) {
+  const primeiro = perfil.nome.split(' ')[0];
+  return gerar({
+    contents:
+      `Hoje é ${dataExtenso(dia)}. Este é o SEU caderno particular sobre ${perfil.nome} (${perfil.peso || '?'} kg, ${perfil.altura || '?'} cm, objetivo: ${perfil.objetivo || '?'}, ${perfil.cidade || 'cidade ?'}, dieta ${perfil.dieta || '?'}). Ninguém pede nada aqui: é você pensando, sem prompt, sem lista pra preencher.\n\n` +
+      (anterior ? `O QUE VOCÊ ESCREVEU DA ÚLTIMA VEZ (pode manter, mudar de ideia ou se corrigir; não copie):\n${String(anterior).slice(0, 4000)}\n\n` : '') +
+      (notas ? `SUAS NOTAS FACTUAIS:\n${String(notas).slice(0, 2500)}\n\n` : '') +
+      (visao ? `NÚMEROS (sistema):\n${visao}\n\n` : '') +
+      (padrao ? `${padrao}\n\n` : '') +
+      (relogio ? `RELÓGIO/CELULAR (sono, passos, gasto, batimentos):\n${String(relogio).slice(0, 2500)}\n\n` : '') +
+      (treino ? `TREINO:\n${String(treino).slice(0, 1500)}\n\n` : '') +
+      (lugares ? `${lugares}\n\n` : '') +
+      (documentos ? `DOCUMENTOS DA PASTA (bioimpedância, exames):\n${documentos}\n\n` : '') +
+      `Escreva, em primeira pessoa e no seu jeito, O QUE VOCÊ PENSA sobre ${primeiro}: como essa pessoa funciona (rotina real, onde passa o dia, quanto gasta e quanto come, como dorme, quando treina, quando desanda), o que os dados dizem que ela talvez não perceba, o que você suspeita mas ainda não tem certeza e quer observar, o que te preocupa e o que te impressiona, e como isso muda o jeito de você falar com ela. Ligue os pontos entre fontes diferentes (ex.: dia de faculdade à noite x jantar tarde; gasto do relógio x apetite; lugar x escolha de comida). Pode ser em parágrafos corridos, pode ter uma lista se ajudar, sem títulos obrigatórios e sem tom de relatório: é reflexão, não ficha. Sem endereço, rua ou coordenada (bairro pode). Nada sobre outras pessoas do grupo. Até 700 palavras.\n` +
+      `Termine com um parágrafo separado começando exatamente com "Em uma frase:" resumindo como você entende ${primeiro} hoje, em no máximo 60 palavras, do jeito que você usaria na cabeça antes de responder uma mensagem dela(e). Sem linha ATUALIZAR. Sem [[links]].`,
+    config: { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.8, maxOutputTokens: 2200 },
+  });
+}
+
 export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historico, dia, refeicoes }) {
   const falas = falasDe(historico, perfil.nome);
   if (!falas.length) return notasAtuais || '';
@@ -1512,6 +1536,7 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       (metaSemana ? `${metaSemana}\n\n` : '') +
       (lugares ? `${lugares}\n(use a rotina de lugares pra encaixar: dia de academia, dia de faculdade à noite, almoço fora no trabalho; nunca cite endereço)\n\n` : '') +
       (mercados ? `${mercados}\n\n` : '') +
+      (perfil.reflexao?.sintese ? `COMO VOCÊ ENTENDE ESSA PESSOA (sua reflexão): ${perfil.reflexao.sintese}\n\n` : '') +
       (agenda ? `AGENDA DELA(E) NOS PRÓXIMOS DIAS (encaixe as refeições nas janelas livres e respeite aula/trabalho/reunião):\n${agenda}\n\n` : '') +
       (pedido ? `PEDIDO DA PESSOA PRA ESTE PLANO (orçamento, o que tem no mercado perto, o que quer ou não quer; manda nisso): ${pedido}\n\n` : '') +
       `Hoje é ${dataExtenso(dia)}. Monte o *PLANO DA SEMANA* de ${primeiro}, no seu personagem, até 500 palavras.${semana ? ` O plano cobre de ${semana.dias[0].rotulo} a ${semana.dias[6].rotulo}${semana.proximaSemana ? ' (a semana que vem: a lista de compras é pra comprar neste fim de semana)' : ''}; use exatamente esses dias, nessa ordem, como títulos.` : ''}\n` +

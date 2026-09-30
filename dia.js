@@ -12,6 +12,7 @@ import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
 import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo, placarSemana } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
 import { linhaSemanaLugares } from './lugares.js';
+import { refletirTodos } from './reflexao.js';
 import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta } from './previsao.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
@@ -277,6 +278,8 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       // Semanal só no fechamento automático de domingo (um !resumo no domingo não pode disparar dois semanais)
       if ((!forcado && ehDomingo(dia)) || (forcado && process.env.FORCAR_SEMANAL === 'true')) {
         await fecharSemana({ dia, perfis, grupo });
+        // caderno livre sobre cada pessoa (Nutri-Reflexoes.md): depois da semana fechada, com os números da semana já prontos
+        await refletirTodos({ perfis, dia, persona: estado.persona, motivo: 'domingo' }).catch((e) => console.error('[reflexao]', e.message));
       }
     } else {
       console.log('[bot] nada pra resumir hoje (sem grupo ou sem perfis).');
