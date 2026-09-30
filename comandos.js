@@ -131,14 +131,21 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     const modelos = ia.situacaoModelos();
     const fora = modelos.filter((m) => !m.livre);
     const lite = modelos.filter((m) => m.papel === 'leve').length;
+    const minutos = Math.round(process.uptime() / 60);
     const linhas = [
       `🩺 *Status da ${ia.nomeDaBot()}*`,
-      `No ar há ${Math.round(process.uptime() / 60)} min · hoje (${estado.memoria.dia}): ${estado.memoria.mensagens.length} mensagens na memória`,
-      `Gemini hoje: ${u.chamadas} chamadas · ${formatarTokens(u.entrada)} tokens de entrada (${formatarTokens(u.cache)} em cache) · ${formatarTokens(u.saida)} de saída`,
-      `Modelos: ${modelos.length} na fila (${modelos.length - lite} Flash, ${lite} Lite) · chaves do Gemini: ${ia.totalDeChaves()}${ia.totalDeChaves() > 1 ? ` (uso hoje: ${Object.entries(u.porChave || {}).map(([c, n]) => `chave ${c} = ${n}`).join(', ') || 'nenhum'})` : ''}`,
-      fora.length ? `De castigo (todas as chaves): ${fora.map((m) => `${m.modelo} (volta em ${m.voltaEm})`).join(', ')}` : 'De castigo: nenhum ✅',
-      `Reservas externas: ${reservasDisponiveis().join(', ') || 'nenhuma'}`,
-      `Últimas respostas: ${ia.ultimasRespostas(6).map((r) => `${r.hora} ${String(r.modelo).replace(/^gemini-/, '')}${r.chave ? ` ch${r.chave}` : ''}${r.motivo ? ` (${r.motivo})` : ''}`).join(' · ') || 'nenhuma desde o último restart'}`,
+      `• No ar há: ${minutos >= 60 ? `${Math.floor(minutos / 60)}h${String(minutos % 60).padStart(2, '0')}` : `${minutos} min`}`,
+      `• Hoje (${estado.memoria.dia}): ${estado.memoria.mensagens.length} mensagens na memória`,
+      '',
+      '*Gemini hoje*',
+      `• Chamadas: ${u.chamadas}`,
+      `• Tokens: ${formatarTokens(u.entrada)} de entrada (${formatarTokens(u.cache)} em cache), ${formatarTokens(u.saida)} de saída`,
+      `• Modelos: ${modelos.length} na fila (${modelos.length - lite} Flash, ${lite} Lite) · chaves do Gemini: ${ia.totalDeChaves()}${ia.totalDeChaves() > 1 ? ` (uso hoje: ${Object.entries(u.porChave || {}).map(([c, n]) => `chave ${c} = ${n}`).join(', ') || 'nenhum'})` : ''}`,
+      fora.length ? `• De castigo (todas as chaves): ${fora.map((m) => `${m.modelo} (volta em ${m.voltaEm})`).join(', ')}` : '• De castigo: nenhum ✅',
+      `• Reservas externas: ${reservasDisponiveis().join(', ') || 'nenhuma'}`,
+      '',
+      '*Últimas respostas*',
+      ...(ia.ultimasRespostas(6).length ? ia.ultimasRespostas(6).map((r) => `• ${r.hora} ${String(r.modelo).replace(/^gemini-/, '')}${r.chave ? ` (chave ${r.chave})` : ''}${r.motivo ? `: ${r.motivo}` : ''}`) : ['• nenhuma desde o último restart']),
     ];
     await enviar(jidGrupo, linhas.join('\n'), msg, { rapido: true });
     return true;
