@@ -18,7 +18,7 @@ import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
 import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarras } from './off.js';
-import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom } from './consciencia.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao } from './consciencia.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando } from './comandos.js';
@@ -148,6 +148,7 @@ async function deveEsperarFragmento(msg) {
     const temImagem = Boolean(conteudo.imageMessage);
     const temAudio = Boolean(conteudo.audioMessage);
     if (!texto && !temImagem) return false;
+    if (pareceMetaConversa(texto)) return false; // "vou ajustar isso amanhã" é sobre o sistema, não pedaço de refeição
     const jids = jidsDoRemetente(msg.key);
     if (!jids.length) return false;
     const perfil = await buscarPerfil(jids).catch(() => null);
@@ -158,6 +159,7 @@ async function deveEsperarFragmento(msg) {
     const ultima = refs.filter((r) => jids.includes(r.jid)).sort((a, b) => b.minutos - a.minutos)[0];
     const minutosDesdeUltima = ultima ? minutosDe(horaLocal) - ultima.minutos : Infinity;
     if (!candidatoAFragmento({ texto, temImagem, temAudio, minutosDesdeUltima })) return false;
+    if (ultima && mencionaOutraRefeicao(texto, ultima.slot)) return false; // "o café da tarde eu tomei agora" não é pedaço do café da manhã
     const ultimas = estado.memoria.mensagens.slice(-4);
     const j = await comTempo(
       ia.julgarFragmento({
@@ -622,16 +624,23 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const rotulos = motivo && texto ? await comTempo(rotulosPara(texto), 10_000, 'rótulos').catch(() => '') : '';
   // a pessoa está contestando algo que a bot disse? (resposta citando a bot, menção, ou logo depois de uma fala dela)
   const anteriorFoiBot = historico.length >= 2 && historico[historico.length - 2]?.tipo === 'bot';
-  const contestacao = !temImagem && pareceContestacao(texto) && (Boolean(citacao && citacao.autor === ia.nomeDaBot()) || mencionaNome(texto, ia.nomeDaBot()) || anteriorFoiBot);
+  // conversa SOBRE a bot ("vou ajustar isso amanhã", "ela cismou", "tá rodando uma atualização"): não é comida, não é
+  // correção de refeição, não é fragmento; ela responde como gente e não registra nada
+  const metaConversa = !temImagem && !temAudio && pareceMetaConversa(texto);
+  if (metaConversa) console.log(`[consciencia] ${perfil.nome}: mensagem sobre o sistema, não sobre comida ("${String(texto).slice(0, 60)}")`);
+  const contestacao = !temImagem && !metaConversa && pareceContestacao(texto) && (Boolean(citacao && citacao.autor === ia.nomeDaBot()) || mencionaNome(texto, ia.nomeDaBot()) || anteriorFoiBot);
   if (contestacao) console.log(`[consciencia] ${perfil.nome} está contestando: "${String(texto).slice(0, 80)}"`);
   let rotulosAtuais = rotulos; // pode crescer se ela pedir PRODUTO
   // Mensagem parcelada da MESMA refeição (foto de mais um item, "tem X", "não tem Y", "pra substituir Z") até 30 min
   // depois do último registro: entra como refeição em andamento, e o registro é ajustado em vez de duplicado
   const minutosDesdeUltima = minhaUltima ? minutosDe(horaLocal) - minhaUltima.minutos : Infinity;
-  const parteDaMesma = minhaUltima && minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30 && !temAudio && ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
+  // não é parte da mesma: conversa sobre o sistema, ou mensagem que nomeia OUTRA refeição ("o café da tarde eu tomei agora")
+  const parteDaMesma =
+    minhaUltima && minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30 && !temAudio && !metaConversa && !mencionaOutraRefeicao(texto, minhaUltima.slot) &&
+    ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', rotulos, contestacao, emAndamento };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -639,9 +648,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   let registro = null; // linhas REGISTRO da IA: apagar/corrigir registros do dia a pedido da pessoa
   let refeicao = null; // linha REFEICAO da IA: números e tipo da refeição consumida, estruturados
   let produto = null; // "PRODUTO: x": ela quer o rótulo do Open Food Facts antes de responder
+  let reacao = null; // linha REAGIR: ⭐ -> reação com emoji na mensagem da pessoa
   try {
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
-    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
+    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto, reacao } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
   } catch (e) {
     // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -677,6 +687,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     querAudio = r2.audio || querAudio;
     registro = r2.registro || registro;
     refeicao = r2.refeicao || refeicao;
+    reacao = r2.reacao || reacao;
     origemExterna = ia.ultimaFoiExterna();
     if (fontes.length) {
       ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
@@ -700,6 +711,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     querAudio = r2.audio || querAudio;
     registro = r2.registro || registro;
     refeicao = r2.refeicao || refeicao;
+    reacao = r2.reacao || reacao;
     origemExterna = ia.ultimaFoiExterna();
   }
 
@@ -738,6 +750,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
         querAudio = r3.audio || querAudio;
         registro = r3.registro || registro;
         refeicao = r3.refeicao || refeicao;
+        reacao = r3.reacao || reacao;
         origemExterna = ia.ultimaFoiExterna();
         const ainda = numerosSuspeitos(resposta, conhecidos, { extras: [Number(refeicao?.kcal) || 0, meu.total + (Number(refeicao?.kcal) || 0)].filter(Boolean) });
         if (ainda.length) console.warn(`[consciencia] ainda suspeito depois de refazer: ${ainda.map((s) => s.numero).join(', ')} kcal (enviando assim mesmo)`);
@@ -771,10 +784,14 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // (modelo externo que não escreveu a linha).
   const TIPOS = new Set(['cafe', 'lanche_manha', 'almoco', 'lanche', 'jantar', 'ceia']);
   const estruturada = refeicao && Number(refeicao.kcal) > 0 && Number(refeicao.kcal) < 8000 ? refeicao : null;
-  const correcaoEstruturada = Boolean(estruturada?.correcao) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 45;
+  // a pessoa disse QUANDO comeu ("esqueci de informar meu café da manhã, foi às 8h20"): a refeição é retroativa, com a
+  // hora dita, e não é correção nem parte da última refeição registrada
+  const horaDita = typeof estruturada?.hora === 'string' && /^\d{1,2}[:h]\d{2}$/.test(estruturada.hora.trim()) ? estruturada.hora.trim().replace('h', ':').padStart(5, '0') : null;
+  const retroativa = horaDita != null && Math.abs(minutosDe(horaDita) - minutosDe(horaLocal)) > 45;
+  const correcaoEstruturada = !retroativa && Boolean(estruturada?.correcao) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 45;
   // parte da mesma refeição (mensagem parcelada) com números novos também é correção do registro anterior, não refeição nova
-  const correcaoRecente = correcaoEstruturada || ((parteDaMesma || (!temAudio && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30)) && Boolean(estruturada || lerEstimativa(resposta)));
-  const foiRefeicao = !ehPedido && !blocoDeSugestao && (Boolean(estruturada) || temBloco || correcaoRecente || (temImagem && Boolean(resposta) && !naoEhComida));
+  const correcaoRecente = !retroativa && (correcaoEstruturada || ((parteDaMesma || (!temAudio && !metaConversa && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30)) && Boolean(estruturada || lerEstimativa(resposta))));
+  const foiRefeicao = !ehPedido && !metaConversa && !blocoDeSugestao && (Boolean(estruturada) || temBloco || correcaoRecente || (temImagem && Boolean(resposta) && !naoEhComida));
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
   if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
@@ -793,6 +810,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   let enviado = null;
   if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     enviado = await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
+    // reação com emoji na mensagem da pessoa (linha REAGIR da IA): prato nota 10, piada boa, conquista
+    if (reacao && !contestacao) reagir(jidGrupo, msg.key, reacao).catch(() => {});
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
     // Nota de voz: sempre quando a pessoa pediu; fora de pedido só quando ela marcou AUDIO: sim, com teto (1 por dia, 2 por semana)
     const pediu = pedidoDeAudio(texto);
@@ -835,6 +854,13 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       if (est.kcal) set.estimativa = est;
       const tipo = reg.tipo && lerTipoRefeicao(`Refeição: ${reg.tipo}`);
       if (tipo) set.slot = tipo;
+      // "o café foi às 8h20, não agora": move o registro pra hora em que a pessoa comeu
+      const novaHora = typeof reg.mover_para === 'string' && /^\d{1,2}[:h]\d{2}$/.test(reg.mover_para.trim()) ? reg.mover_para.trim().replace('h', ':').padStart(5, '0') : null;
+      if (novaHora) {
+        set.horaLocal = novaHora;
+        set.minutos = minutosDe(novaHora);
+        if (!tipo && alvo.slot === slotDaHora(alvo.horaLocal || alvo.hora).id) set.slot = slotDaHora(novaHora).id; // tipo era só pela hora: acompanha
+      }
       if (typeof reg.descricao === 'string' && reg.descricao.trim()) set.descricao = reg.descricao.trim().slice(0, 220);
       if (Object.keys(set).length) {
         await atualizarRefeicao(alvo._id, set);
@@ -851,7 +877,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   if (foiRefeicao) {
     // O tipo da refeição vem do que a IA entendeu (a pessoa disse "café da manhã"); numa correção, o da refeição corrigida
     const tipoEstruturado = estruturada && TIPOS.has(String(estruturada.tipo || '').trim()) ? String(estruturada.tipo).trim() : null;
-    const slotFinal = (correcaoRecente && minhaUltima?.slot) || tipoEstruturado || lerTipoRefeicao(resposta) || slot.id;
+    // refeição retroativa: hora e tipo pela hora DITA (café das 8h20 informado às 15h é café, às 08:20)
+    const horaRegistro = retroativa ? horaDita : horaLocal;
+    const slotFinal = (correcaoRecente && minhaUltima?.slot) || tipoEstruturado || (retroativa ? slotDaHora(horaDita).id : null) || lerTipoRefeicao(resposta) || slot.id;
+    if (retroativa) console.log(`[refeicoes] ${perfil.nome}: refeição informada agora mas comida às ${horaDita} (registro retroativo, ${slotFinal})`);
     // Números: primeiro a linha REFEICAO; sem ela, o texto; sem números legíveis (modelo reserva), estimativa num modelo leve
     let estimativa = estruturada
       ? { kcal: Math.round(Number(estruturada.kcal)), p: Math.round(Number(estruturada.proteina) || 0), c: Math.round(Number(estruturada.carbo) || 0), g: Math.round(Number(estruturada.gordura) || 0) }
@@ -866,15 +895,16 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       nome: perfil.nome,
       dia,
       hora,
-      horaLocal, // no fuso da pessoa (Paris é Paris), pra mostrar no !hoje e nos resumos
-      minutos: correcaoRecente ? minhaUltima.minutos : minutosDe(horaLocal), // correção cai no registro que corrige
+      horaLocal: horaRegistro, // no fuso da pessoa (Paris é Paris); na retroativa, a hora em que ela COMEU
+      minutos: correcaoRecente ? minhaUltima.minutos : minutosDe(horaRegistro), // correção cai no registro que corrige
       slot: slotFinal,
       resumo: resumoRefeicao.slice(0, 120),
       descricao: descricaoBase,
       estimativa, // kcal e macros da análise (ou estimativa de reserva), gravados agora: o resumo semanal soma daqui
       correcao: Boolean(correcaoRecente),
+      manual: retroativa, // retroativa não se funde com o registro vizinho no banco
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
-    refeicaoRegistrada = { slot: slotFinal, minutos: correcaoRecente ? minhaUltima.minutos : minutosDe(horaLocal) };
+    refeicaoRegistrada = { slot: slotFinal, minutos: correcaoRecente ? minhaUltima.minutos : minutosDe(horaRegistro) };
     const mensagens = estado.memoria.mensagens;
     // marca a mensagem da pessoa (a última que não é da bot) como refeição, pro diário e pro resumo
     for (let i = mensagens.length - 1; i >= 0; i--) {

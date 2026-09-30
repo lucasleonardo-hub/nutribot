@@ -185,7 +185,13 @@ export async function registrarRefeicao(r) {
   const mesmaRefeicao = ultima && Math.abs(r.minutos - ultima.minutos) <= 30 && (ultima.slot === r.slot || !r.manual);
   if (mesmaRefeicao) {
     const set = { atualizadoEm: new Date() };
-    if (r.estimativa) set.estimativa = r.estimativa; // estimativa corrigida substitui a anterior
+    // correção ("eram 2 pães", rótulo): a estimativa nova é da refeição inteira e SUBSTITUI a anterior.
+    // complemento (a sobremesa 18 min depois da janta): a estimativa nova é só do item novo e SOMA na anterior.
+    // (em 28/09 o brownie de 160 kcal substituiu os 420 kcal da janta do Heitor por falta desta distinção)
+    if (r.estimativa) {
+      if (r.correcao || !ultima.estimativa?.kcal) set.estimativa = r.estimativa;
+      else set.estimativa = { kcal: (ultima.estimativa.kcal || 0) + (r.estimativa.kcal || 0), p: (ultima.estimativa.p || 0) + (r.estimativa.p || 0), c: (ultima.estimativa.c || 0) + (r.estimativa.c || 0), g: (ultima.estimativa.g || 0) + (r.estimativa.g || 0) };
+    }
     if (r.correcao) {
       // correção ("não é picanha, é fígado"): a descrição nova SUBSTITUI a antiga
       if (r.descricao) set.descricao = r.descricao.slice(0, 220);

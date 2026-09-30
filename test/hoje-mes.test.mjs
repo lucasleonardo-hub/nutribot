@@ -11,7 +11,8 @@ import { acharRegistro } from '../resumo.js';
 import { aplicarAtualizacao } from '../perfis.js';
 import { normalizarEnvio, fundir, tokensRelogio } from '../relogio.js';
 import { codigosDeBarras, ehCodigoBarras, normalizarProduto, blocoRotulos } from '../off.js';
-import { pareceContestacao, totaisConhecidos, numerosSuspeitos, contestacoesDoDia, blocoLicoes, candidatoAFragmento, ladoDoObjetivo, vocabularioErrado, removerFrasesCom } from '../consciencia.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, contestacoesDoDia, blocoLicoes, candidatoAFragmento, ladoDoObjetivo, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao } from '../consciencia.js';
+import { compilarRefeicoesDoBanco } from '../resumo.js';
 import { duracaoDe } from '../comandos.js';
 import { montarCorrecao, DESCULPAS } from '../revisao.js';
 import { agruparFotos } from '../mensagens.js';
@@ -344,6 +345,39 @@ test('rótulos (Open Food Facts): código de barras no texto, normalização e b
   assert.match(bloco, /por 100 g\/ml: 151 kcal · Proteína 5\.1 g · Carboidratos 16 g · Gorduras 7\.5 g \(açúcares 14\.2 g\)/);
   assert.match(bloco, /porção do rótulo: 100 g = 151 kcal · NOVA 4 \(ultraprocessado\)/);
   assert.equal(blocoRotulos([]), '');
+});
+
+test('conversa sobre a bot, outra refeição nomeada, compilação pelo banco e linha REAGIR', () => {
+  assert.equal(pareceMetaConversa('Pode mandar ela ajustar q ela aprende mas ja ta rodando uma atualização'), true);
+  assert.equal(pareceMetaConversa('Esse parte dos 7 dias em diante ta meio estranho vou ajustar amanhã'), true);
+  assert.equal(pareceMetaConversa('Ela ta doidinhakkkkk'), true);
+  assert.equal(pareceMetaConversa('Ta com probelma de visao'), true);
+  assert.equal(pareceMetaConversa('So ajuste pois o cafe da manha foi as 8h20'), false); // correção legítima da refeição
+  assert.equal(pareceMetaConversa('almocei arroz, feijão e frango'), false);
+  assert.equal(mencionaOutraRefeicao('E o café da tarde eu tomei agr foi a mesma coisa so q sem o pro force', 'cafe'), true);
+  assert.equal(mencionaOutraRefeicao('esqueci de informar meu cafe da manhã foi 4 fatias de pão', 'almoco'), true);
+  assert.equal(mencionaOutraRefeicao('Tem alface rúcula couve', 'almoco'), false);
+  assert.equal(mencionaOutraRefeicao('e mais um ovo no café', 'cafe'), false);
+  // compilação pelo banco: números dos registros (não do texto), balanço quando o perfil traz o gasto
+  const perfis = [{ nome: 'Lucas', jids: ['l'], peso: 75, objetivo: 'Hipertrofia', relogio: { gastos: { '2026-09-28': 2044 } } }, { nome: 'Ale', jids: ['a'], peso: 74, objetivo: 'perda de peso' }];
+  const refs = [
+    { dia: '2026-09-28', jid: 'l', horaLocal: '12:13', minutos: 733, slot: 'almoco', descricao: 'carne, macarrão, arroz', estimativa: { kcal: 870, p: 55, c: 100, g: 25 } },
+    { dia: '2026-09-28', jid: 'l', horaLocal: '08:18', minutos: 498, slot: 'cafe', descricao: 'pão, queijo', estimativa: { kcal: 680, p: 30, c: 80, g: 20 } },
+    { dia: '2026-09-27', jid: 'l', horaLocal: '12:00', minutos: 720, slot: 'almoco', descricao: 'ontem', estimativa: { kcal: 999, p: 1, c: 1, g: 1 } },
+  ];
+  const c = compilarRefeicoesDoBanco(refs, perfis, '2026-09-28');
+  assert.equal(c.totais.Lucas.kcal, 1550);
+  assert.equal(c.totais.Lucas.refeicoes, 2);
+  assert.equal(c.totais.Ale.refeicoes, 0);
+  assert.match(c.texto, /Café da manhã \(08:18\)[\s\S]*Almoço \(12:13\)/); // em ordem de hora
+  assert.match(c.texto, /gasto do relógio hoje: 2044 kcal -> balanço -494 kcal/);
+  assert.match(c.texto, /Ale \(objetivo: perda de peso\): 0 refeição/);
+  // REAGIR: um emoji só, some do texto; lixo não vira reação
+  const r = separarAtualizacao('Prato nota 10, criatura! 🔥\nREAGIR: ⭐');
+  assert.equal(r.reacao, '⭐');
+  assert.equal(r.texto, 'Prato nota 10, criatura! 🔥');
+  assert.equal(separarAtualizacao('Ok.\nREAGIR: legal').reacao, null);
+  assert.equal(separarAtualizacao('Ok.').reacao, null);
 });
 
 test('objetivo trocado: vocabulário do objetivo oposto é detectado e, no limite, a frase sai sem estragar o bloco', () => {

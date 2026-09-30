@@ -3,8 +3,9 @@
 
 import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde, ultimaPesagem, salvarPrevisao, previsaoAberta, marcarPrevisaoConferida } from './mongo.js';
 import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil } from './drive.js';
-import { correcoesDoDia, carregarAprendizados, salvarAprendizados } from './mongo.js';
+import { correcoesDoDia, carregarAprendizados, salvarAprendizados, refeicoesDoDia as refeicoesDoDiaBanco } from './mongo.js';
 import { contestacoesDoDia } from './consciencia.js';
+import { compilarRefeicoesDoBanco } from './resumo.js';
 import * as ia from './gemini.js';
 import { atualizarConhecimento, docsPara } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
@@ -129,7 +130,9 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
     const historico = [...estado.memoria.mensagens];
 
     if (grupo && (perfis.length || forcado)) {
-      const compilado = compilarRefeicoes(historico, perfis);
+      // números do dia vêm do BANCO (registros já corrigidos, fundidos e apagados); a transcrição é só reserva
+      const refsDoDia = await refeicoesDoDiaBanco(dia).catch(() => []);
+      const compilado = refsDoDia.length ? compilarRefeicoesDoBanco(refsDoDia, perfis, dia) : compilarRefeicoes(historico, perfis);
       // registros apagados/corrigidos durante o dia: os textos noturnos precisam saber que o que foi dito antes está errado
       const correcoes = await correcoesDoDia(dia).catch(() => []);
       if (correcoes.length) {

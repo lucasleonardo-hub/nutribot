@@ -124,6 +124,29 @@ export function removerFrasesCom(texto, termos) {
     .trim();
 }
 
+// ---------- Conversa SOBRE a bot (bug, ajuste, sistema) e menção a outra refeição ----------
+const RE_META =
+  /\b(bugs?|bugou|bugada|vou ajustar|vou arrumar|vou ver aqui|vou corrigir (ela|isso|o bot|a bot)|arrumar (isso|ela)|ajustar (isso|ela|o bot|a bot|amanh[ãa]|depois|dps)|atualiza[çc][ãa]o|atualizar (ela|o bot|a bot)|deploy|c[óo]digo|codigo|sistema|painel|planilha|compila|banco de dados|servidor|render|prompt|api|prob\w*ma de vis[ãa]o|doidinh\w*|caducando|caducou|alta demanda|rodando (uma )?atualiza|t[áa] rodando|ela (t[áa]|est[áa]|ficou|cismou|pensa|entende|aprende|corrige|errou|confundiu|leu)|coitada|meio estranho|dps ela corrige|depois ela corrige)\b/i;
+/** A mensagem fala DA bot (bug, ajuste, sistema, "ela cismou"), não de comida? */
+export const pareceMetaConversa = (texto) => RE_META.test(String(texto || ''));
+
+const TIPO_REFEICAO = [
+  ['lanche_manha', /lanche da manh[ãa]|pr[ée][\s-]?treino|p[óo]s[\s-]?treino/i],
+  ['lanche', /lanche(?: da tarde)?|caf[eé] da tarde|lanchinho/i],
+  ['cafe', /caf[eé](?: da manh[ãa])?(?! da tarde)/i],
+  ['almoco', /almo[çc]o|almocei/i],
+  ['jantar', /janta(?:r|rzinho|inha)?|jantei/i],
+  ['ceia', /ceia/i],
+];
+/** A mensagem nomeia uma refeição DIFERENTE da última registrada ("o café da tarde eu tomei agora" logo depois do café)? */
+export function mencionaOutraRefeicao(texto, slotUltima) {
+  const t = String(texto || '');
+  const achados = TIPO_REFEICAO.filter(([, re]) => re.test(t)).map(([id]) => id);
+  if (!achados.length) return false;
+  // "café da tarde" casa com lanche e não com cafe: a ordem da lista e o lookahead cuidam disso
+  return achados.some((id) => id !== slotUltima);
+}
+
 /** Bloco das regras ativas pro system prompt. '' sem regras. */
 export function blocoLicoes(regras) {
   const lista = (regras || []).map((r) => String(r || '').trim()).filter(Boolean).slice(0, 8);

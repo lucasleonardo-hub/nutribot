@@ -119,8 +119,10 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - NÚMEROS DO RELÓGIO E DO ACOMPANHAMENTO: cite como estão (5h03 de sono, 77,0 kg, −380 kcal), sem "pouco mais de" nem "quase". Não repita o mesmo dado do relógio em mensagens seguidas do mesmo dia; ele já foi dito uma vez.
 - SÓ O NOME DA REFEIÇÃO: se a pessoa mandar apenas "lanche da tarde", "era o almoço", "café" logo depois de uma foto ou relato já analisado, é rótulo, não refeição nova: confirme em uma linha, sem bloco e sem estimativa.
 - NOTA DE VOZ: você pode mandar a resposta também em áudio, acrescentando no FIM a linha oculta AUDIO: sim. Faça isso SEMPRE que a pessoa pedir áudio ("manda em áudio", "me dá o resumo de hoje em áudio", "responde falando"). Fora de pedido, só raramente, quando o momento for seu de verdade (comemoração de meta, puxão de orelha carinhoso, desabafo, sexta-feira à noite): no máximo umas 2 vezes por semana, nunca em análise de prato, nunca em dois dias seguidos (o sistema corta o excesso). Quando marcar AUDIO: sim, escreva a resposta pra ser FALADA: frases curtas, sem bloco de refeição, sem emoji, sem lista, até 90 palavras.
-- REGISTROS DO DIA: o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" lista cada registro com o horário. Você NÃO apaga nem altera registro sozinha, o sistema faz: quando a pessoa pedir pra apagar um registro ("remove esse almoço das 11:03", "apaga o lanche das 18h13", "esse registro tá errado") ou corrigir os números ou o tipo de um ("esse jantar foi 600 kcal", "isso era lanche"), acrescente no FIM da resposta a linha oculta REGISTRO: {"apagar": "11:03"} ou REGISTRO: {"hora": "18:13", "kcal": 799, "proteina": 26, "carbo": 150, "gordura": 10, "tipo": "lanche"} (a hora exatamente como está na lista; só os campos que mudam; "apagar": "ultimo" vale pro último registro dela; um registro por linha, dois pedidos = duas linhas). Só diga que apagou ou corrigiu quando escrever essa linha: sem ela NADA muda no sistema, então nunca prometa "já ajustei aqui" nem explique um "bug do sistema" que você não conferiu.
+- REGISTROS DO DIA: o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" lista cada registro com o horário. Você NÃO apaga nem altera registro sozinha, o sistema faz: quando a pessoa pedir pra apagar um registro ("remove esse almoço das 11:03", "apaga o lanche das 18h13", "esse registro tá errado") ou corrigir os números ou o tipo de um ("esse jantar foi 600 kcal", "isso era lanche"), acrescente no FIM da resposta a linha oculta REGISTRO: {"apagar": "11:03"} ou REGISTRO: {"hora": "18:13", "kcal": 799, "proteina": 26, "carbo": 150, "gordura": 10, "tipo": "lanche"} (a hora exatamente como está na lista; só os campos que mudam; "apagar": "ultimo" vale pro último registro dela; um registro por linha, dois pedidos = duas linhas; pra mudar a HORA de um registro ("o café foi às 8h20, não agora"), REGISTRO: {"hora": "15:08", "mover_para": "08:20", "tipo": "cafe"}). Só diga que apagou ou corrigiu quando escrever essa linha: sem ela NADA muda no sistema, então nunca prometa "já ajustei aqui" nem explique um "bug do sistema" que você não conferiu.
 - PRODUTOS FIXOS DA PESSOA: quando a pessoa mandar o rótulo de algo que consome sempre e pedir pra guardar ("vai ser sempre esse, deixa salvo"), grave na linha ATUALIZAR: {"produto": {"nome": "hipercalórico", "porcao": "160 g de pó + 300 ml de leite integral", "kcal": 799, "proteina": 26, "carbo": 150, "gordura": 10}}. Quando o perfil trouxer "Produtos fixos", esses números são a verdade daquele item: copie-os na estimativa em vez de estimar. A porção é a do produto salvo, não a quantidade de líquido que a pessoa citou (300 ml de leite NÃO são 300 g de pó).
+- CONVERSA SOBRE VOCÊ MESMA: quando a mensagem fala de você como sistema (bug, "vou ajustar", "tá rodando uma atualização", "ela cismou", "problema de visão", "alta demanda", painel, código), NÃO é comida, NÃO é correção de refeição e NÃO é pedido de análise. Quem cuida do seu código é o administrador do grupo (marcado nos perfis). Responda como gente: curto, leve, pode brincar com você mesma, sem bloco, sem dica, sem registrar nada e sem "vamos ajustar aqui" a refeição.
+- REAGIR COM EMOJI: você pode reagir à mensagem da pessoa (como quem toca no emoji no WhatsApp) acrescentando no FIM a linha oculta REAGIR: ⭐ (um emoji só). Use com parcimônia, quando merecer de verdade: prato nota 9 ou mais (⭐ ou 🔥), piada que te pegou (😂), conquista ou virada (👏 ou 💪), carinho (❤️). No máximo uma a cada poucas mensagens, nunca em contestação, correção ou bronca, e a reação não substitui a resposta em texto.
 - ÁGUA E ÁLCOOL: se a pessoa disser AGORA que bebeu água ("tomei 500 ml", "já bebi 2 litros hoje") ou álcool ("2 cervejas", "uma taça de vinho"), acrescente no FIM da resposta a linha oculta HABITO: {"agua_ml": 500, "alcool_doses": 2} (só o que foi dito nesta mensagem; 1 dose = 1 lata de cerveja, 1 taça de vinho ou 1 shot). Não escreva essa linha em outra situação.
 - QUEM DISSE O QUÊ: cada linha do histórico começa com o nome de quem falou. Nunca atribua a fala, a refeição ou a foto de uma pessoa a outra, mesmo que duas pessoas comam a mesma coisa no mesmo horário (casal, família): trate cada registro como de quem mandou. A "MENSAGEM ATUAL DE X" é de X.
 - DATA: o contexto traz a data com o DIA DA SEMANA já calculado (ex: "domingo, 20/09/2026"). Use exatamente esse dia da semana; nunca deduza a partir do número da data.
@@ -143,7 +145,7 @@ FORMATO (WhatsApp):
   ⚖️ *Veredito:* (nota 0 a 10 + comentário sincero ligado ao objetivo)
   💡 *Dica:* (a orientação prática)
 - Nutrientes SEMPRE por extenso (Proteína, Carboidratos, Gorduras). Nunca abrevie como P/C/G.
-- LINHA OCULTA REFEICAO (obrigatória em TODA análise de comida CONSUMIDA e em toda correção de estimativa): no FIM da resposta, sozinha numa linha, REFEICAO: {"tipo": "almoco", "itens": "200 g de arroz, 150 g de feijão, 1 sobrecoxa assada", "kcal": 930, "proteina": 59, "carbo": 112, "gordura": 30, "correcao": false}. tipo é UM destes: cafe, lanche_manha, almoco, lanche, jantar, ceia. Os números são OS MESMOS do bloco visível. correcao: true quando você corrige a estimativa da refeição anterior (rótulo mandado depois, "eram 2 pães", "a vitamina tem whey"). Em sugestão, plano, rótulo só avaliado, receita ou dúvida, NÃO escreva a linha. É por esta linha que o sistema registra a refeição; ela é removida antes de ir pro grupo.
+- LINHA OCULTA REFEICAO (obrigatória em TODA análise de comida CONSUMIDA e em toda correção de estimativa): no FIM da resposta, sozinha numa linha, REFEICAO: {"tipo": "almoco", "itens": "200 g de arroz, 150 g de feijão, 1 sobrecoxa assada", "kcal": 930, "proteina": 59, "carbo": 112, "gordura": 30, "correcao": false, "hora": "08:20"}. tipo é UM destes: cafe, lanche_manha, almoco, lanche, jantar, ceia. "hora" (HH:MM, no fuso da pessoa) só quando ela DISSER quando comeu ("às 8h20 eu comi", "esqueci de informar meu café da manhã", "de manhã tomei"): é a hora em que a refeição aconteceu, não a hora da mensagem; sem essa informação, omita o campo. Os números são OS MESMOS do bloco visível. correcao: true quando você corrige a estimativa da refeição anterior (rótulo mandado depois, "eram 2 pães", "a vitamina tem whey"). Em sugestão, plano, rótulo só avaliado, receita ou dúvida, NÃO escreva a linha. É por esta linha que o sistema registra a refeição; ela é removida antes de ir pro grupo.
 - Se a pessoa COMPLEMENTA ou CORRIGE a refeição que acabou de mandar (mesma refeição, poucos minutos depois: "a vitamina tem whey", "eram 2 pães"), NÃO refaça a análise inteira: responda curto, agradeça o detalhe e ajuste só a linha "🔥 *Estimativa corrigida:* ~XXX kcal · Proteína XX g · Carboidratos XX g · Gorduras XX g" quando mudar algo relevante.
 - Se não dá pra ver comida na foto, brinca e pede outra.
 
@@ -230,8 +232,10 @@ function blocoPerfis(perfis) {
       const dieta = p.dieta ? `, dieta: ${p.dieta}${em('dieta')}` : ', dieta AINDA NÃO INFORMADA (pergunte se é vegetariana/vegana ou tem restrição)';
       const restr = p.restricoes ? `, restrições: ${p.restricoes}${em('restricoes')}` : '';
       const apelido = p.semApelido ? ', NÃO QUER apelido (chame pelo nome)' : p.apelido ? `, apelido fixado pela própria pessoa: "${p.apelido}" (use esse)` : '';
+      // quem cuida do seu código: quando fala de bug/ajuste/atualização, está falando de você como sistema, não de comida
+      const admin = process.env.ADMIN_JID && (p.jids || []).includes(process.env.ADMIN_JID) ? ', ADMINISTRADOR do sistema (é quem programa e ajusta você; "vou ajustar", "bug", "atualização" na boca dele é sobre você, não sobre comida)' : '';
       const meta = p.metaPeso ? `, meta: ${String(p.metaPeso).replace('.', ',')} kg${p.metaPrazo ? ` até ${p.metaPrazo}` : ''}` : '';
-      const base = `- ${p.nome}: ${p.peso} kg${em('peso')}, ${p.altura} cm${em('altura')}, objetivo: ${p.objetivo}${em('objetivo')}${meta}${lugar}${dieta}${restr}${apelido}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
+      const base = `- ${p.nome}: ${p.peso} kg${em('peso')}, ${p.altura} cm${em('altura')}, objetivo: ${p.objetivo}${em('objetivo')}${meta}${lugar}${dieta}${restr}${apelido}${admin}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
       const horarios = p.horarios ? `\n  Horários habituais que eu já saquei: ${p.horarios}` : '';
       const rotina = p.rotina ? `\n  O que eu já sei da rotina dela(e): ${p.rotina}` : '';
       const notas = p.notas ? `\n  Minhas notas sobre ela(e): ${String(p.notas).slice(0, 700)}` : '';
@@ -604,7 +608,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, rotulos, contestacao = false, emAndamento = null, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, rotulos, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -635,6 +639,9 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
+    (metaConversa
+      ? `ESTA MENSAGEM FALA DE VOCÊ COMO SISTEMA (bug, ajuste, atualização, painel): não é comida, não é correção de refeição, não é pedido de análise. Responda como gente, curto e leve, pode brincar com você mesma; sem bloco, sem dica, sem "vamos ajustar aqui" a refeição e sem linha REFEICAO ou REGISTRO.\n\n`
+      : '') +
     (emAndamento
       ? `REFEIÇÃO EM ANDAMENTO DESTA PESSOA (registrada às ${emAndamento.hora}, ~${emAndamento.kcal || '?'} kcal): ${emAndamento.descricao || '(sem descrição)'}\n` +
         `A mensagem atual chegou poucos minutos depois e é PARTE DA MESMA refeição (mais um item na foto, "tem X", "não tem Y", "pra substituir Z", "uma porção"). NÃO refaça a análise do zero e NÃO repita item que ela negou: parta da lista acima, aplique a mudança, e responda CURTO com "🔥 *Estimativa corrigida:*" do TOTAL da refeição inteira e a linha REFEICAO com "correcao": true e "itens" = a lista COMPLETA e correta depois da mudança. Se for claramente uma refeição nova e diferente (outro horário de comer, outro tipo), aí sim analise como nova. Se NÃO der pra saber se é parte dela ou coisa nova (fora do habitual), NÃO analise: pergunte em UMA linha, no seu tom ("isso aí é parte do almoço de agora ou outra coisa?"), sem bloco e sem linha REFEICAO.\n\n`
@@ -705,6 +712,14 @@ export function separarAtualizacao(resposta) {
     }
     texto = `${texto.slice(0, h.index)}\n${texto.slice(h.index + h[0].length)}`.trim();
   }
+  // linha oculta REAGIR: ⭐ -> o sistema reage com esse emoji na mensagem da pessoa (prato nota 10, piada boa, conquista)
+  let reacao = null;
+  const rg2 = texto.match(/\n?\s*REAGIR:\s*(\S{1,8})\s*$/imu);
+  if (rg2) {
+    const emoji = rg2[1].trim();
+    if (/^\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic}|\p{Emoji_Modifier})*$/u.test(emoji)) reacao = emoji;
+    texto = `${texto.slice(0, rg2.index)}\n${texto.slice(rg2.index + rg2[0].length)}`.trim();
+  }
   // linha oculta REFEICAO: {"tipo": "almoco", "itens": "...", "kcal": 930, ...} -> registro estruturado (não depende de regex no texto)
   let refeicao = null;
   const rf = texto.match(/\n?\s*REFEICAO:\s*(\{[^\n]*\})\s*/i);
@@ -738,7 +753,7 @@ export function separarAtualizacao(resposta) {
     texto = texto.slice(0, m.index).trim();
   }
   if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
-  return { texto, atualizacao, habito, audio, registro, refeicao, produto };
+  return { texto, atualizacao, habito, audio, registro, refeicao, produto, reacao };
 }
 
 // ============================================================
@@ -814,13 +829,18 @@ export async function resumoDiario({ dia, perfis, historico, persona, refeicoes 
       `Hoje é ${dataExtenso(dia)}.\n\nPERFIS:\n${blocoPerfis(perfis)}\n\n` +
       `TRANSCRIÇÃO DO DIA (só pra contexto de tom, acertos e conversas; os números oficiais estão no bloco seguinte):\n${blocoHistorico(historico, 400)}\n\n` +
       `REFEIÇÕES REGISTRADAS HOJE, POR PESSOA (compiladas pelo sistema a partir das suas próprias análises; use ESTES números e ESTA lista, sem omitir nenhuma refeição e sem recalcular):\n${refeicoes}\n\n` +
-      `Escreva o *RESUMO DO DIA*, CURTO (formato WhatsApp, sem cabeçalhos #, no máximo 60 palavras por pessoa e 200 no total), no seu personagem: simpática, sincera, engraçada. Para CADA pessoa cadastrada, exatamente este formato:\n` +
-      `*Nome*: ~X kcal · Proteína X g (✅ bateu a meta / ⚠️ faltou X g pra meta de ~1,6 a 2,2 g/kg) · N refeições registradas\n` +
-      `uma frase só com o que mais pegou no dia dessa pessoa (o melhor OU o pior momento, com o objetivo dela em mente; se saiu muito do combinado, decepção sincera e curta).\n` +
-      `Se a pessoa não registrou nada: "*Nome*: nada registrado hoje" + uma frase cobrando com carinho.\n` +
-      `Feche com UMA linha: "🏆 Placar do dia:" com o ranking com humor leve.\n` +
-      `Se o bloco trouxer ACOMPANHAMENTO de alguém (balanço energético do relógio, média de 7 dias), a frase dessa pessoa pode dizer em meia linha se está no rumo do objetivo.\n` +
-      `REGRAS: números copiados do bloco (não recalcule, não invente refeição; se a conversa citar outro total, o bloco vence, porque registros são corrigidos ao longo do dia); nutrientes por extenso; no máximo 1 emoji por linha; sem [[links]] neste resumo; sem lista de refeições, sem dica de amanhã, sem agenda, sem nota.`,
+      `Escreva o *RESUMO DO DIA* no seu personagem (simpática, sincera, engraçada), EXATAMENTE nesta estrutura, uma seção por pessoa cadastrada, separadas por linha em branco (WhatsApp: tópicos com "•", negrito com UM asterisco, sem cabeçalhos #, sem [[links]]):\n\n` +
+      `*Nome* · objetivo em 2 ou 3 palavras\n` +
+      `• ~X kcal · Proteína X g (✅ meta batida | ⚠️ faltou X g) · N refeições\n` +
+      `• Balanço: +X kcal / −X kcal em relação ao gasto do relógio (SÓ se o bloco trouxer o gasto; senão omita esta linha inteira)\n` +
+      `• Destaque: uma frase curta com o melhor momento alimentar do dia\n` +
+      `• Ajuste: uma frase curta e concreta pra amanhã, ligada ao objetivo DESSA pessoa (se saiu muito do combinado, decepção sincera aqui, curta)\n\n` +
+      `Quem não registrou nada: "*Nome* · objetivo" e um único tópico "• Nada registrado hoje: <cobrança carinhosa em uma frase>".\n` +
+      `Feche com "🏆 *Placar do dia*: <ranking em uma linha, com humor leve>".\n` +
+      `REGRAS: números copiados do bloco (não recalcule, não invente refeição; se a conversa citar outro total, o bloco vence, porque registros são corrigidos ao longo do dia). ` +
+      `Superávit ou déficit só se julgam com a linha de balanço do bloco; sem gasto do relógio, não diga que "exagerou" nem que "faltou" caloria. ` +
+      `NÃO fale de agenda, aulas, compromissos, clima, sono, passos, treino, bugs do sistema nem da sua própria conversa; nada de dica além do tópico Ajuste; não repita a mesma frase em duas seções. ` +
+      `Máximo 45 palavras por pessoa, no máximo 1 emoji por linha, nutrientes por extenso.`,
     // pensar:false: o raciocínio dos 3.x consumia o limite de saída e o resumo saía cortado; 200 palavras não precisam dele
     config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 3000 },
   });
@@ -1292,6 +1312,7 @@ export async function julgarFragmento({ nome, texto, temImagem, emAndamento, ult
         (emAndamento ? `Há ${emAndamento.minutos} min você registrou uma refeição dela: "${emAndamento.descricao}" (~${emAndamento.kcal || '?'} kcal).\n` : '') +
         (ultimas?.length ? `ÚLTIMAS MENSAGENS DA CONVERSA:\n${ultimas.map((m) => `- ${m.hora} ${m.nome}: ${String(m.texto || '').slice(0, 160)}`).join('\n')}\n` : '') +
         `\nJulgue como uma pessoa julgaria: isto é uma mensagem completa (refeição nova, pergunta, papo) ou parece SÓ UM PEDAÇO de informação que continua a refeição em andamento (mais um item, "tem X", "não tem Y", "uma porção", "pra substituir Z", legenda de uma palavra) e provavelmente vem mais coisa em seguida?\n` +
+        `NÃO é fragmento: mensagem sobre o bot/sistema (bug, ajuste, atualização, "ela cismou", painel), comentário, risada, reação ("kkk", "coitada", "vou ver aqui"), pergunta, ou refeição de OUTRO tipo/horário ("o café da tarde eu tomei agora" logo depois do café da manhã).\n` +
         `Responda em JSON: "fragmento" (true se é pedaço da refeição em andamento), "esperar" (true SÓ se parece que a pessoa ainda está mandando partes e vale esperar até um minuto pra responder tudo de uma vez; false se é um pedaço único e fechado ou uma mensagem completa), "motivo" (até 15 palavras).`,
       config: {
         temperature: 0.1,

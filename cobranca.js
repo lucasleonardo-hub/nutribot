@@ -8,6 +8,7 @@ import { agora, fusoDe, SLOTS, minutosDe, hhmmDe, comTempo } from './util.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
 import { lembrar, garantirDiaAtual } from './dia.js';
+import { vocabularioErrado, removerFrasesCom } from './consciencia.js';
 import { enriquecerPerfis } from './perfis.js';
 import { ocupadoAgora } from './agenda.js';
 
@@ -69,8 +70,16 @@ export async function verificarCobrancas() {
         dossie: await comTempo(dossieDe(p), 20_000, 'dossiê').catch(() => ''),
       });
       if (msg && !/^silencio\W*$/i.test(msg)) {
-        await enviar(estado.memoria.grupo, msg);
-        await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: msg, tipo: 'bot' });
+        // objetivo trocado não passa nem na cobrança ("seu déficit (ops, superávit)" pra quem faz hipertrofia, 28/09 22:30)
+        let textoCobranca = msg;
+        const termos = p.objetivo ? vocabularioErrado(textoCobranca, p.objetivo) : [];
+        if (termos.length) {
+          textoCobranca = removerFrasesCom(textoCobranca, termos);
+          console.warn(`[cobranca] frases com objetivo trocado removidas pra ${p.nome}: ${termos.join(', ')}`);
+        }
+        if (!textoCobranca.trim()) continue;
+        await enviar(estado.memoria.grupo, textoCobranca);
+        await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: textoCobranca, tipo: 'bot' });
         console.log(`[cobranca] ${p.nome} sem ${slot.nome} (habitual ${hhmmDe(p._hab[slot.id].minutos)}, fuso ${fusoDe(p)})`);
       }
     } catch (e) {

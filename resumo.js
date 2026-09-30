@@ -91,6 +91,37 @@ export function compilarRefeicoes(historico, perfis) {
   return { texto: blocos.join('\n\n'), totais, porPessoa };
 }
 
+/**
+ * Mesma saída de compilarRefeicoes, mas a partir dos REGISTROS do banco (fonte da verdade: já corrigidos, fundidos e
+ * apagados ao longo do dia). A versão pela transcrição lia o primeiro número da resposta e, em 28/09, pegou 247 kcal de um
+ * item em vez dos 870 do almoço. Inclui gasto do relógio e balanço quando o perfil trouxer `relogio.gastos[dia]`.
+ */
+export function compilarRefeicoesDoBanco(refeicoes, perfis, dia) {
+  const blocos = [];
+  const totais = {};
+  const porPessoa = new Map();
+  for (const p of perfis) {
+    const minhas = (refeicoes || [])
+      .filter((r) => r.dia === dia && ((p.jids || []).includes(r.jid) || r.nome === p.nome))
+      .sort((a, b) => (a.minutos || 0) - (b.minutos || 0));
+    const lista = minhas.map((r) => ({ hora: r.horaLocal || r.hora, slot: r.slot, descricao: r.descricao || r.resumo || '', est: r.estimativa?.kcal ? r.estimativa : null }));
+    porPessoa.set(p.nome, lista);
+    const tot = lista.reduce((a, r) => (r.est ? soma(a, { kcal: r.est.kcal || 0, p: r.est.p || 0, c: r.est.c || 0, g: r.est.g || 0 }) : a), { kcal: 0, p: 0, c: 0, g: 0 });
+    totais[p.nome] = { refeicoes: lista.length, ...tot };
+    const metaP = p.peso ? ` (meta de proteína de ${p.nome.split(' ')[0]}: ~${Math.round(p.peso * 1.6)} a ${Math.round(p.peso * 2.2)} g)` : '';
+    const gasto = p.relogio?.gastos?.[dia];
+    const balanco = gasto && tot.kcal ? ` · gasto do relógio hoje: ${Math.round(gasto)} kcal -> balanço ${tot.kcal - gasto >= 0 ? '+' : ''}${Math.round(tot.kcal - gasto)} kcal` : '';
+    blocos.push(
+      `${p.nome} (objetivo: ${p.objetivo || '?'}): ${lista.length} refeição(ões) registrada(s)\n` +
+        (lista
+          .map((r) => `  - ${NOME_SLOT[r.slot] || r.slot} (${r.hora}): ${r.descricao || '(sem descrição)'}${r.est ? ` -> ${formatarEstimativa(r.est)}` : ' -> (sem estimativa)'}`)
+          .join('\n') || '  (nenhuma refeição registrada hoje)') +
+        (lista.length ? `\n  TOTAL DO DIA: ${formatarEstimativa(tot)}${metaP}${balanco}` : '')
+    );
+  }
+  return { texto: blocos.join('\n\n'), totais, porPessoa };
+}
+
 // ============================================================
 // Semana: totais por dia a partir dos registros de refeição (com estimativa gravada na hora da resposta)
 // ============================================================
