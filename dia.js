@@ -13,6 +13,7 @@ import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo, placar
 import { visaoDe } from './acompanhamento.js';
 import { linhaSemanaLugares } from './lugares.js';
 import { refletirTodos } from './reflexao.js';
+import { fecharPendentes } from './atividades.js';
 import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta } from './previsao.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
@@ -123,6 +124,12 @@ export async function garantirDiaAtual() {
 }
 
 export async function fecharDia({ forcado = false, diaAlvo } = {}) {
+  // atividade fixa perguntada e sem resposta até o fechamento: não houve (não infla o gasto)
+  try {
+    for (const p of (await listarPerfis()).filter((x) => x.atividadesPendentes?.length)) await fecharPendentes(p, diaAlvo || agora().dia);
+  } catch (e) {
+    console.warn('[atividades] pendentes:', e.message);
+  }
   if (estado.fechandoDia) return;
   estado.fechandoDia = true;
   const dia = diaAlvo || estado.memoria.dia;

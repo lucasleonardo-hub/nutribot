@@ -5,6 +5,7 @@
 // Nutri-Saude.md com o resumo fica na pasta da pessoa.
 
 import { google } from 'googleapis';
+import { somarGastosExtras } from './atividades.js';
 
 import { autenticacaoGoogle, salvarEmPasta } from './drive.js';
 import { colecao, registrarPesagem, salvarPerfil } from './mongo.js';
@@ -434,6 +435,7 @@ export async function aplicarDadosSaude(perfil, dados, { hoje, fonteNome = 'rel�
   // indicadores curtos no perfil: valem em toda resposta, inclusive no papo que não carrega o dossiê
   if (jid) {
     const relogio = indicadoresRelogio(dados, { hoje, comHevy });
+    somarGastosExtras(relogio, perfil.atividadesFeitas); // vôlei sem relógio confirmado pela localização entra no gasto do dia
     if (relogio?.linha) await salvarPerfil({ jids: perfil.jids, relogio }).catch((e) => console.error('[saude] indicadores no perfil:', e.message));
   }
   if (pastaId) {

@@ -87,7 +87,7 @@ const REGRAS = `COMO VOCÊ FALA:
 DADOS DA PESSOA (regra de ouro):
 - O que a pessoa DISSE NO GRUPO mais recentemente vale mais do que qualquer documento antigo. Documento da pasta é fotografia da data dele; o perfil traz a data de cada atualização. Se conflitar, use o mais recente e NUNCA repita dado velho como se fosse atual.
 - Quando a pessoa informar um dado novo sobre si (peso, altura, objetivo, cidade onde mora, dieta, alergia ou restrição, lesão), registre acrescentando NA ÚLTIMA LINHA da resposta, sozinha, exatamente neste formato:
-  ATUALIZAR: {"peso_kg": 74.5, "altura_cm": 180, "objetivo": "...", "cidade": "Curitiba", "fuso": "America/Sao_Paulo", "dieta": "vegetariana", "restricoes": "lactose", "meta_peso_kg": 80, "meta_prazo": "2027-03"}
+  ATUALIZAR: {"peso_kg": 74.5, "altura_cm": 180, "objetivo": "...", "cidade": "Curitiba", "fuso": "America/Sao_Paulo", "dieta": "vegetariana", "restricoes": "lactose", "genero": "masculino" | "feminino" | "outro", "meta_peso_kg": 80, "meta_prazo": "2027-03"}
   Use meta_peso_kg/meta_prazo quando a pessoa disser aonde quer chegar e até quando ("quero 80 kg até março"); o prazo vai como AAAA-MM ou AAAA-MM-DD.
   Só as chaves que mudaram. "fuso" é o identificador IANA do fuso horário da cidade. Essa linha é removida antes de ir pro grupo; nunca comente sobre ela.
 - Se faltar algo importante pro seu trabalho, pergunte de forma natural, no máximo UMA pergunta por mensagem e não em toda mensagem. Prioridade: (1) cidade onde a pessoa mora (pra acertar o fuso horário dela), (2) se é vegetariana/vegana ou tem restrição alimentar, (3) idade, treino e horários, trabalho, sono, o que gosta e odeia comer, medidas.
@@ -110,6 +110,8 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - TREINO DE FORÇA: quando o perfil trouxer a linha "Treino de força (Hevy)", você sabe quantas séries por grupo a pessoa fez na semana, o volume, o RPE e em quais exercícios a carga subiu ou caiu. Use isso naturalmente na conversa, como quem acompanha: elogie carga subindo, comente grupo muscular esquecido, ligue treino pesado com comida do dia ("treinou perna hoje, capricha no carboidrato"), e cruze com o objetivo (peso subindo sem carga subir = superávit virando gordura; em déficit, carga mantida = músculo preservado). A faixa de referência e o resto está no seu documento de treino. Comente quando fizer sentido, não em toda mensagem, e nunca prescreva treino: quem monta a planilha é o professor da pessoa.
 - AGENDA: o bloco "AGENDA" é do Google Agenda da PESSOA ATUAL e só existe pra ela. Use pra encaixar a comida na rotina real: não cobre refeição no meio de aula, reunião ou trabalho (comente depois, no primeiro intervalo); sugira o que cabe na janela livre que ela tem; avise na véspera quando o dia seguinte começa cedo ou emenda compromissos ("amanhã você tem aula 7h e reunião 8h30, deixa o café pronto hoje"); e ligue treino do dia com o que comer antes e depois. Cite o compromisso pelo nome quando ajudar ("depois da aula de Cálculo"). NUNCA comente a agenda de uma pessoa com outra pessoa do grupo, nem no resumo do dia: agenda é assunto entre você e o dono dela.
 - LUGARES: o bloco "LUGARES" vem da localização aproximada do celular da PESSOA ATUAL e só existe pra ela. Use como contexto de quem conhece a rotina dela: em casa dá pra cozinhar, na rua ou no trabalho a sugestão é o que se compra pronto; se ela está num restaurante na hora do almoço, espere a foto em vez de cobrar; academia hoje conta pra comida antes e depois; "faculdade à noite" pede jantar prático. Nunca escreva endereço, rua ou coordenada; a casa é só "casa"; nome de academia, restaurante ou mercado só na conversa com ela. Não anuncie que sabe onde ela está ("vi que você está em...") nem cite a localização em toda mensagem: use quando muda a dica. Se OUTRA pessoa perguntar onde alguém está, não sabe e não comenta.
+- GÊNERO E CONCORDÂNCIA: cada perfil traz o gênero da pessoa. Adjetivos, apelidos e gírias concordam com ele: pra homem "divo", "meu rei", "menino", "passado", "amigo"; pra mulher "diva", "rainha", "menina", "passada", "amiga"; "outro" ou desconhecido = forma neutra ("criatura", "gente", o nome). Apelido que você criou segue a mesma regra: nada de "diva" pra homem. Se o gênero não estiver no perfil, deduza pelo nome só pra concordância e pergunte quando couber (via ATUALIZAR genero).
+- ATIVIDADES FIXAS: o bloco "ATIVIDADES FIXAS" lista esporte sem relógio (vôlei, futebol) com dia, horário e gasto estimado por MET. O sistema confere pela localização e SOMA o gasto no dia sozinho quando confirma; você não soma por conta própria nem assume que houve. Se estiver "em dúvida", a pessoa responde "teve"/"não teve" e o sistema anota. Use pra contexto: dia de vôlei à noite pede lanche antes e proteína depois; se não houve, o gasto do dia é menor.
 - CRUZE AS FONTES: agenda, lugares, roteiro do dia, treino, relógio e acompanhamento são pedaços da MESMA pessoa. Antes de dar dica, junte: academia às 7h + aula às 10h = café que caiba na mochila e proteína logo depois do treino; faculdade até 22h = jantar precisa estar pronto ou ser simples; gasto alto no relógio hoje + almoço leve = a fome da noite vai vir, antecipe; janela apertada entre dois compromissos = comida pronta, não receita. Uma dica que ignora o roteiro do dia dela é dica genérica; evite.
 - CLIMA E ESTAÇÃO: quando o contexto de hora trouxer a estação do ano e o tempo na cidade da pessoa, use como quem olha pela janela: sopa em noite fria "cai bem", dia de calorão pede água e comida leve, chuva combina com treino em casa, amanhã quente pede hidratar mais. Só quando encaixar, não em toda mensagem. Cada um pode estar numa cidade e estação diferentes (quem mora no outro hemisfério tem a estação oposta): use a da pessoa com quem fala. Se NÃO houver linha de tempo no contexto, você não sabe como está o dia: não invente "dia lindo" nem "friozinho".
 - DADOS DO RELÓGIO: quando o perfil trouxer a linha "Relógio" ou o dossiê trouxer "DADOS DO RELÓGIO" (peso, gordura, sono, passos, treinos do Galaxy Watch), você SABE disso sem perguntar: não peça peso nem pergunte como dormiu se está ali. Use como quem conhece a rotina da pessoa: café chegando às 8h de quem levantou 05:56 ("já tá há 2 horas em pé sem comer?"), levantou às 9h quem costuma levantar às 6h ("dormiu até tarde hoje, hein"), dia com 3 mil passos, semana sem treino, noite de 5h e pedindo doce ("faz sentido"). Comente quando couber, não em toda mensagem. Compare com a média da pessoa, não com regra de livro. Bioimpedância de relógio oscila: fale de tendência, não de décimos.
@@ -242,7 +244,8 @@ function blocoPerfis(perfis) {
       // quem cuida do seu código: quando fala de bug/ajuste/atualização, está falando de você como sistema, não de comida
       const admin = process.env.ADMIN_JID && (p.jids || []).includes(process.env.ADMIN_JID) ? ', ADMINISTRADOR do sistema (é quem programa e ajusta você; "vou ajustar", "bug", "atualização" na boca dele é sobre você, não sobre comida)' : '';
       const meta = p.metaPeso ? `, meta: ${String(p.metaPeso).replace('.', ',')} kg${p.metaPrazo ? ` até ${p.metaPrazo}` : ''}` : '';
-      const base = `- ${p.nome}: ${p.peso} kg${em('peso')}, ${p.altura} cm${em('altura')}, objetivo: ${p.objetivo}${em('objetivo')}${meta}${lugar}${dieta}${restr}${apelido}${admin}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
+      const genero = p.genero ? `, gênero: ${p.genero} (concorde adjetivos, apelidos e gírias)` : ', gênero NÃO INFORMADO (deduza pelo nome só pra concordância e pergunte quando couber)';
+      const base = `- ${p.nome}: ${p.peso} kg${em('peso')}, ${p.altura} cm${em('altura')}${genero}, objetivo: ${p.objetivo}${em('objetivo')}${meta}${lugar}${dieta}${restr}${apelido}${admin}. Gírias/bordões dela(e): ${(p.girias || []).join(', ') || 'ainda aprendendo'}`;
       const horarios = p.horarios ? `\n  Horários habituais que eu já saquei: ${p.horarios}` : '';
       const rotina = p.rotina ? `\n  O que eu já sei da rotina dela(e): ${p.rotina}` : '';
       const notas = p.notas ? `\n  Minhas notas sobre ela(e): ${String(p.notas).slice(0, 700)}` : '';
@@ -615,7 +618,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, roteiro, rotulos, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, roteiro, atividades, rotulos, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -645,6 +648,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (agenda ? `AGENDA DE ${perfil.nome} (Google Agenda DELA(E), só pra falar COM ELA(E)):\n${agenda}\n\n` : '') +
     (lugares ? `${lugares}\n\n` : '') +
     (roteiro ? `${roteiro}\n\n` : '') +
+    (atividades ? `${atividades}\n\n` : '') +
     (perfil.reflexao?.sintese ? `COMO VOCÊ ENTENDE ${perfil.nome.split(' ')[0]} (sua reflexão de ${perfil.reflexao.dia}; pano de fundo pra escolher tom e dica, use só quando encaixar e sem dizer que "refletiu"): ${perfil.reflexao.sintese}\n\n` : '') +
     (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
@@ -780,7 +784,7 @@ export async function extrairDadosOnboarding(texto) {
   const json = await gerar({
     contents:
       `Extraia os dados de cadastro desta mensagem de WhatsApp. Converta unidades (ex: "1,80m" -> 180 cm; "80kg" -> 80). ` +
-      `"dieta": onivora | vegetariana | vegana | outra ("como de tudo", "normal" = onivora). "fuso": identificador IANA do fuso horário da cidade informada (ex: Curitiba -> America/Sao_Paulo; Manaus -> America/Manaus; Lisboa -> Europe/Lisbon). ` +
+      `"genero": masculino | feminino | outro (pelo que a pessoa disser de si ou pela concordância que ela usa: "sou vegetariana" = feminino, "cansado" = masculino; null se não der pra saber). "dieta": onivora | vegetariana | vegana | outra ("como de tudo", "normal" = onivora). "fuso": identificador IANA do fuso horário da cidade informada (ex: Curitiba -> America/Sao_Paulo; Manaus -> America/Manaus; Lisboa -> Europe/Lisbon). ` +
       `Se algum dado não estiver presente, deixe null e liste em "faltando".\n\nMENSAGEM: """${texto}"""`,
     config: {
       temperature: 0.1,
@@ -797,6 +801,7 @@ export async function extrairDadosOnboarding(texto) {
           cidade: { type: 'string', nullable: true },
           fuso: { type: 'string', nullable: true },
           dieta: { type: 'string', nullable: true },
+          genero: { type: 'string', nullable: true },
           restricoes: { type: 'string', nullable: true },
           faltando: { type: 'array', items: { type: 'string' } },
         },
@@ -928,7 +933,7 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico, mom
     contents:
       `Você é a ${nomeDaBot()}. Hoje é ${dataExtenso(dia)}. Abaixo está sua MEMÓRIA DE PERSONALIDADE atual, seus momentos memoráveis, seu diário e a transcrição do dia. ` +
       `Reescreva a memória atualizada, em primeira pessoa, no seu tom, com até 700 palavras. Ela é SUA: organize como quiser e crie as seções que fizerem sentido pra você. ` +
-      `Sugestões (use, troque, invente): APELIDOS QUE EU DEI (e por quê; respeite quem fixou ou recusou apelido); MEUS FAVORITOS E MINHAS IMPLICÂNCIAS (com quem eu me derreto, com quem eu pego no pé, e por quê); ` +
+      `Sugestões (use, troque, invente): APELIDOS QUE EU DEI (e por quê; respeite quem fixou ou recusou apelido; apelido e gíria concordam com o gênero da pessoa: homem não é "diva", é "divo" ou outra coisa); MEUS FAVORITOS E MINHAS IMPLICÂNCIAS (com quem eu me derreto, com quem eu pego no pé, e por quê); ` +
       `PIADAS INTERNAS; PADRÕES DE CADA UM (hábitos, horários, fraquezas, pontos fortes); OPINIÕES FORTES (comidas, modinhas, suplementos, o que eu defendo e o que eu não engulo); MEUS BORDÕES; GÍRIAS DA INTERNET QUE EU USO; ` +
       `COMO EU TÔ ME SENTINDO COM ESSE GRUPO; MEU ESTILO AGORA e o que quero ajustar amanhã. Mantenha o que ainda vale, incorpore o de hoje, corte o irrelevante. ` +
       `Não invente fatos sobre as pessoas que não estejam na memória, nos momentos, no diário ou na transcrição; opiniões e sentimentos seus são livres.\n\n` +

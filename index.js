@@ -35,6 +35,8 @@ import { revisarPendentes } from './revisao.js';
 import { garantirIndiceVetorial } from './memoria_semantica.js';
 import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
 import { oferecerPlano } from './comandos.js';
+import { verificarAtividades } from './atividades.js';
+import { lembrar } from './dia.js';
 
 // ============================================================
 // Configuração
@@ -217,6 +219,7 @@ async function checarDrive() {
 
     // A cada 10 min: alguém pulou a refeição do horário de costume? Cobra.
     cron.schedule('*/10 * * * *', () => naFila('cobranca', verificarCobrancas), { timezone: TZ });
+    cron.schedule('7,22,37,52 * * * *', () => naFila('atividades', () => verificarAtividades({ lembrar })), { timezone: TZ });
     // Conferência por amostragem das respostas que saíram por reserva externa (poucas por semana, em hora aleatória)
     cron.schedule('37 * * * *', () => naFila('revisao', revisarPendentes), { timezone: TZ });
     console.log('[cron] conferência por amostragem das respostas de reserva (de hora em hora, no máximo 2 por semana)');

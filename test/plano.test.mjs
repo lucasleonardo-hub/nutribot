@@ -155,3 +155,26 @@ test('fundirHipoteses e aplicarVereditos: sem duplicar, com teto, fechando confi
   assert.equal(velha.abertas.length, 0);
   assert.equal(velha.fechadas[0].status, 'inconclusiva');
 });
+
+import { kcalAtividade, lerDias, avaliarPresenca, somarGastosExtras, lerSimNao, duracaoMin } from '../atividades.js';
+test('atividades: kcal por MET, dias, presença pela localização, soma no gasto e sim/não', () => {
+  assert.equal(kcalAtividade(6, 77, 120), 924);
+  assert.deepEqual(lerDias('seg,qua'), [1, 3]);
+  assert.deepEqual(lerDias('Qui e sáb'), [4, 6]);
+  assert.equal(duracaoMin({ inicio: '17:30', fim: '20:00' }), 150);
+  const lugar = { lat: -27.603, lon: -48.5195, raioM: 300 };
+  const casa = { lat: -27.5969, lon: -48.5495 };
+  const t = (m) => new Date(Date.UTC(2026, 8, 30, 23, m));
+  const la = avaliarPresenca({ pontos: [{ ts: t(5), ...casa }, { ts: t(20), lat: -27.6031, lon: -48.5193 }, { ts: t(50), lat: -27.6029, lon: -48.5197 }], lugar, casa, duracao: 120 });
+  assert.equal(la.estado, 'presente');
+  assert.ok(la.minutosNoLugar >= 40 && la.minutosNoLugar <= 60, `min ${la.minutosNoLugar}`);
+  assert.equal(avaliarPresenca({ pontos: [{ ts: t(5), ...casa }, { ts: t(35), ...casa }], lugar, casa }).estado, 'ausente');
+  assert.equal(avaliarPresenca({ pontos: [], lugar, casa }).estado, 'incerto');
+  assert.equal(avaliarPresenca({ pontos: [{ ts: t(5), lat: -27.598, lon: -48.52 }], lugar, casa }).estado, 'incerto');
+  const rel = somarGastosExtras({ gastos: { '2026-09-28': 2500, '2026-09-29': 2400 } }, { '2026-09-28': [{ kcal: 900 }], '2026-09-27': [{ kcal: 500 }] });
+  assert.deepEqual(rel.gastos, { '2026-09-28': 3400, '2026-09-29': 2400 });
+  assert.equal(lerSimNao('teve sim'), true);
+  assert.equal(lerSimNao('não rolou hoje'), false);
+  assert.equal(lerSimNao('fui'), true);
+  assert.equal(lerSimNao('comi arroz com frango e salada no almoço'), null);
+});

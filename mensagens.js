@@ -22,6 +22,7 @@ import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragme
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
+import { responderPendente } from './atividades.js';
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 
@@ -134,6 +135,7 @@ const ESPERA_FRAGMENTO_MS = Number(process.env.ESPERA_FRAGMENTO_MS) || 45_000;
 const ESPERA_FRAGMENTO_MAX_MS = Number(process.env.ESPERA_FRAGMENTO_MAX_MS) || 90_000;
 const esperaFragmentos = new Map(); // jid da pessoa -> { msgs, desde, timer }
 
+const imagemMsg = (m) => Boolean(extractMessageContent(m?.message)?.imageMessage);
 function textoDe(m) {
   const c = extractMessageContent(m?.message);
   return (c?.conversation || c?.extendedTextMessage?.text || c?.imageMessage?.caption || '').trim();
@@ -541,6 +543,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     if (fusoValido(d.fuso)) marcar('fuso', d.fuso);
     if (d.dieta) marcar('dieta', d.dieta);
     if (d.restricoes) marcar('restricoes', d.restricoes);
+    if (d.genero && /^(masculino|feminino|outro)$/i.test(d.genero)) marcar('genero', d.genero.toLowerCase());
     perfil = await salvarPerfil(parcial);
     if (perfil.nome !== nomeAntes) renomearNaMemoria(nomeAntes, perfil.nome);
 
@@ -564,6 +567,16 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
 
   // ---------- Aceite da oferta de sexta ("quero" = plano da semana que vem com lista de compras) ----------
   if (await aceiteDePlano({ texto, perfil, jidGrupo, msg, dia })) return;
+  // ---------- "teve"/"não teve" pra uma atividade fixa em dúvida (vôlei sem relógio) ----------
+  if (perfil.atividadesPendentes?.length && !imagemMsg(msg)) {
+    const r = await responderPendente(perfil, texto).catch((e) => (console.error('[atividades]', e.message), null));
+    if (r) {
+      await enviar(jidGrupo, r, msg, { rapido: true });
+      await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'pessoa' }).catch(() => {});
+      await lembrar({ hora, jid: null, nome: ia.nomeDaBot(), texto: r, tipo: 'bot' }).catch(() => {});
+      return;
+    }
+  }
 
   // ---------- Fluxo normal: texto e/ou foto ----------
   let imagem = null;
@@ -703,7 +716,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;

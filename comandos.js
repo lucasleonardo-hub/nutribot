@@ -22,11 +22,12 @@ import { agendaZap } from './agenda.js';
 import { pareceAceitePlano } from './consciencia.js';
 import { lugaresZap, marcarLugarAtual, esquecerLugares, mercadosProximos } from './lugares.js';
 import { refletirSobre, reflexaoZap } from './reflexao.js';
+import { atividadesZap, criarAtividade, removerAtividade, responderPendente } from './atividades.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !reflexao (como eu te entendo hoje: a síntese da minha reflexão livre sobre você, reescrita aos domingos em Nutri-Reflexoes.md na sua pasta; !reflexao nova reescreve agora), !lugares (se você ligou a localização no app: onde está agora e os lugares que frequenta, com o padrão da semana; !lugares casa, !lugares aqui é academia X, !lugares esquecer), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras e dicas de compra barata, só com as refeições que você costuma registrar e com a meta de cada dia da semana; de sexta a domingo é o plano da semana que vem; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar; toda sexta ao meio-dia eu pergunto quem quer e basta responder "quero"), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !atividade (esporte fixo sem relógio, ex.: vôlei seg e qua 20h–22h: eu confiro pela localização se você foi e somo o gasto estimado; !atividade nova Vôlei; seg,qua; 20:00-22:00; met 6; aqui | lugar UFSC; !atividade sim/não responde quando eu perguntar; !atividade remover 1), !reflexao (como eu te entendo hoje: a síntese da minha reflexão livre sobre você, reescrita aos domingos em Nutri-Reflexoes.md na sua pasta; !reflexao nova reescreve agora), !lugares (se você ligou a localização no app: onde está agora e os lugares que frequenta, com o padrão da semana; !lugares casa, !lugares aqui é academia X, !lugares esquecer), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras e dicas de compra barata, só com as refeições que você costuma registrar e com a meta de cada dia da semana; de sexta a domingo é o plano da semana que vem; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar; toda sexta ao meio-dia eu pergunto quem quer e basta responder "quero"), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -421,6 +422,29 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       const png = await renderizar(configGrafico({ nome: p.nome, refeicoes: refs, pesagens: pes, gastos: p.relogio?.gastos, alvo: alvoKcal, dia }));
       if (png) await enviarImagem(jidGrupo, png, `📈 *${p.apelido || p.nome.split(' ')[0]}* · últimos 30 dias${alvoKcal ? ` · meta ${alvoKcal.min} a ${alvoKcal.max} kcal/dia` : ''}`, msg);
       else await enviar(jidGrupo, 'O desenhista do gráfico não respondeu agora 🫠 Tenta de novo daqui a pouco.', msg, { rapido: true });
+    }
+    return true;
+  }
+
+  if (cmd === '!atividade' || cmd === '!atividades') {
+    const perfil = await buscarPerfil(jids);
+    if (!perfil?.onboarded) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    const arg = texto.slice(cmd.length).trim();
+    try {
+      let resposta;
+      if (/^nova\s+/i.test(arg)) {
+        const r = await criarAtividade(perfil, arg.replace(/^nova\s+/i, ''));
+        resposta = r.ok || r.erro;
+      } else if (/^remover\s+\d+$/i.test(arg)) resposta = await removerAtividade(perfil, arg.replace(/^remover\s+/i, ''));
+      else if (/^(sim|n[ãa]o|teve|n[ãa]o teve)$/i.test(arg)) resposta = (await responderPendente(perfil, arg)) || 'Não tenho nenhuma atividade em dúvida agora.';
+      else resposta = atividadesZap(perfil);
+      await enviar(jidGrupo, resposta, msg, { rapido: true });
+    } catch (e) {
+      console.error('[atividades]', e.message);
+      await enviar(jidGrupo, 'Não consegui mexer nas atividades agora.', msg, { rapido: true });
     }
     return true;
   }
