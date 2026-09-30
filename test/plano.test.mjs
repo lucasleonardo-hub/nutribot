@@ -51,3 +51,52 @@ test('repertorioDoGrupo devolve itens repetidos das outras pessoas, sem a própr
   const r = repertorioDoGrupo(regs, { excluirJids: ['eu@s'] });
   assert.deepEqual(r, ['hommus', 'chia']);
 });
+
+import { semanaDoPlano, previsaoSemana } from '../resumo.js';
+import { pareceAceitePlano } from '../consciencia.js';
+
+test('semanaDoPlano: de sexta a domingo é a semana que vem; nos outros dias começa amanhã', () => {
+  const sex = semanaDoPlano('2026-10-02'); // sexta
+  assert.equal(sex.inicio, '2026-10-05');
+  assert.equal(sex.fim, '2026-10-11');
+  assert.equal(sex.proximaSemana, true);
+  assert.equal(sex.dias[0].rotulo, 'Segunda 05/10');
+  assert.equal(semanaDoPlano('2026-10-04').inicio, '2026-10-05'); // domingo
+  const ter = semanaDoPlano('2026-09-29'); // terça
+  assert.equal(ter.inicio, '2026-09-30');
+  assert.equal(ter.proximaSemana, false);
+  assert.equal(ter.dias[6].rotulo, 'Terça 06/10');
+});
+
+test('previsaoSemana dá uma faixa por dia da semana a partir do relógio', () => {
+  const gastos = {};
+  for (let i = 1; i <= 28; i++) {
+    const d = new Date(Date.UTC(2026, 8, i, 12));
+    const dow = d.getUTCDay();
+    gastos[d.toISOString().slice(0, 10)] = dow === 2 || dow === 4 ? 3000 : 2400; // terça e quinta com treino
+  }
+  const p = previsaoSemana({ gastos, dia: '2026-10-02', objetivo: 'emagrecer', metaAdaptativa: null });
+  assert.equal(p.dias.length, 7);
+  const ter = p.dias.find((d) => d.nome === 'terça');
+  const seg = p.dias.find((d) => d.nome === 'segunda');
+  assert.equal(ter.prev.previsto, 3000);
+  assert.equal(seg.prev.previsto, 2400);
+  assert.ok(ter.prev.alvo.max < 3000 && seg.prev.alvo.max < 2400, 'emagrecer = comer abaixo do gasto');
+  assert.match(p.texto, /META POR DIA/);
+  assert.match(p.texto, /- Terça 06\/10: gasto previsto 3\.000 kcal/);
+  assert.equal(previsaoSemana({ gastos: null, dia: '2026-10-02', objetivo: 'emagrecer' }), null);
+});
+
+test('pareceAceitePlano aceita resposta curta ou que fala do plano e extrai o pedido', () => {
+  assert.deepEqual(pareceAceitePlano('quero'), { aceite: true, pedido: '' });
+  assert.deepEqual(pareceAceitePlano('Bora!'), { aceite: true, pedido: '' });
+  assert.deepEqual(pareceAceitePlano('manda aí'), { aceite: true, pedido: '' });
+  assert.deepEqual(pareceAceitePlano('quero, orçamento curto e só mercado de bairro'), { aceite: true, pedido: 'orçamento curto e só mercado de bairro' });
+  assert.deepEqual(pareceAceitePlano('pode montar o meu plano sem peixe'), { aceite: true, pedido: 'sem peixe' });
+  assert.deepEqual(pareceAceitePlano('eu quero o plano, mas sem lactose'), { aceite: true, pedido: 'sem lactose' });
+  assert.equal(pareceAceitePlano('eu almocei arroz, feijão e frango').aceite, false);
+  assert.equal(pareceAceitePlano('pode me dizer quantas calorias tem isso?').aceite, false);
+  assert.equal(pareceAceitePlano('não quero, obrigado').aceite, false);
+  assert.equal(pareceAceitePlano('quero saber se essa marmita tá boa pro meu objetivo, comi ela inteira agora').aceite, false);
+  assert.equal(pareceAceitePlano('!plano').aceite, false);
+});

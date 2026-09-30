@@ -9,7 +9,7 @@ import { listarDocs, docsPara } from './conhecimento.js';
 import { notasDe, listarDocumentosDe } from './pessoas.js';
 import { reservasDisponiveis } from './reservas.js';
 import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS, diasAnteriores } from './util.js';
-import { resumirHoje, formatarEstimativaLinhas, lerTipoRefeicao, gastoAdaptativo, acharRegistro, nomeDoSlot, padraoAlimentar, repertorioDoGrupo } from './resumo.js';
+import { resumirHoje, formatarEstimativaLinhas, lerTipoRefeicao, gastoAdaptativo, acharRegistro, nomeDoSlot, padraoAlimentar, repertorioDoGrupo, semanaDoPlano, previsaoSemana } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
 import { lembrar } from './dia.js';
 import { estado } from './estado.js';
@@ -19,11 +19,12 @@ import { enriquecerPerfis } from './perfis.js';
 import { situacaoRelogio } from './relogio.js';
 import { treinoZap } from './treino.js';
 import { agendaZap } from './agenda.js';
+import { pareceAceitePlano } from './consciencia.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras, baseado nas refeições que você costuma registrar, salvo na sua pasta do Drive; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras e dicas de compra barata, só com as refeições que você costuma registrar e com a meta de cada dia da semana; de sexta a domingo é o plano da semana que vem; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar; toda sexta ao meio-dia eu pergunto quem quer e basta responder "quero"), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -39,6 +40,92 @@ export function duracaoDe(texto) {
  * Trata um comando. Devolve true se era um comando (tratado ou não reconhecido), false se a mensagem não começa com "!".
  * @param {object} ctx { texto, jids, jidGrupo, msg, dia, nomeContato, batizar }
  */
+/**
+ * Plano da semana de uma pessoa: padrão real (28 dias), repertório do grupo, meta por dia da semana (relógio), agenda e o pedido
+ * dela (orçamento, mercado perto). pedidoArg vem do "!plano <texto>" ou da resposta à oferta de sexta; fica guardado no perfil.
+ */
+export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' }) {
+  // "!plano orçamento apertado, mercado perto só tem o básico": o pedido vale pra este plano e fica guardado pros próximos.
+  // "!plano limpar" esquece o pedido guardado.
+  let pedido = perfil.planoPedido || '';
+  if (/^(limpar|apagar|nenhum|zerar)$/i.test(pedidoArg)) {
+    pedido = '';
+    if (perfil.planoPedido) await salvarPerfil({ jids: perfil.jids, planoPedido: '' });
+  } else if (pedidoArg) {
+    pedido = pedidoArg.slice(0, 300);
+    await salvarPerfil({ jids: perfil.jids, planoPedido: pedido });
+  }
+  const semana = semanaDoPlano(dia);
+  const rotuloSemana = `${semana.dias[0].rotulo.split(' ')[1]} a ${semana.dias[6].rotulo.split(' ')[1]}`;
+  await enviar(jidGrupo, `Montando teu plano de ${rotuloSemana} com as refeições que você costuma registrar e a tua meta${pedido ? `, levando em conta: "${pedido}"` : ''}. Um minutinho. 📝`, msg, { rapido: true });
+  try {
+    const visao = await visaoDe(perfil, dia);
+    const [comAgenda] = await enriquecerPerfis([perfil], dia);
+    // padrão real dos últimos 28 dias (que refeições faz, horário, o que come) + o que o resto do grupo manda
+    const PERIODO = 28;
+    const desde = diasAnteriores(dia, PERIODO)[0];
+    const [doGrupo, pesagens] = await Promise.all([refeicoesGrupoDesde(desde), pesagensDesde(perfil.jids, desde).catch(() => [])]);
+    const jidsDela = perfil.jids || [];
+    const minhas = doGrupo.filter((r) => jidsDela.includes(r.jid) || r.nome === perfil.nome);
+    const padrao = padraoAlimentar(minhas, { periodoDias: PERIODO });
+    const grupo = repertorioDoGrupo(doGrupo.filter((r) => !minhas.includes(r)));
+    // meta por dia da semana pra quem tem relógio (gasto do mesmo dia da semana nas últimas semanas)
+    const gastos = comAgenda?.relogio?.gastos || perfil.relogio?.gastos;
+    let metaSemana = null;
+    if (gastos) {
+      const meta = gastoAdaptativo({ refeicoes: minhas, pesagens, perfil, dia, gastos });
+      metaSemana = previsaoSemana({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta, semana })?.texto || null;
+    }
+    const plano = ia.separarAtualizacao(
+      await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana })
+    ).texto;
+    if (!plano) throw new Error('plano vazio');
+    await enviar(jidGrupo, plano, msg, { rapido: true });
+    await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(plano da semana de ${perfil.nome} enviado)`, tipo: 'bot' });
+    const pastaId = await pastaDe(perfil);
+    await salvarEmPasta(pastaId, 'Nutri-Plano.md', `---\ntipo: plano-semanal\npessoa: ${perfil.nome}\ngerado: ${dia}\nsemana: ${semana.inicio} a ${semana.fim}\ntags: [nutribot, pessoa, plano]\n---\n\n# Plano da semana de ${perfil.nome} (${semana.inicio} a ${semana.fim})\n\n${plano}\n`).catch((e) => console.error('[plano] Drive:', e.message));
+    return true;
+  } catch (e) {
+    console.error('[plano]', e.message);
+    await enviar(jidGrupo, 'Não consegui fechar o plano agora (a IA engasgou). Tenta de novo em alguns minutos. 🫠', msg, { rapido: true });
+    return false;
+  }
+}
+
+// ---------- Oferta de sexta: plano da semana que vem + lista de compras pra comprar no fim de semana ----------
+const OFERTA_PLANO_HORAS = 60; // vale até domingo à noite
+/** Cron de sexta (meio-dia): pergunta no grupo quem quer o plano da semana que vem; o aceite vem por resposta simples. */
+export async function oferecerPlano() {
+  const grupo = estado.memoria.grupo;
+  if (!grupo || estado.statusConexao !== 'conectado') return;
+  const perfis = (await listarPerfis().catch(() => [])).filter((p) => p.onboarded);
+  if (!perfis.length) return;
+  const ate = new Date(Date.now() + OFERTA_PLANO_HORAS * 3600 * 1000).toISOString();
+  estado.config = await salvarConfig({ ofertaPlano: { dia: agora().dia, ate, atendidos: [] } }).catch(() => ({ ...estado.config, ofertaPlano: { dia: agora().dia, ate, atendidos: [] } }));
+  const texto =
+    `Sexta-feira! 🛒\n\n` +
+    `Quem quiser, eu monto agora o *plano da semana que vem* com a *lista de compras*, pra vocês comprarem no fim de semana.\n\n` +
+    `É só responder *quero*, ou !plano.\n\n` +
+    `Se tiver orçamento apertado, ou quiser dizer o que tem no mercado perto de casa, escreve junto (ex.: "quero, orçamento curto, só mercado de bairro") que eu monto em cima disso.`;
+  await enviar(grupo, texto);
+  await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(oferta) ${texto}`, tipo: 'bot' });
+}
+/**
+ * Resposta de "quero" à oferta de sexta (válida até domingo): gera o plano da pessoa e devolve true; qualquer outro texto, false.
+ * O texto que vem depois do aceite ("quero, orçamento apertado") vira o pedido do plano.
+ */
+export async function aceiteDePlano({ texto, perfil, jidGrupo, msg, dia }) {
+  const oferta = estado.config?.ofertaPlano;
+  if (!oferta?.ate || new Date(oferta.ate).getTime() < Date.now() || !perfil?.onboarded) return false;
+  const { aceite, pedido } = pareceAceitePlano(texto);
+  if (!aceite) return false;
+  const chave = perfil.jids?.[0] || perfil.nome;
+  if ((oferta.atendidos || []).includes(chave)) return false;
+  estado.config = await salvarConfig({ 'ofertaPlano.atendidos': [...(oferta.atendidos || []), chave] }).catch(() => estado.config);
+  await gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg: pedido });
+  return true;
+}
+
 export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeContato, batizar }) {
   if (!texto.startsWith('!')) return false;
   const cmd = texto.toLowerCase().split(/\s+/)[0];
@@ -342,39 +429,7 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       await enviar(jidGrupo, SEM_CADASTRO, msg);
       return true;
     }
-    // "!plano orçamento apertado, mercado perto só tem o básico": o pedido vale pra este plano e fica guardado pros próximos.
-    // "!plano limpar" esquece o pedido guardado.
-    const pedidoArg = texto.slice(cmd.length).trim();
-    let pedido = perfil.planoPedido || '';
-    if (/^(limpar|apagar|nenhum|zerar)$/i.test(pedidoArg)) {
-      pedido = '';
-      if (perfil.planoPedido) await salvarPerfil({ ...perfil, planoPedido: '' });
-    } else if (pedidoArg) {
-      pedido = pedidoArg.slice(0, 300);
-      await salvarPerfil({ ...perfil, planoPedido: pedido });
-    }
-    await enviar(jidGrupo, `Montando teu plano da semana com as refeições que você costuma registrar e a tua meta${pedido ? `, levando em conta: "${pedido}"` : ''}. Um minutinho. 📝`, msg, { rapido: true });
-    try {
-      const visao = await visaoDe(perfil, dia);
-      const [comAgenda] = await enriquecerPerfis([perfil], dia);
-      // padrão real dos últimos 28 dias (que refeições faz, horário, o que come) + o que o resto do grupo manda
-      const PERIODO = 28;
-      const desde = diasAnteriores(dia, PERIODO)[0];
-      const doGrupo = await refeicoesGrupoDesde(desde);
-      const jidsDela = perfil.jids || [];
-      const minhas = doGrupo.filter((r) => jidsDela.includes(r.jid) || r.nome === perfil.nome);
-      const padrao = padraoAlimentar(minhas, { periodoDias: PERIODO });
-      const grupo = repertorioDoGrupo(doGrupo.filter((r) => !minhas.includes(r)));
-      const plano = ia.separarAtualizacao(await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido })).texto;
-      if (!plano) throw new Error('plano vazio');
-      await enviar(jidGrupo, plano, msg, { rapido: true });
-      await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(plano da semana de ${perfil.nome} enviado)`, tipo: 'bot' });
-      const pastaId = await pastaDe(perfil);
-      await salvarEmPasta(pastaId, 'Nutri-Plano.md', `---\ntipo: plano-semanal\npessoa: ${perfil.nome}\ngerado: ${dia}\ntags: [nutribot, pessoa, plano]\n---\n\n# Plano da semana de ${perfil.nome} (${dia})\n\n${plano}\n`).catch((e) => console.error('[plano] Drive:', e.message));
-    } catch (e) {
-      console.error('[plano]', e.message);
-      await enviar(jidGrupo, 'Não consegui fechar o plano agora (a IA engasgou). Tenta de novo em alguns minutos. 🫠', msg, { rapido: true });
-    }
+    await gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg: texto.slice(cmd.length).trim() });
     return true;
   }
 

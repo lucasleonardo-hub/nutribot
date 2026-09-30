@@ -449,13 +449,17 @@ const _dow = (d) => new Date(`${d}T12:00:00Z`).getUTCDay();
  * calibrada, corrige o viés do relógio pela razão gasto real / gasto do relógio (limitada a 0,8-1,25).
  * Devolve null sem relógio ou com menos de 7 dias fechados. Puro.
  */
-export function previsaoGastoAmanha({ gastos, dia, objetivo, metaAdaptativa }) {
+export function previsaoGastoAmanha(params) {
+  return previsaoGastoDia(params);
+}
+/** Mesma previsão pra um dia qualquer à frente (diaAlvo AAAA-MM-DD); sem diaAlvo, amanhã. */
+export function previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlvo }) {
   if (!gastos || !dia) return null;
   const entradas = Object.entries(gastos).filter(([d, k]) => d < dia && Number(k) > 800).sort(([a], [b]) => a.localeCompare(b)); // dias fechados; hoje ainda está incompleto
   if (entradas.length < 7) return null;
   const amanha = new Date(`${dia}T12:00:00Z`);
   amanha.setUTCDate(amanha.getUTCDate() + 1);
-  const diaAmanha = amanha.toISOString().slice(0, 10);
+  const diaAmanha = diaAlvo || amanha.toISOString().slice(0, 10);
   const dow = _dow(diaAmanha);
   const mesmos = entradas.filter(([d]) => _dow(d) === dow).slice(-4).map(([, k]) => Number(k));
   const geral = entradas.slice(-14).map(([, k]) => Number(k));
@@ -487,6 +491,42 @@ export function previsaoGastoAmanha({ gastos, dia, objetivo, metaAdaptativa }) {
     mediaGeral,
     texto: `AMANHÃ (${NOME_DIA[dow]}): gasto previsto ${_kcal(previsto)} (${criterio}${ajuste})${comparacao}; objetivo "${objetivo || '?'}" pede ${alvo.rotulo} -> comer entre ${_kcal(min)} e ${_kcal(max)}.`,
     zap: `*Amanhã* (${NOME_DIA[dow]}): você costuma gastar ${_kcal(previsto)}${comparacao} → mire ${_kcal(min)} a ${_kcal(max)}`,
+  };
+}
+
+/**
+ * Semana que o !plano cobre: de sexta a domingo o plano é da semana que vem (segunda a domingo, pra comprar no fim de semana);
+ * nos outros dias começa amanhã e vai 7 dias. Devolve { inicio, fim, dias: [{ dia, nome, rotulo }] }.
+ */
+export function semanaDoPlano(dia) {
+  const base = new Date(`${dia}T12:00:00Z`);
+  const dow = base.getUTCDay();
+  const pulo = dow === 5 ? 3 : dow === 6 ? 2 : dow === 0 ? 1 : 1; // sex→seg (3), sáb→seg (2), dom→seg (1), demais→amanhã
+  const ini = new Date(base);
+  ini.setUTCDate(ini.getUTCDate() + pulo);
+  const dias = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(ini);
+    d.setUTCDate(d.getUTCDate() + i);
+    const iso = d.toISOString().slice(0, 10);
+    const nome = NOME_DIA[d.getUTCDay()];
+    return { dia: iso, nome, rotulo: `${nome[0].toUpperCase()}${nome.slice(1)} ${iso.slice(8, 10)}/${iso.slice(5, 7)}` };
+  });
+  return { inicio: dias[0].dia, fim: dias[6].dia, dias, proximaSemana: dow === 5 || dow === 6 || dow === 0 };
+}
+/**
+ * Meta calórica por dia da semana do plano, pra quem tem relógio: gasto previsto no mesmo dia da semana das últimas
+ * semanas e a faixa de ingestão que o objetivo pede. null sem relógio ou com menos de 7 dias fechados.
+ */
+export function previsaoSemana({ gastos, dia, objetivo, metaAdaptativa, semana }) {
+  const sem = semana || semanaDoPlano(dia);
+  const dias = sem.dias.map((d) => ({ ...d, prev: previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlvo: d.dia }) })).filter((d) => d.prev);
+  if (!dias.length) return null;
+  const linhas = dias.map((d) => `- ${d.rotulo}: gasto previsto ${_kcal(d.prev.previsto)} (${d.prev.criterio}) -> comer entre ${_kcal(d.prev.alvo.min)} e ${_kcal(d.prev.alvo.max)}`);
+  const mediaAlvo = Math.round(media(dias.map((d) => (d.prev.alvo.min + d.prev.alvo.max) / 2)) / 10) * 10;
+  return {
+    dias,
+    mediaAlvo,
+    texto: `META POR DIA (gasto medido pelo relógio nas últimas semanas, no mesmo dia da semana; a faixa de ingestão vem do objetivo "${objetivo || '?'}"; monte cada dia pra cair dentro da faixa dele, com os dias de mais gasto ganhando porção maior):\n${linhas.join('\n')}`,
   };
 }
 

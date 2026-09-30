@@ -34,6 +34,7 @@ import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { revisarPendentes } from './revisao.js';
 import { garantirIndiceVetorial } from './memoria_semantica.js';
 import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
+import { oferecerPlano } from './comandos.js';
 
 // ============================================================
 // Configuração
@@ -224,6 +225,8 @@ async function checarDrive() {
     // Notas de voz dela: segunda 08:00 abre a semana, sexta 18:00 fecha (desligáveis com !voz off)
     cron.schedule('0 8 * * 1', () => naFila('voz-segunda', () => falaProgramada('segunda')), { timezone: TZ });
     cron.schedule('0 18 * * 5', () => naFila('voz-sexta', () => falaProgramada('sexta')), { timezone: TZ });
+    cron.schedule('0 12 * * 5', () => naFila('oferta-plano', oferecerPlano), { timezone: TZ });
+    console.log('[cron] oferta do plano da semana que vem toda sexta 12:00 (aceite por "quero" até domingo)');
     cron.schedule('0 8 1 * *', () => naFila('mes', fecharMes), { timezone: TZ });
     console.log('[cron] pesagem todo domingo 09:00; relatório mensal dia 1 às 08:00');
 

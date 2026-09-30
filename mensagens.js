@@ -21,7 +21,7 @@ import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarr
 import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao } from './consciencia.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
-import { tratarComando, AJUDA } from './comandos.js';
+import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 
@@ -543,6 +543,9 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     salvarFicha(perfil, mdPerfil(perfil)).catch((e) => console.error('[drive]', e.message));
     return;
   }
+
+  // ---------- Aceite da oferta de sexta ("quero" = plano da semana que vem com lista de compras) ----------
+  if (await aceiteDePlano({ texto, perfil, jidGrupo, msg, dia })) return;
 
   // ---------- Fluxo normal: texto e/ou foto ----------
   let imagem = null;

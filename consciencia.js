@@ -153,3 +153,25 @@ export function blocoLicoes(regras) {
   if (!lista.length) return '';
   return `MINHAS LIÇÕES (erros que eu já cometi com este grupo e regras que adotei; valem em TODA resposta, antes de qualquer número ou bronca):\n${lista.map((r) => `- ${r}`).join('\n')}`;
 }
+
+// ---------- Oferta de sexta do plano da semana: resposta de aceite ----------
+// aceite curto e inequívoco ("quero", "bora", "manda aí", "pode montar") ou frase que fala do plano/lista ("quero o plano, orçamento curto").
+// "eu almocei arroz" ou "pode me dizer as calorias?" não podem virar plano só porque a oferta está aberta.
+const RE_ACEITE_CURTO = /^(?:sim|quero|bora|claro|topo|dale|partiu|manda(?:\s+a[ií]|\s+sim|\s+o\s+meu|\s+o\s+plano|\s+a\s+lista)?|pode\s+(?:mandar|montar|fazer)|monta(?:\s+o\s+meu|\s+pra\s+mim)?|faz\s+o\s+meu|quero\s+(?:sim|o\s+meu|o\s+plano|a\s+lista))\b/i;
+const RE_FALA_DO_PLANO = /\b(plano|lista\s+de\s+compras|compras)\b/i;
+const RE_VERBO_ACEITE = /\b(quero|sim|manda|pode|bora|monta|faz|topo|vamos)\b/i;
+const RE_RECUSA_PLANO = /\b(n[aã]o|nem|dispenso|depois|passo|semana que vem)\b/i;
+/** Lê a resposta à oferta: { aceite, pedido } (pedido = o que sobra depois do "quero": orçamento, mercado perto, restrição). */
+export function pareceAceitePlano(texto) {
+  const t = String(texto || '').trim();
+  if (!t || t.length > 160 || t.startsWith('!') || RE_RECUSA_PLANO.test(t)) return { aceite: false, pedido: '' };
+  const curto = RE_ACEITE_CURTO.test(t) && t.length <= 60;
+  const doPlano = RE_FALA_DO_PLANO.test(t) && RE_VERBO_ACEITE.test(t);
+  if (!curto && !doPlano) return { aceite: false, pedido: '' };
+  let pedido = t.replace(RE_ACEITE_CURTO, '').replace(/^[\s,.:;!-]+/, '');
+  // tira o que ainda é parte do aceite ("o meu plano", "a lista", "mas", "por favor") até sobrar só o pedido
+  const RE_SOBRA = /^(?:eu|sim|quero|manda|monta|faz|o\s+meu|meu|o\s+plano|plano|a\s+lista(?:\s+de\s+compras)?|lista|de\s+compras|por\s+favor|pfv|mas|e|s[óo]|s[óo]\s+que|que)\b[\s,.:;!-]*/i;
+  for (let i = 0; i < 6 && RE_SOBRA.test(pedido); i++) pedido = pedido.replace(RE_SOBRA, '');
+  pedido = pedido.trim();
+  return { aceite: true, pedido: pedido.length >= 6 ? pedido : '' };
+}
