@@ -73,12 +73,24 @@ export function contestacoesDoDia(historico) {
  * Pré-filtro barato (sem IA) de "isto pode ser só um pedaço de informação": mensagem curta, de quem registrou uma
  * refeição há pouco. Só os candidatos vão pro julgamento da IA leve (julgarFragmento). Comando, áudio e texto longo não.
  */
+// mensagem que só ANUNCIA a refeição sem dizer o que é ("meu almoço hoje vai ser adaptado", "não consigo sair do serviço",
+// "vou mandar a janta"): a comida vem em seguida, então vale esperar mesmo sem refeição em andamento
+const RE_ANUNCIO = /\b(vai ser|vou (mandar|comer|almo[çc]ar|jantar|fazer|pedir)|hoje (vai|foi|é|t[ôo]|vou)|adaptad\w*|j[áa] (mando|passo|envio)|depois (mando|complemento|passo|envio)|n[ãa]o consigo|n[ãa]o deu|segura|pera|espera a[íi]|calma)\b/i;
 export function candidatoAFragmento({ texto, temImagem = false, temAudio = false, minutosDesdeUltima = Infinity } = {}) {
   const t = String(texto || '').trim();
   if (temAudio || t.startsWith('!')) return false;
-  if (!(minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30)) return false;
+  const emAndamento = minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30;
+  if (!emAndamento) return !temImagem && t.length > 0 && t.length <= 70 && !/\?\s*$/.test(t) && RE_ANUNCIO.test(t);
   if (temImagem) return t.length <= 60;
   return t.length > 0 && t.length <= 80 && !/\?\s*$/.test(t);
+}
+/** registros = Map jid -> { estado, em } vindo da presença do WhatsApp; true se algum jid da pessoa digitava/gravava há menos de janelaMs. */
+export function digitandoRecente(registros, jids, agoraMs = Date.now(), janelaMs = 10_000) {
+  for (const j of jids || []) {
+    const r = registros?.get?.(j);
+    if (r && (r.estado === 'composing' || r.estado === 'recording') && agoraMs - r.em <= janelaMs) return true;
+  }
+  return false;
 }
 
 // ---------- Objetivo da pessoa x vocabulário da resposta ----------

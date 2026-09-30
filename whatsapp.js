@@ -2,6 +2,7 @@
 // envio com pausa humana e alerta de desconexão. Quem decide o que fazer com cada mensagem é mensagens.js (via handlers).
 
 import pino from 'pino';
+import { digitandoRecente } from './consciencia.js';
 import qrcodeTerminal from 'qrcode-terminal';
 import makeWASocket, {
   Browsers,
@@ -98,6 +99,18 @@ export function baixarMidia(msg) {
 export const meusJids = () => [estado.sock?.user?.id, estado.sock?.user?.lid].filter(Boolean).map((j) => jidNormalizedUser(j));
 
 /** No privado não há participant: o remetente é o próprio chat (número ou LID; o Baileys 7 traz o outro em remoteJidAlt). */
+// Presença dos participantes do grupo (composing/paused): deixa a bot esperar quem ainda está digitando a refeição em partes.
+const presencas = new Map(); // jid normalizado -> { estado, em }
+export const presencasAtuais = () => presencas;
+/** A pessoa (qualquer um dos jids dela) estava digitando ou gravando nos últimos segundos? */
+export function estaDigitando(jids, janelaMs = 10_000) {
+  return digitandoRecente(presencas, jids, Date.now(), janelaMs);
+}
+export async function assinarPresenca(jid) {
+  if (!estado.sock || !jid) return;
+  await estado.sock.presenceSubscribe(jid).catch((e) => console.warn('[wa] presença:', e.message));
+}
+
 export function jidsDoPrivado(key) {
   return [...new Set([key.remoteJid, key.remoteJidAlt].filter(Boolean).map((j) => jidNormalizedUser(j)))];
 }
@@ -172,6 +185,15 @@ export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoNovoMembr
   estado.sock = sock;
 
   sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('presence.update', ({ id, presences }) => {
+    for (const [jid, p] of Object.entries(presences || {})) {
+      const est = p?.lastKnownPresence;
+      if (!est) continue;
+      try {
+        presencas.set(jidNormalizedUser(jid), { estado: est, em: Date.now(), chat: id });
+      } catch {}
+    }
+  });
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {

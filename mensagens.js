@@ -13,7 +13,7 @@ import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojePara
 import { visaoDe } from './acompanhamento.js';
 import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
-import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir } from './whatsapp.js';
+import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir, estaDigitando } from './whatsapp.js';
 import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
@@ -166,7 +166,7 @@ async function deveEsperarFragmento(msg) {
         nome: perfil.nome.split(' ')[0],
         texto,
         temImagem,
-        emAndamento: { minutos: minutosDesdeUltima, descricao: ultima.descricao || ultima.resumo || '', kcal: ultima.estimativa?.kcal ? Math.round(ultima.estimativa.kcal) : null },
+        emAndamento: ultima && minutosDesdeUltima <= 30 ? { minutos: minutosDesdeUltima, descricao: ultima.descricao || ultima.resumo || '', kcal: ultima.estimativa?.kcal ? Math.round(ultima.estimativa.kcal) : null } : null,
         ultimas,
       }),
       15_000,
@@ -183,6 +183,11 @@ async function deveEsperarFragmento(msg) {
 function liberarFragmentos(dono) {
   const e = esperaFragmentos.get(dono);
   if (!e) return;
+  // ainda digitando? a próxima parte está vindo: espera mais 3 s (até o teto)
+  if (Date.now() - e.desde < ESPERA_FRAGMENTO_MAX_MS && estaDigitando(e.jids || [])) {
+    e.timer = setTimeout(() => liberarFragmentos(dono), 3000);
+    return;
+  }
   esperaFragmentos.delete(dono);
   const [primeira, ...resto] = e.msgs;
   primeira._liberada = true;
@@ -192,17 +197,24 @@ function liberarFragmentos(dono) {
   naFila('bot', drenar);
 }
 
-function iniciarEsperaFragmento(msg) {
+function iniciarEsperaFragmento(msg, { porDigitacao = false } = {}) {
   const dono = remetenteDe(msg);
-  esperaFragmentos.set(dono, { msgs: [msg], desde: Date.now(), timer: setTimeout(() => liberarFragmentos(dono), ESPERA_FRAGMENTO_MS) });
-  reagir(msg.key.remoteJid, msg.key, '👀').catch(() => {});
+  const jids = jidsDoRemetente(msg.key);
+  // por digitação: confere a cada 3 s; solta assim que ela para de digitar (ou no teto). Por fragmento: 45 s de silêncio.
+  const primeiraEspera = porDigitacao ? 3000 : ESPERA_FRAGMENTO_MS;
+  esperaFragmentos.set(dono, { msgs: [msg], jids, desde: Date.now(), porDigitacao, timer: setTimeout(() => liberarFragmentos(dono), primeiraEspera) });
+  // o 👀 avisa que ela viu e está esperando o resto; na espera por digitação só se passar de 8 s (senão é ruído)
+  if (!porDigitacao) reagir(msg.key.remoteJid, msg.key, '👀').catch(() => {});
+  else setTimeout(() => { if (esperaFragmentos.get(dono)?.msgs?.[0] === msg) reagir(msg.key.remoteJid, msg.key, '👀').catch(() => {}); }, 8000);
 }
 
 function juntarFragmento(dono, msg) {
   const e = esperaFragmentos.get(dono);
   e.msgs.push(msg);
   clearTimeout(e.timer);
-  const restante = Math.max(1000, Math.min(ESPERA_FRAGMENTO_MS, e.desde + ESPERA_FRAGMENTO_MAX_MS - Date.now()));
+  // chegou mais uma parte: espera de novo (por digitação, 6 s de silêncio; por fragmento, 45 s), sempre dentro do teto
+  const base = e.porDigitacao ? 6000 : ESPERA_FRAGMENTO_MS;
+  const restante = Math.max(1000, Math.min(base, e.desde + ESPERA_FRAGMENTO_MAX_MS - Date.now()));
   e.timer = setTimeout(() => liberarFragmentos(dono), restante);
 }
 
@@ -221,6 +233,12 @@ async function drenar() {
   const grupos = agruparFotos(restantes);
   for (let i = 0; i < grupos.length; i++) {
     const { msg, extras: extrasDoLote } = grupos[i];
+    // a pessoa ainda está digitando (presença do WhatsApp)? a próxima parte vem já: segura e responde tudo de uma vez
+    if (!msg._liberada && msg.key.remoteJid?.endsWith('@g.us') && !textoDe(msg).startsWith('!') && estaDigitando(jidsDoRemetente(msg.key))) {
+      console.log(`[digitando] ${remetenteDe(msg).split('@')[0]} ainda digita: segurando a resposta`);
+      iniciarEsperaFragmento(msg, { porDigitacao: true });
+      continue;
+    }
     // parece só um pedaço de informação e vem mais? segura e junta (uma vez por mensagem; a liberada não volta a esperar)
     if (!msg._liberada && !extrasDoLote.length && (await deveEsperarFragmento(msg))) {
       iniciarEsperaFragmento(msg);

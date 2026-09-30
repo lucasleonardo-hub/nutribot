@@ -26,7 +26,7 @@ import { receberEnvio } from './relogio.js';
 import { reservasDisponiveis } from './reservas.js';
 import { TZ, agora } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
-import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin } from './whatsapp.js';
+import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca } from './whatsapp.js';
 import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes, falaProgramada } from './dia.js';
 import { avisarAdmin } from './avisos.js';
 import { paginaInicial, paginaPrivacidade } from './paginas.js';
@@ -199,6 +199,8 @@ async function checarDrive() {
       aoEntrarNoGrupo: apresentarNaFila,
       aoNovoMembro: receberNovoMembro,
       aoConectar: async ({ foraPorMin = 0 } = {}) => {
+        // presença do grupo: saber quem está digitando pra responder a refeição em partes de uma vez só
+        if (estado.memoria.grupo) assinarPresenca(estado.memoria.grupo).catch(() => {});
         if (foraPorMin > 10) avisarAdmin('reconexao', `WhatsApp voltou depois de ${foraPorMin} min desconectado (uptime do processo: ${Math.round(process.uptime() / 60)} min).`).catch(() => {});
         await garantirDiaAtual().catch((e) => console.error('[bot] erro na virada de dia:', e.message));
         if (!restaurou) {

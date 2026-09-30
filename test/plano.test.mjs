@@ -100,3 +100,29 @@ test('pareceAceitePlano aceita resposta curta ou que fala do plano e extrai o pe
   assert.equal(pareceAceitePlano('quero saber se essa marmita tá boa pro meu objetivo, comi ela inteira agora').aceite, false);
   assert.equal(pareceAceitePlano('!plano').aceite, false);
 });
+
+import { candidatoAFragmento, digitandoRecente } from '../consciencia.js';
+test('candidatoAFragmento: anúncio de refeição espera mesmo sem refeição em andamento; papo comum não', () => {
+  assert.equal(candidatoAFragmento({ texto: 'Meu almoço hoje vai ser adaptado', minutosDesdeUltima: Infinity }), true);
+  assert.equal(candidatoAFragmento({ texto: 'Nao consigo sair do serviço', minutosDesdeUltima: Infinity }), true);
+  assert.equal(candidatoAFragmento({ texto: 'vou mandar a janta já já', minutosDesdeUltima: Infinity }), true);
+  assert.equal(candidatoAFragmento({ texto: 'bom dia gente', minutosDesdeUltima: Infinity }), false);
+  assert.equal(candidatoAFragmento({ texto: 'quantas calorias tem isso?', minutosDesdeUltima: Infinity }), false);
+  assert.equal(candidatoAFragmento({ texto: 'vai ser adaptado', temImagem: true, minutosDesdeUltima: Infinity }), false);
+  assert.equal(candidatoAFragmento({ texto: 'e uma banana', minutosDesdeUltima: 5 }), true);
+  assert.equal(candidatoAFragmento({ texto: '!hoje', minutosDesdeUltima: 5 }), false);
+});
+
+test('digitandoRecente: só composing/recording dentro da janela, por qualquer jid da pessoa', () => {
+  const agoraMs = 1_000_000;
+  const reg = new Map([
+    ['1@s.whatsapp.net', { estado: 'composing', em: agoraMs - 4000 }],
+    ['2@lid', { estado: 'paused', em: agoraMs - 1000 }],
+    ['3@s.whatsapp.net', { estado: 'composing', em: agoraMs - 30_000 }],
+  ]);
+  assert.equal(digitandoRecente(reg, ['1@s.whatsapp.net'], agoraMs), true);
+  assert.equal(digitandoRecente(reg, ['9@s.whatsapp.net', '2@lid'], agoraMs), false);
+  assert.equal(digitandoRecente(reg, ['3@s.whatsapp.net'], agoraMs), false);
+  assert.equal(digitandoRecente(reg, ['x@lid', '1@s.whatsapp.net'], agoraMs), true);
+  assert.equal(digitandoRecente(null, ['1@s.whatsapp.net'], agoraMs), false);
+});
