@@ -366,3 +366,8 @@ export async function salvarConfig(patch) {
   );
   return doc || { _id: 'bot' };
 }
+
+/** Registros de todo o grupo desde um dia (repertório do que circula ali; alimenta o !plano). */
+export async function refeicoesGrupoDesde(diaInicial) {
+  return colecao('refeicoes').find({ dia: { $gte: diaInicial } }).sort({ dia: 1, minutos: 1 }).toArray();
+}

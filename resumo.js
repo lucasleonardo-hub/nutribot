@@ -5,7 +5,7 @@
 const NOME_SLOT = { cafe: '☕ Café da manhã', lanche_manha: '🥤 Lanche da manhã', almoco: '🍽️ Almoço', lanche: '🥪 Lanche', jantar: '🌙 Jantar', ceia: '🌃 Ceia' };
 const JANELA_COMPLEMENTO_MIN = 20; // "a vitamina tem whey" 1 min depois da foto = mesma refeição, não outra
 
-import { minutosDe } from './util.js';
+import { minutosDe, mediana } from './util.js';
 
 const num = (t) => Number(String(t).replace(/\./g, '').replace(',', '.')) || 0;
 
@@ -325,6 +325,82 @@ export function lerRotuloRefeicao(texto, horaLocal = '12:00') {
   return null;
 }
 export const nomeDoSlot = (slot) => (NOME_SLOT[slot] || slot).replace(/^\S+\s/, '');
+
+// ============================================================
+// Padrão alimentar real: que refeições a pessoa registra, em que horário e o que costuma comer em cada uma.
+// Base do !plano: o plano só prescreve as refeições que a pessoa de fato faz (quem nunca manda café não ganha café no plano).
+// ============================================================
+const ORDEM_SLOT = ['cafe', 'lanche_manha', 'almoco', 'lanche', 'jantar', 'ceia'];
+const PALAVRA_VAZIA = new Set(['de', 'da', 'do', 'das', 'dos', 'com', 'e', 'em', 'no', 'na', 'um', 'uma', 'uns', 'umas', 'ao', 'a', 'o', 'os', 'as', 'para', 'pra', 'por', 'sem', 'mais', 'menos', 'foto', 'prato', 'porção', 'porcao', 'pouco', 'bem', 'meio', 'meia', 'grande', 'pequeno', 'pequena', 'média', 'medio', 'média', 'cheio', 'cheia', 'fatia', 'fatias', 'unidade', 'unidades', 'colher', 'colheres', 'sopa', 'copo', 'copos', 'xícara', 'xicara', 'concha', 'conchas', 'pedaço', 'pedacos', 'pedaços', 'ml', 'g', 'kg', 'l', 'grama', 'gramas', 'aprox', 'aproximadamente', 'cerca', 'corrigido', 'descrição', 'boa', 'generosa', 'generoso', 'farta', 'farto', 'toque', 'camada', 'quantidade', 'dois', 'duas', 'três', 'tres', 'quatro', 'cinco', 'seis', 'rápida', 'rapida']);
+/** Quebra "arroz, feijão, 150 g de frango grelhado e salada" em itens curtos e comparáveis. */
+export function itensDaDescricao(texto) {
+  if (!texto || /^\[foto\]$/.test(texto)) return [];
+  return String(texto)
+    .toLowerCase()
+    .replace(/\(.*?\)/g, ' ')
+    .replace(/\d+([.,]\d+)?\s*(kcal|g|ml|kg|l|un|und|unid|x)?(?![a-záàâãéêíóôõúüç])/g, ' ')
+    .split(/[,;+/]|\s+e\s+|\s+com\s+|\s+mais\s+|\n/)
+    .map((t) => t.replace(/[^a-záàâãéêíóôõúüç\s-]/g, ' ').split(/\s+/).filter((w) => w && !PALAVRA_VAZIA.has(w)).slice(0, 3).join(' ').trim())
+    .filter((t) => t.length >= 3);
+}
+const minutosDeHora = (h) => {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(h || ''));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+const horaDeMinutos = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')}`;
+/**
+ * refeicoes = registros da pessoa no período. Devolve { texto, slots, diasComRegistro, ausentes }.
+ * slots[slot] = { dias (em quantos dias apareceu), hora (mediana), itens (mais frequentes) }.
+ */
+export function padraoAlimentar(refeicoes, { periodoDias } = {}) {
+  const regs = (refeicoes || []).filter((r) => r.dia && r.slot);
+  const diasComRegistro = new Set(regs.map((r) => r.dia)).size;
+  const slots = {};
+  for (const r of regs) {
+    const s = (slots[r.slot] ||= { dias: new Set(), minutos: [], itens: new Map(), kcal: [] });
+    s.dias.add(r.dia);
+    const m = minutosDeHora(r.horaLocal || r.hora);
+    if (m != null) s.minutos.push(m);
+    if (r.estimativa?.kcal) s.kcal.push(r.estimativa.kcal);
+    for (const it of new Set(itensDaDescricao(r.descricao || r.resumo))) s.itens.set(it, (s.itens.get(it) || 0) + 1);
+  }
+  const saida = {};
+  const linhas = [];
+  const ausentes = [];
+  for (const slot of ORDEM_SLOT) {
+    const s = slots[slot];
+    const dias = s ? s.dias.size : 0;
+    // menos de 1 dia em cada 5 registrados = não faz parte da rotina (uma ceia solta em 28 dias não vira ceia no plano)
+    if (!diasComRegistro || dias / diasComRegistro < 0.2) {
+      if (NOME_SLOT[slot]) ausentes.push(nomeDoSlot(slot).toLowerCase());
+      continue;
+    }
+    const hora = s.minutos.length ? horaDeMinutos(mediana(s.minutos)) : null;
+    const itens = [...s.itens.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([it, n]) => (n > 1 ? `${it} (${n}x)` : it));
+    const kcal = s.kcal.length ? Math.round(mediana(s.kcal)) : null;
+    saida[slot] = { dias, hora, itens, kcal };
+    const freq = dias / diasComRegistro >= 0.7 ? 'quase todo dia' : dias / diasComRegistro >= 0.4 ? 'na maioria dos dias' : 'às vezes';
+    linhas.push(`- ${nomeDoSlot(slot)}: em ${dias} de ${diasComRegistro} dias (${freq})${hora ? `, por volta das ${hora}` : ''}${kcal ? `, em média ${kcal} kcal` : ''}. Costuma: ${itens.join(', ') || '(sem descrição)'}`);
+  }
+  const cab = `PADRÃO REAL${periodoDias ? ` (últimos ${periodoDias} dias)` : ''}: ${diasComRegistro} dia(s) com registro`;
+  const texto = diasComRegistro
+    ? `${cab}\n${linhas.join('\n')}${ausentes.length ? `\n- NÃO registra: ${ausentes.join(', ')} (não existe na rotina; não prescreva)` : ''}`
+    : `${cab}. Sem histórico suficiente: monte o plano só com o que a pessoa contar e pergunte, em uma linha, quais refeições ela faz por dia.`;
+  return { texto, slots: saida, diasComRegistro, ausentes };
+}
+/** O que o resto do grupo costuma mandar (itens mais frequentes), pra variar o plano com comida que já circula ali. */
+export function repertorioDoGrupo(refeicoes, { excluirJids = [], max = 25 } = {}) {
+  const cont = new Map();
+  for (const r of refeicoes || []) {
+    if (excluirJids.includes(r.jid)) continue;
+    for (const it of new Set(itensDaDescricao(r.descricao || r.resumo))) cont.set(it, (cont.get(it) || 0) + 1);
+  }
+  return [...cont.entries()]
+    .filter(([, n]) => n >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, max)
+    .map(([it]) => it);
+}
 
 // ============================================================
 // Visão de período (7 e 30 dias) + balanço energético, em código. Entra no prompt, no !hoje e na reflexão noturna.

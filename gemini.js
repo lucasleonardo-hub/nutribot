@@ -1492,23 +1492,39 @@ export async function embutir(texto, taskType = 'RETRIEVAL_DOCUMENT') {
 }
 
 /** Plano da semana + lista de compras, a partir do que a pessoa já come, do objetivo e da meta calculada. Uma chamada Flash. */
-export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda }) {
+export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido }) {
+  const primeiro = perfil.nome.split(' ')[0];
+  const cidade = perfil.cidade || 'a cidade dela(e)';
+  const slots = padrao?.slots ? Object.keys(padrao.slots) : [];
+  const itensDia = slots.length ? slots.map((sl) => `"- ${nomeDoSlotPlano(sl)}: ..."`).join(', ') : '"- Almoço: ...", "- Jantar: ..."';
   return gerar({
     contents:
       blocoConhecimento(conhecimento) +
       `PESSOA: ${perfil.nome} · ${perfil.peso || '?'} kg · ${perfil.altura || '?'} cm · objetivo: ${perfil.objetivo || '?'} · dieta: ${perfil.dieta || 'onívora'}${perfil.restricoes ? ` · restrições: ${perfil.restricoes}` : ''}${perfil.cidade ? ` · mora em ${perfil.cidade}` : ''}\n` +
-      (perfil.rotina ? `ROTINA OBSERVADA (o que ela(e) já come e em que horários; o plano parte DAQUI, não de uma dieta de revista):\n${perfil.rotina}\n\n` : '') +
+      (padrao?.texto ? `${padrao.texto}\n\n` : '') +
+      (perfil.rotina ? `ROTINA OBSERVADA (horários e hábitos que você já anotou):\n${perfil.rotina}\n\n` : '') +
+      (perfil.produtos?.length ? `PRODUTOS FIXOS (já tem em casa, rótulo lido): ${produtosDe(perfil)}\n\n` : '') +
+      (grupo?.length ? `O QUE CIRCULA NO GRUPO (comidas que as outras pessoas do grupo mandam; servem pra variar o plano com coisa que já faz parte do contexto de vocês): ${grupo.join(', ')}\n\n` : '') +
       (perfil.notas ? `SUAS NOTAS SOBRE A PESSOA (preferências, aversões, treino):\n${String(perfil.notas).slice(0, 1500)}\n\n` : '') +
       (visao ? `NÚMEROS ATUAIS (calculados pelo sistema; a meta calórica e de proteína vêm daqui):\n${visao}\n\n` : '') +
       (agenda ? `AGENDA DELA(E) NOS PRÓXIMOS DIAS (encaixe as refeições nas janelas livres e respeite aula/trabalho/reunião):\n${agenda}\n\n` : '') +
-      `Hoje é ${dataExtenso(dia)}. Monte o *PLANO DA SEMANA* de ${perfil.nome.split(' ')[0]}, no seu personagem, até 450 palavras. ESTRUTURA (WhatsApp, pra ser lido no celular): seções com título em negrito (*assim*), um dado por linha, listas com "- " no começo da linha (o WhatsApp mostra como marcador), nenhum parágrafo com mais de 2 linhas, negrito SÓ nos números-chave e no veredito, nada de "~" antes de número. Formato: uma seção por dia ("*Segunda*") com itens "- Café: ...", "- Almoço: ...", "- Lanche: ...", "- Jantar: ..." (cada item com a porção e as kcal aproximadas), e no fim "*🛒 Lista de compras*" com um item por linha:\n` +
-      `1) Uma linha com a meta diária (calorias e proteína) que o plano persegue.\n` +
-      `2) Sete dias (Seg a Dom), cada um em 1 a 2 linhas: café, almoço, lanche e jantar em poucas palavras, com porções (g, unidades, colheres), variando pouco o que a pessoa já come e corrigindo o que falta pro objetivo. Respeite a dieta e as aversões. Treino e fim de semana contam.\n` +
-      `3) *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas.\n` +
+      (pedido ? `PEDIDO DA PESSOA PRA ESTE PLANO (orçamento, o que tem no mercado perto, o que quer ou não quer; manda nisso): ${pedido}\n\n` : '') +
+      `Hoje é ${dataExtenso(dia)}. Monte o *PLANO DA SEMANA* de ${primeiro}, no seu personagem, até 450 palavras.\n` +
+      `REGRAS DE ADAPTAÇÃO (as mais importantes):\n` +
+      `- O plano segue o PADRÃO REAL acima: só as refeições que ${primeiro} de fato registra, nos horários dela(e). Refeição marcada como "NÃO registra" não entra em nenhum dia (quem nunca manda café da manhã não ganha café no plano). Vale também pra bebida e pra item solto: café, chá, suco, leite, whey ou qualquer alimento só entram se aparecem no padrão dela(e) ou no que circula no grupo; nada de "tome um café" pra quem nunca registrou café. Se a meta pedir comida a mais, encaixe nas refeições que já existem ou numa única linha "*Se quiser somar*" no fim, como sugestão, nunca como refeição nova no dia a dia.\n` +
+      `- Base do cardápio: o que ela(e) já come (itens de "Costuma"). Repita o padrão, ajuste porção e troque só o que atrapalha o objetivo. Variação vem primeiro do que circula no grupo e dos produtos fixos, depois de coisa comum e barata em ${cidade} na estação atual.\n` +
+      `- Orçamento e disponibilidade: ingredientes comuns em mercado de bairro de ${cidade}, nada de item de loja especializada ou importado; prefira o que rende a semana inteira (cozinhar uma vez, comer em 2 ou 3 refeições). Se a pessoa deu um orçamento ou disse o que tem perto, isso manda.\n` +
+      `- Sem histórico suficiente (menos de 5 dias com registro): pergunte em uma linha quais refeições ela(e) faz por dia e monte um plano curto só de almoço e jantar.\n` +
+      `ESTRUTURA (WhatsApp, pra ser lido no celular): seções com título em negrito (*assim*), um dado por linha, listas com "- " no começo da linha (o WhatsApp mostra como marcador), nenhum parágrafo com mais de 2 linhas, negrito SÓ nos números-chave e no veredito, nada de "~" antes de número. Formato: uma seção por dia ("*Segunda*") com itens ${itensDia} (só essas refeições; cada item com a porção e as kcal aproximadas), e no fim "*🛒 Lista de compras*" com um item por linha:\n` +
+      `1) Uma linha com a meta diária (calorias e proteína) que o plano persegue e uma linha dizendo em que refeições o plano se baseia (ex.: "Baseado no teu padrão: almoço, lanche e jantar").\n` +
+      `2) Sete dias (Seg a Dom), cada um com as refeições do padrão em poucas palavras, com porções (g, unidades, colheres), variando pouco o que a pessoa já come e corrigindo o que falta pro objetivo. Respeite a dieta e as aversões. Treino e fim de semana contam.\n` +
+      `3) *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas e pensada pra caber no orçamento (itens que se repetem na semana).\n` +
       `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.`,
     config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 3000, temperature: 0.7 },
   });
 }
+const NOME_SLOT_PLANO = { cafe: 'Café', lanche_manha: 'Lanche da manhã', almoco: 'Almoço', lanche: 'Lanche', jantar: 'Jantar', ceia: 'Ceia' };
+const nomeDoSlotPlano = (sl) => NOME_SLOT_PLANO[sl] || sl;
 
 
 /**
