@@ -13,7 +13,7 @@ import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojePara
 import { visaoDe } from './acompanhamento.js';
 import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
-import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, enviadosPeloBot, ACKS_FOTO, acaso, reagir } from './whatsapp.js';
+import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir } from './whatsapp.js';
 import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
@@ -21,7 +21,7 @@ import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarr
 import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao } from './consciencia.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
-import { tratarComando } from './comandos.js';
+import { tratarComando, AJUDA } from './comandos.js';
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 
@@ -384,11 +384,53 @@ export function prioridade({ texto, temImagem, temAudio, conteudo }) {
 // ============================================================
 // Lógica principal
 // ============================================================
+// ---------- Privado com o administrador: só !comandos, pra testar sem poluir o grupo ----------
+// Quem não é o ADMIN_JID é ignorado em silêncio (o bot nunca conversa fora do grupo). Nada daqui entra na memória do grupo.
+const ADMIN_PRIVADO = (process.env.ADMIN_JID || '').trim();
+let dicaPrivadoEm = 0;
+async function tratarPrivado(msg) {
+  if (!ADMIN_PRIVADO || msg.key.fromMe) return;
+  const conteudo = extractMessageContent(msg.message);
+  const texto = (conteudo?.conversation || conteudo?.extendedTextMessage?.text || conteudo?.imageMessage?.caption || '').trim();
+  if (!texto) return;
+  const jidsPriv = jidsDoPrivado(msg.key);
+  const perfil = await buscarPerfil(jidsPriv).catch(() => null);
+  const ehAdmin = jidsPriv.includes(ADMIN_PRIVADO) || Boolean(perfil?.jids?.includes(ADMIN_PRIVADO));
+  if (!ehAdmin) return;
+  await garantirDiaAtual();
+  const { dia } = agora();
+  const jidPrivado = msg.key.remoteJid;
+  const jids = perfil?.jids?.length ? perfil.jids : jidsPriv; // os jids do cadastro (número e LID) pros comandos acharem o perfil
+  if (texto.startsWith('!')) {
+    const cmd = texto.toLowerCase().split(/\s+/)[0];
+    if (cmd === '!resumo') {
+      await enviar(jidPrivado, 'O !resumo fecha o dia e manda no GRUPO. Se for pra valer, roda lá.', msg, { rapido: true });
+      return;
+    }
+    console.log(`[privado] comando do administrador: ${texto.slice(0, 60)}`);
+    const tratado = await tratarComando({
+      texto,
+      jids,
+      jidGrupo: jidPrivado, // as respostas do comando vão pro privado
+      msg,
+      dia,
+      nomeContato: msg.pushName || 'admin',
+      batizar: async () => enviar(jidPrivado, 'Rebatizar é no grupo, criatura.', msg, { rapido: true }),
+    });
+    if (!tratado) await enviar(jidPrivado, `Não conheço esse comando.\n\n${AJUDA}`, msg, { rapido: true });
+    return;
+  }
+  if (Date.now() - dicaPrivadoEm > 6 * 3600_000) {
+    dicaPrivadoEm = Date.now();
+    await enviar(jidPrivado, 'Aqui no privado eu só respondo !comandos, pra você testar sem poluir o grupo. Conversa e comida, no grupo. 😉 Manda !ajuda pra ver a lista.', msg, { rapido: true });
+  }
+}
+
 export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtras = [] } = {}) {
   if (!msg.message) return;
   if (msg.key.fromMe && enviadosPeloBot.has(msg.key.id)) return; // resposta do próprio bot
   const jidGrupo = msg.key.remoteJid;
-  if (!jidGrupo?.endsWith('@g.us')) return; // só grupos
+  if (!jidGrupo?.endsWith('@g.us')) return tratarPrivado(msg); // fora do grupo: só o administrador, só !comandos
 
   if (GRUPO_PERMITIDO && jidGrupo !== GRUPO_PERMITIDO) {
     if (!gruposIgnoradosLogados.has(jidGrupo)) {

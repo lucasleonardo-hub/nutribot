@@ -95,6 +95,11 @@ export function baixarMidia(msg) {
 // JIDs do próprio bot (número e LID), normalizados
 export const meusJids = () => [estado.sock?.user?.id, estado.sock?.user?.lid].filter(Boolean).map((j) => jidNormalizedUser(j));
 
+/** No privado não há participant: o remetente é o próprio chat (número ou LID; o Baileys 7 traz o outro em remoteJidAlt). */
+export function jidsDoPrivado(key) {
+  return [...new Set([key.remoteJid, key.remoteJidAlt].filter(Boolean).map((j) => jidNormalizedUser(j)))];
+}
+
 export function jidsDoRemetente(key) {
   let lista = [key.participant, key.participantAlt].filter(Boolean).map((j) => jidNormalizedUser(j));
   // Mensagem digitada no próprio celular do bot (fromMe) pode vir sem participant
