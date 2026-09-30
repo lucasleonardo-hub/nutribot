@@ -9,7 +9,10 @@ import { diasAnteriores } from './util.js';
 const DIAS = 30;
 
 /** Texto pronto (ou '' se a pessoa não tem registro nenhum no período). Nunca lança. */
-export async function visaoDe(perfil, dia) {
+import { visaoZap } from './resumo.js';
+
+/** formato 'prompt' (padrão, com as dicas pra IA) ou 'zap' (tópicos pro !hoje). */
+export async function visaoDe(perfil, dia, { formato = 'prompt' } = {}) {
   if (!perfil?.jids?.length) return '';
   const desde = diasAnteriores(dia, DIAS)[0];
   const [refeicoes, pesagens] = await Promise.all([
@@ -17,7 +20,8 @@ export async function visaoDe(perfil, dia) {
     pesagensDesde(perfil.jids, desde).catch(() => []),
   ]);
   try {
-    return visaoPeriodo({ refeicoes, pesagens, perfil, dia, gastos: perfil.relogio?.gastos });
+    const params = { refeicoes, pesagens, perfil, dia, gastos: perfil.relogio?.gastos };
+    return formato === 'zap' ? visaoZap(params) : visaoPeriodo(params);
   } catch (e) {
     console.error('[acompanhamento]', e.message);
     return '';

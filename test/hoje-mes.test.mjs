@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, metaBalanco, gastoAdaptativo, sequenciaDe, placarSemana } from '../resumo.js';
+import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, visaoZap, calcularVisao, metaBalanco, gastoAdaptativo, sequenciaDe, placarSemana } from '../resumo.js';
 import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
 import { preverSemana, conferirPrevisao, pesagemPerto, somarDias, avaliarRitmo, projetarMeta } from '../previsao.js';
@@ -345,6 +345,34 @@ test('rótulos (Open Food Facts): código de barras no texto, normalização e b
   assert.match(bloco, /por 100 g\/ml: 151 kcal · Proteína 5\.1 g · Carboidratos 16 g · Gorduras 7\.5 g \(açúcares 14\.2 g\)/);
   assert.match(bloco, /porção do rótulo: 100 g = 151 kcal · NOVA 4 \(ultraprocessado\)/);
   assert.equal(blocoRotulos([]), '');
+});
+
+test('visão 7/30 dias: critério único de "dia com registro" e formato em tópicos pro !hoje', () => {
+  const perfil = { nome: 'Lucas', peso: 75, objetivo: 'hipertrofia' };
+  const dia = '2026-09-29';
+  // 3 dias com estimativa + 2 dias antigos com registro mas SEM estimativa (como os de 17 a 19/09)
+  const refeicoes = [
+    ...['2026-09-27', '2026-09-28', '2026-09-29'].flatMap((d) => [1, 2, 3].map((i) => ({ dia: d, minutos: 600 + i * 200, slot: ['cafe', 'almoco', 'jantar'][i - 1], estimativa: { kcal: 900, p: 50, c: 100, g: 30 } }))),
+    ...['2026-09-25', '2026-09-26'].flatMap((d) => [1, 2, 3].map((i) => ({ dia: d, minutos: 600 + i * 200, slot: ['cafe', 'almoco', 'jantar'][i - 1] }))),
+  ];
+  const pesagens = [{ dia: '2026-09-23', peso: 77 }, { dia: '2026-09-26', peso: 75.7 }, { dia: '2026-09-29', peso: 75.7 }];
+  const gastos = { '2026-09-27': 2400, '2026-09-28': 2500, '2026-09-29': 2515 };
+  const v = calcularVisao({ refeicoes, pesagens, perfil, dia, gastos });
+  assert.equal(v.sete.comRegistro, 5); // dias com QUALQUER registro
+  assert.equal(v.sete.comEstimativa, 3); // média só sobre estes
+  assert.equal(Math.round(v.sete.kcal), 2700);
+  assert.equal(v.sequencia, 5); // 5 dias completos seguidos (3 registros/dia), com ou sem estimativa
+  assert.equal(v.balanco.situacao, 'dentro'); // (2700-2400 + 2700-2500)/2 = +250 kcal/dia, no limite de baixo do alvo
+  const zap = visaoZap({ refeicoes, pesagens, perfil, dia, gastos });
+  assert.match(zap, /^\*Últimos 7 dias\*\n• Registro: 5 de 7 dias\n• Média: 2\.700 kcal · Proteína 150 g\/dia \(meta 120 a 165 g\) · sobre 3 dias com estimativa\n• Peso: 77 kg \(23\/09\) → 75,7 kg \(29\/09\) · -1,3 kg/m);
+  assert.match(zap, /\*Sequência\*: 5 dias seguidos com o dia completo/);
+  assert.match(zap, /\*Balanço energético\* \(relógio\)\n• Hoje: 2\.700 kcal comidas · 2\.515 kcal gastas → \+185 kcal \(dia ainda incompleto\)/);
+  assert.match(zap, /• Últimos 2 dias: \+250 kcal\/dia · objetivo pede \+250 a \+500 kcal\/dia → no alvo ✅/);
+  // o texto do prompt continua com as dicas anti-confusão e o mesmo critério
+  const prompt = visaoPeriodo({ refeicoes, pesagens, perfil, dia, gastos });
+  assert.match(prompt, /ÚLTIMOS 7 DIAS: 5 de 7 dias com registro · média nos dias registrados 2\.700 kcal e proteína 150 g\/dia \(meta 120 a 165 g\) \(média sobre os 3 dias com estimativa\)/);
+  assert.match(prompt, /no DIA INTEIRO \(soma de 3 refeição\(ões\)/);
+  assert.equal(visaoZap({ refeicoes: [], pesagens: [], perfil, dia }), '');
 });
 
 test('conversa sobre a bot, outra refeição nomeada, compilação pelo banco e linha REAGIR', () => {

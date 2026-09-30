@@ -137,7 +137,7 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     const refeicoes = await refeicoesDoDia(dia).catch(() => []);
     const habitos = await habitosDoDia(dia).catch(() => []);
     // só pra uma pessoa: junta a visão de 7/30 dias, meta e balanço energético (quem tem relógio), em linguagem de WhatsApp
-    const visao = todos ? '' : (await visaoDe(alvo[0], dia)).replace(/^(ÚLTIMOS \d+ DIAS|BALANÇO ENERGÉTICO|META ADAPTATIVA|META \(provisória, pelo relógio\)|SEQUÊNCIA)([^:]*):/gm, '*$1$2:*');
+    const visao = todos ? '' : await visaoDe(alvo[0], dia, { formato: 'zap' }); // 7/30 dias, sequência, meta e balanço em tópicos
     await enviar(jidGrupo, `📊 *${todos ? 'Hoje, todo mundo' : 'Seu dia'} (${dia})*\n\n${resumirHoje(refeicoes, alvo, dia, habitos)}${visao ? `\n\n${visao}` : ''}${todos ? '' : '\n\n_(!hoje todos mostra o grupo inteiro · !grafico mostra em imagem)_'}`, msg, { rapido: true });
     return true;
   }

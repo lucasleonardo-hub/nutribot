@@ -348,60 +348,145 @@ const _diasAte = (dia, n) => {
  * @param {string} p.dia         hoje (YYYY-MM-DD)
  * @param {object} [p.gastos]    { 'YYYY-MM-DD': kcal gastas segundo o relógio } (perfil.relogio.gastos)
  */
-export function visaoPeriodo({ refeicoes = [], pesagens = [], perfil = {}, dia, gastos }) {
-  if (!refeicoes.length && !pesagens.length) return '';
-  const porDia = new Map();
+/**
+ * Números do acompanhamento (7/30 dias, sequência, meta, balanço), calculados UMA vez com critério único:
+ * "dia com registro" = qualquer registro no dia; médias só nos dias com estimativa (e diz quantos foram).
+ * Antes cada contador tinha um critério e o !hoje dizia "10 de 30 dias com registro" e "13 dias seguidos" ao mesmo tempo.
+ * Dois renderizadores: visaoPeriodo (prompt da IA, com as dicas anti-confusão) e visaoZap (o !hoje, em tópicos).
+ */
+export function calcularVisao({ refeicoes = [], pesagens = [], perfil = {}, dia, gastos }) {
+  if (!refeicoes.length && !pesagens.length) return null;
+  const porDia = new Map(); // dia -> { kcal, p, n, nEst }
   for (const r of refeicoes) {
-    if (!r.estimativa?.kcal) continue;
-    const t = porDia.get(r.dia) || { kcal: 0, p: 0, n: 0 };
-    t.kcal += r.estimativa.kcal;
-    t.p += r.estimativa.p || 0;
+    const t = porDia.get(r.dia) || { kcal: 0, p: 0, n: 0, nEst: 0 };
     t.n += 1;
+    if (r.estimativa?.kcal) {
+      t.kcal += r.estimativa.kcal;
+      t.p += r.estimativa.p || 0;
+      t.nEst += 1;
+    }
     porDia.set(r.dia, t);
   }
-  const metaP = perfil.peso ? ` (meta ${Math.round(perfil.peso * 1.6)} a ${Math.round(perfil.peso * 2.2)} g)` : '';
-  const linhas = [];
+  const metaP = perfil.peso ? { min: Math.round(perfil.peso * 1.6), max: Math.round(perfil.peso * 2.2) } : null;
   const periodo = (n) => {
     const dias = _diasAte(dia, n);
-    const com = dias.filter((d) => porDia.has(d));
-    if (!com.length) return `ÚLTIMOS ${n} DIAS: nenhuma refeição registrada.`;
-    const kcal = com.reduce((a, d) => a + porDia.get(d).kcal, 0) / com.length;
-    const prot = com.reduce((a, d) => a + porDia.get(d).p, 0) / com.length;
-    const pes = pesagens.filter((x) => dias.includes(x.dia)).sort((a, b) => a.dia.localeCompare(b.dia));
-    const peso = pes.length >= 2 ? ` · peso ${_kg(pes[0].peso)} (${_dm(pes[0].dia)}) -> ${_kg(pes[pes.length - 1].peso)} (${_dm(pes[pes.length - 1].dia)})` : pes.length === 1 ? ` · peso ${_kg(pes[0].peso)} (${_dm(pes[0].dia)})` : '';
-    // média muito baixa quase sempre é refeição que não foi mandada, não jejum: a IA não pode ler como "comeu só isso"
-    const alerta = kcal < 1000 ? ' (média baixa assim indica refeições NÃO registradas, não que a pessoa comeu só isso)' : '';
-    return `ÚLTIMOS ${n} DIAS: ${com.length} de ${n} dias com registro · média nos dias registrados ${_kcal(kcal)} e proteína ${Math.round(prot)} g/dia${metaP}${alerta}${peso}`;
+    const comRegistro = dias.filter((d) => porDia.has(d));
+    const comEst = comRegistro.filter((d) => porDia.get(d).nEst > 0);
+    const kcal = comEst.length ? comEst.reduce((a, d) => a + porDia.get(d).kcal, 0) / comEst.length : null;
+    const prot = comEst.length ? comEst.reduce((a, d) => a + porDia.get(d).p, 0) / comEst.length : null;
+    const pes = pesagens.filter((x) => x.peso && dias.includes(x.dia)).sort((a, b) => a.dia.localeCompare(b.dia));
+    const metade = Math.floor(n / 2);
+    const recentes = pes.filter((x) => dias.slice(n - metade).includes(x.dia));
+    const anteriores = pes.filter((x) => dias.slice(0, n - metade).includes(x.dia));
+    return {
+      n,
+      comRegistro: comRegistro.length,
+      comEstimativa: comEst.length,
+      kcal,
+      prot,
+      pesoInicio: pes[0] || null,
+      pesoFim: pes[pes.length - 1] || null,
+      pesoMediaRecente: media(recentes.map((x) => x.peso)),
+      pesoMediaAnterior: media(anteriores.map((x) => x.peso)),
+    };
   };
-  linhas.push(periodo(7), periodo(30));
-  const seq = sequenciaDe(refeicoes, dia);
-  if (seq >= 2) linhas.push(`SEQUÊNCIA: ${seq} dia(s) seguidos registrando o dia completo.`);
-  linhas.push(gastoAdaptativo({ refeicoes, pesagens, perfil, dia, gastos }).texto);
-
-  // Balanço energético (só com relógio): comparação nos dias em que existem os dois dados
+  const sete = periodo(7);
+  const trinta = periodo(30);
+  const sequencia = sequenciaDe(refeicoes, dia);
+  const meta = gastoAdaptativo({ refeicoes, pesagens, perfil, dia, gastos });
+  let balanco = null;
   if (gastos && Object.keys(gastos).length) {
-    const meta = metaBalanco(perfil.objetivo);
+    const alvo = metaBalanco(perfil.objetivo);
     const hoje = porDia.get(dia);
     const diasGasto = Object.keys(gastos).filter((d) => d <= dia).sort();
     const ultimoGasto = diasGasto[diasGasto.length - 1];
+    const fechados = _diasAte(dia, 8).slice(0, 7).filter((d) => porDia.has(d) && porDia.get(d).nEst > 0 && gastos[d]); // 7 dias fechados antes de hoje
+    const media7 = fechados.length ? fechados.reduce((a, d) => a + (porDia.get(d).kcal - gastos[d]), 0) / fechados.length : null;
+    balanco = {
+      alvo,
+      hoje: hoje && hoje.nEst ? { kcal: hoje.kcal, n: hoje.nEst, gasto: gastos[dia] || null } : null,
+      ultimoCompleto: ultimoGasto && ultimoGasto !== dia && porDia.get(ultimoGasto)?.nEst ? { dia: ultimoGasto, kcal: porDia.get(ultimoGasto).kcal, gasto: gastos[ultimoGasto] } : null,
+      media7,
+      diasMedia7: fechados.length,
+      situacao: media7 == null ? null : media7 < alvo.min ? 'abaixo' : media7 > alvo.max ? 'acima' : 'dentro',
+    };
+  }
+  return { sete, trinta, sequencia, meta, balanco, metaP };
+}
+
+/** Texto pro PROMPT da IA (com as dicas que evitam confusão de número). '' sem dados. */
+export function visaoPeriodo(params) {
+  const v = calcularVisao(params);
+  if (!v) return '';
+  const { perfil = {} } = params;
+  const metaP = v.metaP ? ` (meta ${v.metaP.min} a ${v.metaP.max} g)` : '';
+  const periodo = (x) => {
+    if (!x.comRegistro) return `ÚLTIMOS ${x.n} DIAS: nenhuma refeição registrada.`;
+    const media_ = x.kcal == null ? 'sem estimativas' : `média nos dias registrados ${_kcal(x.kcal)} e proteína ${Math.round(x.prot)} g/dia${metaP}`;
+    const parcial = x.comEstimativa && x.comEstimativa < x.comRegistro ? ` (média sobre os ${x.comEstimativa} dias com estimativa)` : '';
+    // média muito baixa quase sempre é refeição que não foi mandada, não jejum: a IA não pode ler como "comeu só isso"
+    const alerta = x.kcal != null && x.kcal < 1000 ? ' (média baixa assim indica refeições NÃO registradas, não que a pessoa comeu só isso)' : '';
+    const peso = x.pesoInicio && x.pesoFim && x.pesoInicio.dia !== x.pesoFim.dia ? ` · peso ${_kg(x.pesoInicio.peso)} (${_dm(x.pesoInicio.dia)}) -> ${_kg(x.pesoFim.peso)} (${_dm(x.pesoFim.dia)})` : x.pesoFim ? ` · peso ${_kg(x.pesoFim.peso)} (${_dm(x.pesoFim.dia)})` : '';
+    return `ÚLTIMOS ${x.n} DIAS: ${x.comRegistro} de ${x.n} dias com registro · ${media_}${parcial}${alerta}${peso}`;
+  };
+  const linhas = [periodo(v.sete), periodo(v.trinta)];
+  if (v.sequencia >= 2) linhas.push(`SEQUÊNCIA: ${v.sequencia} dia(s) seguidos registrando o dia completo.`);
+  linhas.push(v.meta.texto);
+  if (v.balanco) {
+    const b = v.balanco;
     const partes = [];
-    if (hoje) partes.push(`hoje até agora comeu ${_kcal(hoje.kcal)} no DIA INTEIRO (soma de ${hoje.n} refeição(ões), não o valor de uma delas)${gastos[dia] ? `; o relógio já estima ${_kcal(gastos[dia])} gastas (${_sinal(hoje.kcal - gastos[dia])} kcal, dia ainda incompleto)` : ' (o gasto de hoje só chega quando o relógio sincronizar)'}`);
-    if (ultimoGasto && ultimoGasto !== dia && porDia.has(ultimoGasto)) {
-      const c = porDia.get(ultimoGasto).kcal;
-      partes.push(`último dia completo (${_dm(ultimoGasto)}): comeu ${_kcal(c)}, gastou ${_kcal(gastos[ultimoGasto])} -> ${_sinal(c - gastos[ultimoGasto])} kcal`);
-    }
-    const sete = _diasAte(dia, 8).slice(0, 7).filter((d) => porDia.has(d) && gastos[d]); // 7 dias fechados antes de hoje
-    if (sete.length) {
-      const m = sete.reduce((a, d) => a + (porDia.get(d).kcal - gastos[d]), 0) / sete.length;
-      const dentro = m >= meta.min && m <= meta.max;
-      const lado = m < meta.min ? 'ABAIXO do alvo (comendo de menos pro objetivo)' : m > meta.max ? 'ACIMA do alvo (comendo além do objetivo)' : 'dentro do alvo';
-      partes.push(`média dos últimos ${sete.length} dias com os dois dados: ${_sinal(m)} kcal/dia; objetivo "${perfil.objetivo || '?'}" pede ${meta.rotulo} -> ${dentro ? 'no rumo' : lado}`);
+    if (b.hoje) partes.push(`hoje até agora comeu ${_kcal(b.hoje.kcal)} no DIA INTEIRO (soma de ${b.hoje.n} refeição(ões), não o valor de uma delas)${b.hoje.gasto ? `; o relógio já estima ${_kcal(b.hoje.gasto)} gastas (${_sinal(b.hoje.kcal - b.hoje.gasto)} kcal, dia ainda incompleto)` : ' (o gasto de hoje só chega quando o relógio sincronizar)'}`);
+    if (b.ultimoCompleto) partes.push(`último dia completo (${_dm(b.ultimoCompleto.dia)}): comeu ${_kcal(b.ultimoCompleto.kcal)}, gastou ${_kcal(b.ultimoCompleto.gasto)} -> ${_sinal(b.ultimoCompleto.kcal - b.ultimoCompleto.gasto)} kcal`);
+    if (b.media7 != null) {
+      const lado = b.situacao === 'abaixo' ? 'ABAIXO do alvo (comendo de menos pro objetivo)' : b.situacao === 'acima' ? 'ACIMA do alvo (comendo além do objetivo)' : 'no rumo';
+      partes.push(`média dos últimos ${b.diasMedia7} dias com os dois dados: ${_sinal(b.media7)} kcal/dia; objetivo "${perfil.objetivo || '?'}" pede ${b.alvo.rotulo} -> ${lado}`);
     } else {
-      partes.push(`objetivo "${perfil.objetivo || '?'}" pede ${meta.rotulo}`);
+      partes.push(`objetivo "${perfil.objetivo || '?'}" pede ${b.alvo.rotulo}`);
     }
     linhas.push(`BALANÇO ENERGÉTICO (relógio; vale se registrou todas as refeições): ${partes.join(' · ')}.`);
   }
   return linhas.join('\n');
+}
+
+/** Texto pro !hoje (WhatsApp), em tópicos, sem as dicas de prompt. '' sem dados. */
+export function visaoZap(params) {
+  const v = calcularVisao(params);
+  if (!v) return '';
+  const { perfil = {} } = params;
+  const seta = ' → ';
+  const bloco = (titulo, x) => {
+    if (!x.comRegistro) return `*${titulo}*\n• Sem registros`;
+    const linhas = [`*${titulo}*`, `• Registro: ${x.comRegistro} de ${x.n} dias`];
+    if (x.kcal != null) linhas.push(`• Média: ${_kcal(x.kcal)} · Proteína ${Math.round(x.prot)} g/dia${v.metaP ? ` (meta ${v.metaP.min} a ${v.metaP.max} g)` : ''}${x.comEstimativa < x.comRegistro ? ` · sobre ${x.comEstimativa} dias com estimativa` : ''}`);
+    if (x.pesoInicio && x.pesoFim && x.pesoInicio.dia !== x.pesoFim.dia) {
+      const dif = Math.round((x.pesoFim.peso - x.pesoInicio.peso) * 10) / 10;
+      const medias = x.pesoMediaRecente != null && x.pesoMediaAnterior != null ? ` · média ${x.pesoMediaAnterior.toFixed(1).replace('.', ',')} → ${x.pesoMediaRecente.toFixed(1).replace('.', ',')} kg` : '';
+      linhas.push(`• Peso: ${_kg(x.pesoInicio.peso)} (${_dm(x.pesoInicio.dia)})${seta}${_kg(x.pesoFim.peso)} (${_dm(x.pesoFim.dia)}) · ${dif > 0 ? '+' : ''}${String(dif).replace('.', ',')} kg${medias}`);
+    } else if (x.pesoFim) linhas.push(`• Peso: ${_kg(x.pesoFim.peso)} (${_dm(x.pesoFim.dia)})`);
+    return linhas.join('\n');
+  };
+  const partes = [bloco('Últimos 7 dias', v.sete), bloco('Últimos 30 dias', v.trinta)];
+  if (v.sequencia >= 2) partes.push(`*Sequência*: ${v.sequencia} dias seguidos com o dia completo`);
+  const m = v.meta;
+  if (m?.status === 'calibrado') {
+    const t = m.tendenciaKgSemana;
+    partes.push(`*Meta* (adaptativa, ${m.diasCompletos} dias): gasto real ~${_kcal(m.gasto)}/dia · peso ${Math.abs(t) < 0.05 ? 'estável' : `${t > 0 ? '+' : ''}${String(t).replace('.', ',')} kg/semana`}${seta}comer ${_kcal(m.alvo.min)} a ${_kcal(m.alvo.max)}`);
+  } else if (m?.status === 'relogio') {
+    partes.push(`*Meta* (pelo relógio, provisória): gasto ~${_kcal(m.gasto)}/dia${seta}comer ${_kcal(m.alvo.min)} a ${_kcal(m.alvo.max)}${m.diasCompletos < 10 ? ` · adaptativa em ${10 - m.diasCompletos} dia(s)` : ''}`);
+  } else if (m) {
+    partes.push(`*Meta*: ainda calibrando (${m.diasCompletos} de 10 dias completos)`);
+  }
+  if (v.balanco) {
+    const b = v.balanco;
+    const linhas = ['*Balanço energético* (relógio)'];
+    if (b.hoje) linhas.push(`• Hoje: ${_kcal(b.hoje.kcal)} comidas${b.hoje.gasto ? ` · ${_kcal(b.hoje.gasto)} gastas${seta}${_sinal(b.hoje.kcal - b.hoje.gasto)} kcal (dia ainda incompleto)` : ''}`);
+    if (b.ultimoCompleto) linhas.push(`• ${_dm(b.ultimoCompleto.dia)}: ${_kcal(b.ultimoCompleto.kcal)} comidas · ${_kcal(b.ultimoCompleto.gasto)} gastas${seta}${_sinal(b.ultimoCompleto.kcal - b.ultimoCompleto.gasto)} kcal`);
+    const alvoTxt = `${_sinal(b.alvo.min)} a ${_sinal(b.alvo.max)} kcal/dia`;
+    if (b.media7 != null) linhas.push(`• Últimos ${b.diasMedia7} dias: ${_sinal(b.media7)} kcal/dia · objetivo pede ${alvoTxt}${seta}${b.situacao === 'dentro' ? 'no alvo ✅' : b.situacao === 'acima' ? 'acima do alvo' : 'abaixo do alvo'}`);
+    else linhas.push(`• Objetivo pede ${alvoTxt}`);
+    partes.push(linhas.join('\n'));
+  }
+  return partes.join('\n\n');
 }
 
 // ============================================================
