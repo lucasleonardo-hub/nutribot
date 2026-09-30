@@ -16,7 +16,7 @@ const num = (t) => Number(String(t).replace(/\./g, '').replace(',', '.')) || 0;
  */
 export function lerEstimativa(texto) {
   const t = String(texto || '');
-  const linhaEst = t.match(/Estimativa[^:\n]*:([^\n]*(?:\n(?![\s*]*[⚖️💡🍽️🕐])[^\n]*){0,2})/i)?.[1];
+  const linhaEst = t.match(/Estimativa[^:\n]*:([^\n]*(?:\n(?![\s*]*[⚖️💡🍽️🕐])[^\n]*){0,5})/i)?.[1];
   const ler = (trecho) => {
     if (!trecho) return null;
     const kcal = trecho.match(/~?\s*(\d[\d.,]*)\s*(?:kcal|calorias?)/i)?.[1] ?? trecho.match(/(?:kcal|calorias?)[:\s~]*(\d[\d.,]*)/i)?.[1];
@@ -41,7 +41,16 @@ export function descricaoDaAnalise(textoBot, fallback) {
 }
 
 export const formatarEstimativa = (e) =>
-  `~${Math.round(e.kcal)} kcal · Proteína ${Math.round(e.p)} g · Carboidratos ${Math.round(e.c)} g · Gorduras ${Math.round(e.g)} g`;
+  `${Math.round(e.kcal)} kcal · Proteína ${Math.round(e.p)} g · Carboidratos ${Math.round(e.c)} g · Gorduras ${Math.round(e.g)} g`;
+
+/** Versão em linhas pro WhatsApp: título em quem chama, aqui um nutriente por linha ("Calorias: 930 kcal"). */
+export const formatarEstimativaLinhas = (e, { metaP } = {}) =>
+  [
+    `Calorias: ${Math.round(e.kcal).toLocaleString('pt-BR')} kcal`,
+    `Proteína: ${Math.round(e.p)} g${metaP ? ` (meta ${metaP.min} a ${metaP.max} g)` : ''}`,
+    `Carboidratos: ${Math.round(e.c)} g`,
+    `Gorduras: ${Math.round(e.g)} g`,
+  ].join('\n');
 
 /**
  * Para cada pessoa: lista de refeições do dia (horário, slot, descrição, estimativa) e totais somados.
@@ -190,11 +199,12 @@ export function resumirHoje(refeicoes, perfis, dia, habitos = []) {
       blocos.push(`*${primeiro}*: nada registrado hoje ainda 👀`);
       continue;
     }
-    const linhas = minhas.map((r) => `${NOME_SLOT[r.slot] || r.slot} ${r.horaLocal || r.hora}: ${r.estimativa?.kcal ? `~${Math.round(r.estimativa.kcal)} kcal` : '(sem estimativa)'}${r.descricao ? ` · ${r.descricao.slice(0, 60)}` : ''}`);
+    // título ("☕ *Café da manhã* · 08:20"), quebra de linha, e aí as informações
+    const linhas = minhas.map((r) => `${(NOME_SLOT[r.slot] || r.slot).replace(/^(\S+)\s+(.+)$/, '$1 *$2*')} · ${r.horaLocal || r.hora}\n${r.estimativa?.kcal ? `${Math.round(r.estimativa.kcal)} kcal` : 'sem estimativa'}${r.descricao ? ` · ${r.descricao.slice(0, 70)}` : ''}`);
     const comEst = minhas.filter((r) => r.estimativa?.kcal);
     const tot = comEst.reduce((a, r) => soma(a, r.estimativa), { kcal: 0, p: 0, c: 0, g: 0 });
-    const meta = p.peso ? ` · meta de proteína ${Math.round(p.peso * 1.6)} a ${Math.round(p.peso * 2.2)} g` : '';
-    blocos.push(`*${primeiro}* (${minhas.length} ${minhas.length === 1 ? 'refeição' : 'refeições'})\n${linhas.join('\n')}\n📊 ${comEst.length ? formatarEstimativa(tot) : 'sem estimativas'}${meta}${agua}${alcool}`);
+    const metaP = p.peso ? { min: Math.round(p.peso * 1.6), max: Math.round(p.peso * 2.2) } : null;
+    blocos.push(`*${primeiro}* (${minhas.length} ${minhas.length === 1 ? 'refeição' : 'refeições'})\n\n${linhas.join('\n\n')}\n\n📊 *Total do dia*\n${comEst.length ? formatarEstimativaLinhas(tot, { metaP }) : 'sem estimativas'}${agua}${alcool}`);
   }
   return blocos.join('\n\n');
 }
@@ -354,6 +364,56 @@ const _diasAte = (dia, n) => {
  * Antes cada contador tinha um critério e o !hoje dizia "10 de 30 dias com registro" e "13 dias seguidos" ao mesmo tempo.
  * Dois renderizadores: visaoPeriodo (prompt da IA, com as dicas anti-confusão) e visaoZap (o !hoje, em tópicos).
  */
+const NOME_DIA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+const _dow = (d) => new Date(`${d}T12:00:00Z`).getUTCDay();
+
+/**
+ * Quanto a pessoa deve gastar AMANHÃ, pelo relógio: média das últimas semanas no mesmo dia da semana (sábado gasta menos
+ * que terça), ou dos últimos 14 dias quando o dia da semana ainda tem pouca amostra. Quando a meta adaptativa está
+ * calibrada, corrige o viés do relógio pela razão gasto real / gasto do relógio (limitada a 0,8-1,25).
+ * Devolve null sem relógio ou com menos de 7 dias fechados. Puro.
+ */
+export function previsaoGastoAmanha({ gastos, dia, objetivo, metaAdaptativa }) {
+  if (!gastos || !dia) return null;
+  const entradas = Object.entries(gastos).filter(([d, k]) => d < dia && Number(k) > 800).sort(([a], [b]) => a.localeCompare(b)); // dias fechados; hoje ainda está incompleto
+  if (entradas.length < 7) return null;
+  const amanha = new Date(`${dia}T12:00:00Z`);
+  amanha.setUTCDate(amanha.getUTCDate() + 1);
+  const diaAmanha = amanha.toISOString().slice(0, 10);
+  const dow = _dow(diaAmanha);
+  const mesmos = entradas.filter(([d]) => _dow(d) === dow).slice(-4).map(([, k]) => Number(k));
+  const geral = entradas.slice(-14).map(([, k]) => Number(k));
+  const usaDia = mesmos.length >= 2;
+  const base = usaDia ? media(mesmos) : media(geral);
+  const criterio = usaDia ? `média das últimas ${mesmos.length} ${NOME_DIA[dow]}s` : `média dos últimos ${geral.length} dias`;
+  let fator = 1;
+  if (metaAdaptativa?.status === 'calibrado' && metaAdaptativa.gasto) {
+    const relogio28 = media(entradas.slice(-28).map(([, k]) => Number(k)));
+    if (relogio28) fator = Math.min(1.25, Math.max(0.8, metaAdaptativa.gasto / relogio28));
+  }
+  const previsto = Math.round((base * fator) / 10) * 10;
+  const alvo = metaBalanco(objetivo);
+  const min = Math.round((previsto + alvo.min) / 10) * 10;
+  const max = Math.round((previsto + alvo.max) / 10) * 10;
+  const ajuste = Math.abs(fator - 1) >= 0.02 ? `, ajustada pelo gasto real da meta adaptativa (x${fator.toFixed(2).replace('.', ',')})` : '';
+  // dia da semana bem acima/abaixo da média geral (quinta com treino x média de todos os dias): diz, pra não parecer contradição
+  const mediaGeral = Math.round((media(geral) * fator) / 10) * 10;
+  const desvio = usaDia && mediaGeral ? (previsto - mediaGeral) / mediaGeral : 0;
+  const comparacao = Math.abs(desvio) >= 0.08 ? ` (${desvio > 0 ? 'acima' : 'abaixo'} da sua média geral de ${_kcal(mediaGeral)}: ${NOME_DIA[dow]} costuma ser dia de ${desvio > 0 ? 'mais' : 'menos'} gasto)` : '';
+  return {
+    dia: diaAmanha,
+    diaSemana: NOME_DIA[dow],
+    previsto,
+    fator,
+    criterio,
+    amostras: usaDia ? mesmos.length : geral.length,
+    alvo: { min, max },
+    mediaGeral,
+    texto: `AMANHÃ (${NOME_DIA[dow]}): gasto previsto ${_kcal(previsto)} (${criterio}${ajuste})${comparacao}; objetivo "${objetivo || '?'}" pede ${alvo.rotulo} -> comer entre ${_kcal(min)} e ${_kcal(max)}.`,
+    zap: `*Amanhã* (${NOME_DIA[dow]}): você costuma gastar ${_kcal(previsto)}${comparacao} → mire ${_kcal(min)} a ${_kcal(max)}`,
+  };
+}
+
 export function calcularVisao({ refeicoes = [], pesagens = [], perfil = {}, dia, gastos }) {
   if (!refeicoes.length && !pesagens.length) return null;
   const porDia = new Map(); // dia -> { kcal, p, n, nEst }
@@ -411,7 +471,8 @@ export function calcularVisao({ refeicoes = [], pesagens = [], perfil = {}, dia,
       situacao: media7 == null ? null : media7 < alvo.min ? 'abaixo' : media7 > alvo.max ? 'acima' : 'dentro',
     };
   }
-  return { sete, trinta, sequencia, meta, balanco, metaP };
+  const amanha = previsaoGastoAmanha({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta });
+  return { sete, trinta, sequencia, meta, balanco, metaP, amanha };
 }
 
 /** Texto pro PROMPT da IA (com as dicas que evitam confusão de número). '' sem dados. */
@@ -445,6 +506,7 @@ export function visaoPeriodo(params) {
     }
     linhas.push(`BALANÇO ENERGÉTICO (relógio; vale se registrou todas as refeições): ${partes.join(' · ')}.`);
   }
+  if (v.amanha) linhas.push(v.amanha.texto);
   return linhas.join('\n');
 }
 
@@ -486,6 +548,7 @@ export function visaoZap(params) {
     else linhas.push(`• Objetivo pede ${alvoTxt}`);
     partes.push(linhas.join('\n'));
   }
+  if (v.amanha) partes.push(v.amanha.zap);
   return partes.join('\n\n');
 }
 

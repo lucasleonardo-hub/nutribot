@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, visaoZap, calcularVisao, metaBalanco, gastoAdaptativo, sequenciaDe, placarSemana } from '../resumo.js';
+import { resumirHoje, compilarMes, registradasHojeParaPrompt, lerRotuloRefeicao, visaoPeriodo, visaoZap, calcularVisao, metaBalanco, gastoAdaptativo, sequenciaDe, placarSemana, formatarEstimativaLinhas, previsaoGastoAmanha, lerEstimativa as lerEstimativaResumo } from '../resumo.js';
 import { ancorasDe, blocoAncoras } from '../taco.js';
 import { configGrafico } from '../graficos.js';
 import { preverSemana, conferirPrevisao, pesagemPerto, somarDias, avaliarRitmo, projetarMeta } from '../previsao.js';
@@ -34,8 +34,8 @@ test('resumirHoje soma o dia por pessoa e mostra quem não registrou', () => {
   ];
   const t = resumirHoje(refeicoes, perfis, '2026-09-22');
   assert.match(t, /\*Lucas\* \(2 refeições\)/);
-  assert.match(t, /~1100 kcal · Proteína 70 g/);
-  assert.match(t, /meta de proteína 117 a 161 g/);
+  assert.match(t, /📊 \*Total do dia\*\nCalorias: 1\.100 kcal\nProteína: 70 g/);
+  assert.match(t, /Proteína: 70 g \(meta 117 a 161 g\)/);
   assert.match(t, /\*Alezinha\*: nada registrado hoje ainda/);
 });
 
@@ -52,8 +52,8 @@ test('compilarMes: peso, médias por semana e dias sem registro', () => {
   ];
   const t = compilarMes(refeicoes, pesagens, perfis, dias);
   assert.match(t, /peso: 73 kg \(09-01\) -> 74\.2 kg \(09-14\) = 1\.2 kg no período/);
-  assert.match(t, /semana 1: média\/dia ~1500 kcal · Proteína 75 g/);
-  assert.match(t, /semana 2: média\/dia ~1500 kcal/);
+  assert.match(t, /semana 1: média\/dia 1500 kcal · Proteína 75 g/);
+  assert.match(t, /semana 2: média\/dia 1500 kcal/);
   assert.match(t, /3 refeição\(ões\) registrada\(s\); 11 dia\(s\) sem nenhum registro/);
   assert.match(t, /Ale \(objetivo: emagrecer\)\n  - peso: nenhuma pesagem registrada/);
 });
@@ -345,6 +345,53 @@ test('rótulos (Open Food Facts): código de barras no texto, normalização e b
   assert.match(bloco, /por 100 g\/ml: 151 kcal · Proteína 5\.1 g · Carboidratos 16 g · Gorduras 7\.5 g \(açúcares 14\.2 g\)/);
   assert.match(bloco, /porção do rótulo: 100 g = 151 kcal · NOVA 4 \(ultraprocessado\)/);
   assert.equal(blocoRotulos([]), '');
+});
+
+test('formato novo: estimativa em linhas, bloco novo lido, !hoje com título e informações abaixo', () => {
+  assert.equal(formatarEstimativaLinhas({ kcal: 4227, p: 294, c: 544, g: 109 }, { metaP: { min: 121, max: 167 } }), 'Calorias: 4.227 kcal\nProteína: 294 g (meta 121 a 167 g)\nCarboidratos: 544 g\nGorduras: 109 g');
+  // o bloco novo da análise (um nutriente por linha) continua sendo lido pelo sistema
+  const bloco = '🕐 *Refeição:* almoço\n🍽️ *O que eu vi:* arroz, feijão e frango\n🔥 *Estimativa:*\nCalorias: 830 kcal\nProteína: 62 g\nCarboidratos: 105 g\nGorduras: 20 g\n⚖️ *Veredito:* 9/10\n💡 *Dica:* segue.';
+  assert.deepEqual(lerEstimativaResumo(bloco), { kcal: 830, p: 62, c: 105, g: 20 });
+  const perfis = [{ nome: 'Lucas', jids: ['l'], peso: 75 }];
+  const refs = [
+    { dia: '2026-09-29', jid: 'l', horaLocal: '08:20', minutos: 500, slot: 'cafe', descricao: '4 fatias de pão, queijo e geleia', estimativa: { kcal: 630, p: 44, c: 87, g: 16 } },
+    { dia: '2026-09-29', jid: 'l', horaLocal: '11:43', minutos: 703, slot: 'almoco', descricao: 'arroz, feijão e frango', estimativa: { kcal: 830, p: 62, c: 105, g: 20 } },
+  ];
+  const t = resumirHoje(refs, perfis, '2026-09-29');
+  assert.match(t, /^\*Lucas\* \(2 refeições\)\n\n☕ \*Café da manhã\* · 08:20\n630 kcal · 4 fatias de pão, queijo e geleia\n\n🍽️ \*Almoço\* · 11:43\n830 kcal · arroz, feijão e frango\n\n📊 \*Total do dia\*\nCalorias: 1\.460 kcal\nProteína: 106 g \(meta 120 a 165 g\)\nCarboidratos: 192 g\nGorduras: 36 g$/);
+  assert.ok(!/~/.test(t));
+});
+
+test('previsão de gasto de amanhã: mesmo dia da semana, ajuste pela meta adaptativa e alvo do objetivo', () => {
+  // 3 semanas de relógio: sábados gastam ~1.780, dias de semana ~2.650
+  const gastos = {};
+  for (let i = 1; i <= 21; i++) {
+    const d = new Date('2026-09-30T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() - i);
+    const dia = d.toISOString().slice(0, 10);
+    gastos[dia] = d.getUTCDay() === 6 ? 1780 : 2650;
+  }
+  // 30/09 é quarta -> amanhã é quinta
+  const p = previsaoGastoAmanha({ gastos, dia: '2026-09-30', objetivo: 'Hipertrofia' });
+  assert.equal(p.diaSemana, 'quinta');
+  assert.equal(p.previsto, 2650);
+  assert.equal(p.amostras, 3);
+  assert.deepEqual(p.alvo, { min: 2900, max: 3150 });
+  assert.match(p.texto, /^AMANHÃ \(quinta\): gasto previsto 2\.650 kcal \(média das últimas 3 quintas\); objetivo "Hipertrofia" pede superávit de 250 a 500 kcal\/dia -> comer entre 2\.900 kcal e 3\.150 kcal\.$/);
+  assert.match(p.zap, /^\*Amanhã\* \(quinta\): você costuma gastar 2\.650 kcal → mire 2\.900 kcal a 3\.150 kcal$/);
+  // sexta -> sábado: pega os sábados
+  assert.equal(previsaoGastoAmanha({ gastos, dia: '2026-09-25', objetivo: 'emagrecer' }).previsto, 1780);
+  // meta adaptativa calibrada com gasto real 10% acima do relógio: corrige a previsão
+  const ajustada = previsaoGastoAmanha({ gastos, dia: '2026-09-30', objetivo: 'Hipertrofia', metaAdaptativa: { status: 'calibrado', gasto: 2750 } });
+  assert.ok(ajustada.previsto > 2650 && ajustada.previsto <= 3000);
+  assert.match(ajustada.texto, /ajustada pelo gasto real/);
+  // sem relógio ou com poucos dias: nada
+  assert.equal(previsaoGastoAmanha({ gastos: null, dia: '2026-09-30', objetivo: 'x' }), null);
+  assert.equal(previsaoGastoAmanha({ gastos: { '2026-09-29': 2500 }, dia: '2026-09-30', objetivo: 'x' }), null);
+  // entra na visão (prompt e zap)
+  const v = calcularVisao({ refeicoes: [{ dia: '2026-09-30', minutos: 500, slot: 'cafe', estimativa: { kcal: 600, p: 30, c: 60, g: 20 } }], pesagens: [], perfil: { nome: 'Lucas', peso: 75, objetivo: 'Hipertrofia' }, dia: '2026-09-30', gastos });
+  assert.equal(v.amanha.diaSemana, 'quinta');
+  assert.match(visaoZap({ refeicoes: [{ dia: '2026-09-30', minutos: 500, slot: 'cafe', estimativa: { kcal: 600, p: 30, c: 60, g: 20 } }], pesagens: [], perfil: { nome: 'Lucas', peso: 75, objetivo: 'Hipertrofia' }, dia: '2026-09-30', gastos }), /\*Amanhã\* \(quinta\)/);
 });
 
 test('visão 7/30 dias: critério único de "dia com registro" e formato em tópicos pro !hoje', () => {

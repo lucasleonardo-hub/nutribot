@@ -49,9 +49,9 @@ test('compilarSemana monta a tabela por dia e a média', () => {
     { jid: 'a@s', nome: L, dia: '2026-09-20', slot: 'almoco', estimativa: null },
   ];
   const t = compilarSemana(refeicoes, [{ nome: L, jids: ['a@s'], peso: 73 }], ['2026-09-19', '2026-09-20']);
-  assert.match(t, /2026-09-19 \(sáb\): 2 refeições .* ~1200 kcal · Proteína 70 g/);
+  assert.match(t, /2026-09-19 \(sáb\): 2 refeições .* 1200 kcal · Proteína 70 g/);
   assert.match(t, /2026-09-20 \(dom\): 1 refeição/);
-  assert.match(t, /MÉDIA nos 1 dia\(s\) com estimativa: ~1200 kcal/);
+  assert.match(t, /MÉDIA nos 1 dia\(s\) com estimativa: 1200 kcal/);
 });
 
 test('lerTipoRefeicao entende a linha "Refeição:" da análise', () => {

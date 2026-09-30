@@ -9,7 +9,7 @@ import { listarDocs, docsPara } from './conhecimento.js';
 import { notasDe, listarDocumentosDe } from './pessoas.js';
 import { reservasDisponiveis } from './reservas.js';
 import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS, diasAnteriores } from './util.js';
-import { resumirHoje, formatarEstimativa, lerTipoRefeicao, gastoAdaptativo, acharRegistro, nomeDoSlot } from './resumo.js';
+import { resumirHoje, formatarEstimativaLinhas, lerTipoRefeicao, gastoAdaptativo, acharRegistro, nomeDoSlot } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
 import { lembrar } from './dia.js';
 import { estado } from './estado.js';
@@ -197,7 +197,7 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     });
     await lembrar({ hora: agora().hora, jid: jids[0], nome: p.nome, texto: `(registro manual) ${resto}`, tipo: 'texto', refeicao: slot });
     const nomeSlot = SLOTS.find((s) => s.id === slot)?.nome || slot;
-    await enviar(jidGrupo, `✅ Anotei como *${nomeSlot}* (${horaLocal}): ${est.descricao}${est.estimativa ? `\n🔥 ${formatarEstimativa(est.estimativa)}` : '\n(sem estimativa, a IA não respondeu; fica registrado mesmo assim)'}`, msg, { rapido: true });
+    await enviar(jidGrupo, `✅ Anotei como *${nomeSlot}* (${horaLocal}): ${est.descricao}${est.estimativa ? `\n🔥 *Estimativa:*\n${formatarEstimativaLinhas(est.estimativa)}` : '\n(sem estimativa, a IA não respondeu; fica registrado mesmo assim)'}`, msg, { rapido: true });
     return true;
   }
   if (cmd === '!silencio' || cmd === '!silêncio') {
