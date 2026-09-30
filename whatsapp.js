@@ -190,7 +190,11 @@ export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoNovoMembr
       const est = p?.lastKnownPresence;
       if (!est) continue;
       try {
-        presencas.set(jidNormalizedUser(jid), { estado: est, em: Date.now(), chat: id });
+        const j = jidNormalizedUser(jid);
+        const antes = presencas.get(j);
+        presencas.set(j, { estado: est, em: Date.now(), chat: id });
+        // uma linha por mudança de estado (composing -> paused), pra dar pra ver no log que a presença do grupo chega
+        if (antes?.estado !== est && (est === 'composing' || est === 'recording')) console.log(`[wa] presença: ${j.split('@')[0]} ${est}`);
       } catch {}
     }
   });
