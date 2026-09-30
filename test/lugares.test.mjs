@@ -138,3 +138,27 @@ test('escolherGrande: campus/shopping a até 300 m ganha do POI miúdo', () => {
   assert.equal(escolherGrande([el[1]], CASA), null);
   assert.equal(escolherGrande([{ type: 'way', center: { lat: CASA.lat + 0.004, lon: CASA.lon }, tags: { shop: 'mall' } }], CASA), null); // 440 m: longe
 });
+
+test('estatisticasDosLugares: "todo dia" pra casa, um único trabalho, e o padrão em dias úteis', () => {
+  const lugares = [{ id: 'casa', ...CASA }, { id: 'trab', ...TRAB }, { id: 'outro', lat: TRAB.lat + 0.01, lon: TRAB.lon }, { id: 'cafe', ...ACAD, tipo: 'café' }];
+  const visitas = [];
+  for (let d = 1; d <= 28; d++) {
+    const dia = `2026-09-${String(d).padStart(2, '0')}`;
+    const dow = new Date(`${dia}T12:00:00Z`).getUTCDay();
+    visitas.push({ lugarId: 'casa', inicio: new Date(`${dia}T01:00:00Z`), fim: new Date(`${dia}T10:00:00Z`), min: 540, dia, dow, hIni: 22, hFim: 7 });
+    if (dow >= 1 && dow <= 5) {
+      visitas.push({ lugarId: 'trab', inicio: new Date(`${dia}T12:00:00Z`), fim: new Date(`${dia}T21:00:00Z`), min: 540, dia, dow, hIni: 9, hFim: 18 });
+      if (dow === 2 || dow === 4) visitas.push({ lugarId: 'outro', inicio: new Date(`${dia}T13:00:00Z`), fim: new Date(`${dia}T16:00:00Z`), min: 180, dia, dow, hIni: 10, hFim: 13 });
+      if (dow === 1 || dow === 3) visitas.push({ lugarId: 'cafe', inicio: new Date(`${dia}T15:00:00Z`), fim: new Date(`${dia}T21:00:00Z`), min: 360, dia, dow, hIni: 12, hFim: 18 });
+    }
+  }
+  const st = estatisticasDosLugares(lugares, visitas);
+  const por = Object.fromEntries(st.map((l) => [l.id, l]));
+  assert.equal(por.casa.papel, 'casa');
+  assert.match(por.casa.padrao, /^todo dia · 22h às 7h$/);
+  assert.equal(por.trab.papel, 'trabalho');
+  assert.match(por.trab.padrao, /^dias úteis · 9h às 18h$/);
+  assert.equal(por.outro.papel ?? null, null, 'só um lugar é trabalho');
+  assert.equal(por.cafe.papel ?? null, null, 'café com 2 dias úteis por semana não vira trabalho quando já existe um melhor');
+  assert.match(por.outro.padrao, /^ter, qui · 10h às 13h$/);
+});

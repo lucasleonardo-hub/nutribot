@@ -126,14 +126,15 @@ export function estatisticasDosLugares(lugares, visitas) {
   const hStr = (h) => (h == null ? '' : `${Math.floor(h)}h${Math.round((h % 1) * 60) ? String(Math.round((h % 1) * 60)).padStart(2, '0') : ''}`);
   const saida = [];
   for (const s of por.values()) {
-    const diasTop = s.dows
-      .map((n, i) => ({ n, i }))
-      .filter((x) => x.n >= Math.max(1, Math.ceil(s.visitas / 4)))
-      .sort((a, b) => b.n - a.n)
-      .slice(0, 4)
-      .sort((a, b) => a.i - b.i)
-      .map((x) => NOME_DOW[x.i]);
-    const padrao = s.visitas ? `${diasTop.join(', ')}${s.hIni.length ? ` · ${hStr(med(s.hIni))} às ${hStr(med(s.hFim))}` : ''}` : '';
+    // dias em que o lugar aparece de verdade (pelo menos 12% das visitas): "seg, qua, sex", "dias úteis", "fim de semana" ou "todo dia"
+    const diasIdx = s.dows.map((n, i) => ({ n, i })).filter((x) => x.n >= Math.max(1, s.visitas * 0.12)).map((x) => x.i);
+    const uteis = [1, 2, 3, 4, 5];
+    let diasTxt;
+    if (diasIdx.length >= 6) diasTxt = 'todo dia';
+    else if (diasIdx.length === 5 && uteis.every((d) => diasIdx.includes(d))) diasTxt = 'dias úteis';
+    else if (diasIdx.length === 2 && diasIdx.includes(0) && diasIdx.includes(6)) diasTxt = 'fim de semana';
+    else diasTxt = diasIdx.map((i) => NOME_DOW[i]).join(', ');
+    const padrao = s.visitas ? `${diasTxt}${s.hIni.length ? ` · ${hStr(med(s.hIni))} às ${hStr(med(s.hFim))}` : ''}` : '';
     saida.push({ ...s, dias: s.dias.size, dows: undefined, hIni: undefined, hFim: undefined, somaLat: undefined, somaLon: undefined, n: undefined, novo: undefined, padrao, horaTipica: med(s.hIni) });
   }
   // casa = onde mais dorme; sem noites (primeiros dias), onde mais fica
@@ -142,7 +143,15 @@ export function estatisticasDosLugares(lugares, visitas) {
     if (l.manual) continue;
     if (candidataCasa && l.id === candidataCasa.id && (l.noites >= 2 || (!saida.some((x) => x.noites >= 2) && l.minutos >= 600))) l.papel = 'casa';
     else if (l.papel === 'casa') l.papel = null;
-    else if (!l.tipo || ['trabalho', 'outro', 'residência'].includes(l.tipo)) l.papel = l.diasUteisDia >= 3 ? 'trabalho' : l.papel === 'trabalho' ? null : l.papel;
+  }
+  // trabalho é UM lugar: o que mais tem dias úteis em horário comercial (empate: o que o Google já chamava de trabalho), e nunca
+  // um lugar que o mapa diz ser academia, faculdade, restaurante, mercado etc.
+  const podeSerTrabalho = (l) => !l.manual && l.papel !== 'casa' && (!l.tipo || ['trabalho', 'outro', 'residência', 'loja', 'café'].includes(l.tipo));
+  const candidatoTrab = saida.filter((l) => podeSerTrabalho(l) && l.diasUteisDia >= 3).sort((a, b) => b.diasUteisDia - a.diasUteisDia || (b.papel === 'trabalho') - (a.papel === 'trabalho') || b.minutos - a.minutos)[0];
+  for (const l of saida) {
+    if (l.manual || l.papel === 'casa') continue;
+    if (l.papel === 'trabalho' && (!candidatoTrab || l.id !== candidatoTrab.id)) l.papel = null;
+    if (candidatoTrab && l.id === candidatoTrab.id) l.papel = 'trabalho';
   }
   return saida.map((l) => JSON.parse(JSON.stringify(l)));
 }
@@ -252,7 +261,8 @@ export function escolherGrande(elementos, centro) {
 }
 /** Photon (komoot): os POIs mais próximos, no mesmo formato de elementos do Overpass (lat/lon + tags), pra reaproveitar a escolha. */
 async function photon(lat, lon) {
-  const r = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}&limit=15&radius=0.35&lang=default`, {
+  // raio de 1 km e 40 resultados: o centro de um campus ou shopping fica longe de quem está na borda dele
+  const r = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}&limit=40&radius=1&lang=default`, {
     headers: { 'User-Agent': UA, Accept: 'application/json' },
     signal: AbortSignal.timeout(12000),
   });
@@ -639,7 +649,8 @@ export async function importarTimeline(perfil, texto) {
     throw new Error('arquivo da Linha do Tempo não é um JSON válido');
   }
   const desde = new Date(Date.now() - 180 * 86400_000);
-  const visitas = lerTimeline(json).filter((v) => v.fim >= desde);
+  // parada de menos de 15 min é ponto de ônibus, sinal fechado, esquina: não vira lugar (o Google registra, a gente não)
+  const visitas = lerTimeline(json).filter((v) => v.fim >= desde && (v.fim - v.inicio) / 60000 >= 15);
   if (!visitas.length) return { visitas: 0, lugares: 0 };
   const fuso = fusoDe(perfil);
   const lugares = (perfil.lugares || []).map((l) => ({ ...l }));
