@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Relógio NutriBot</string>
     <string name="titulo">Relógio → NutriBot</string>
-    <string name="explicacao">Lê peso, bioimpedância, sono, passos, gasto e treinos do Health Connect (onde o Samsung Health salva) e manda pro bot a cada 15 minutos. Nada é lido além disso, e os dados vão só pro seu bot.</string>
+    <string name="explicacao">Lê peso, bioimpedância, sono, passos, gasto e treinos do Health Connect (onde o Samsung Health salva) e manda pro bot a cada 15 minutos. Opcional: um ponto de localização aproximada por envio, pro bot aprender seus lugares (casa, trabalho, academia). Nada é lido além disso, e os dados vão só pro seu bot.</string>
     <string name="rotulo_url">Endereço do bot</string>
     <string name="rotulo_pessoa">Seu primeiro nome (igual ao cadastro no grupo)</string>
     <string name="dica_pessoa">ex.: lucas</string>
@@ -11,4 +11,5 @@
     <string name="botao_permissoes">1. Permissões do Health Connect</string>
     <string name="botao_sincronizar">2. Sincronizar agora</string>
     <string name="botao_bateria">3. Liberar da economia de bateria</string>
+    <string name="botao_localizacao">4. Localização (opcional): ligar/desligar</string>
 </resources>

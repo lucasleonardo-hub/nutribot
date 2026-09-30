@@ -284,6 +284,13 @@ export function mdPerfil(p) {
     `- Gírias aprendidas: ${(p.girias || []).map((g) => `[[${g}]]`).join(', ') || 'nenhuma ainda'}\n` +
     (p.horarios ? `- Horários habituais: ${p.horarios}\n` : '') +
     (p.rotina ? `\n## Rotina observada\n${p.rotina}\n` : '') +
+    (p.lugares?.length
+      ? `\n## Lugares (localização do celular; só tipo, bairro e padrão)\n${p.lugares
+          .filter((l) => l.visitas >= 2 || l.papel || l.manual)
+          .slice(0, 12)
+          .map((l) => `- ${l.papel === 'casa' ? 'casa' : `${l.papel === 'trabalho' && (!l.tipo || l.tipo === 'outro' || l.tipo === 'residência') ? 'trabalho' : l.tipo || 'lugar'}${l.nome ? ` ${l.nome}` : ''}`}${l.bairro ? ` (${l.bairro})` : ''}: ${l.padrao || 'sem padrão ainda'} · ${l.visitas} visita(s)${l.ultimaVez ? `, última ${l.ultimaVez}` : ''}`)
+          .join('\n')}\n`
+      : '') +
     (p.produtos?.length ? `\n## Produtos fixos (rótulo lido)\n${p.produtos.map((x) => `- ${x.nome}: ${x.porcao} = ${x.kcal} kcal · Proteína ${x.proteina} g · Carboidratos ${x.carbo} g · Gorduras ${x.gordura} g (em ${x.em})`).join('\n')}\n` : '') +
     (p.documentos?.length
       ? `\n## Documentos e medições (lidos da pasta)\n${p.documentos

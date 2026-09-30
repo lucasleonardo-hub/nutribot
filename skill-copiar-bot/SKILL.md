@@ -255,3 +255,5 @@ Rode e confira, nesta ordem:
 
 Nenhum dado do grupo original: perfis, refeições, memória de personalidade, diário, momentos e lembranças começam vazios. A
 personalidade nasce do `persona.md` e evolui sozinha com o grupo novo.
+
+- **Lugares (localização, opcional)**: o app Relógio pode mandar um ponto aproximado a cada 15 min (botão 4, permissão "o tempo todo"). Não exige nenhuma chave: tipo e bairro vêm do OpenStreetMap. Pergunte ao dev se quer ligar; se sim, só o `CONTATO_EMAIL` precisa estar preenchido (identifica o bot nas consultas ao Nominatim). Regras que já vêm prontas: ponto bruto some em 7 dias, casa nunca tem nome nem endereço, o bloco só entra na conversa com a própria pessoa, `!lugares esquecer` apaga tudo.

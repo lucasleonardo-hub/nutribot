@@ -9,6 +9,7 @@ import { listarPastasRaiz, listarArquivos, baixarArquivo, pastaNaRaiz, salvarEmP
 import * as ia from './gemini.js';
 import { ehPlanilhaSaude, sincronizarSaude } from './saude.js';
 import { textoRelogio } from './relogio.js';
+import { importarTimeline } from './lugares.js';
 import { colecao as colecaoDocs, salvarPerfil as salvarPerfilDocs, registrarPesagem as registrarPesagemDocs } from './mongo.js';
 import { mdPerfil as mdPerfilDocs } from './drive.js';
 import { agora } from './util.js';
@@ -79,6 +80,23 @@ export async function pastaDe(perfil) {
   return st.pastaId;
 }
 
+const ehTimeline = (arq) => /(timeline|linha.?do.?tempo|location.?history|hist[óo]rico.?de.?local)/i.test(arq.name || '') && (/json/i.test(arq.mimeType || '') || /\.json$/i.test(arq.name || ''));
+async function importarTimelineDoArquivo(perfil, arq, chave) {
+  const col = colecao('arquivos_pessoa');
+  const emCache = await col.findOne({ _id: chave });
+  if (emCache) return emCache.texto;
+  if (Number(arq.size || 0) > 80 * 1024 * 1024) throw new Error('arquivo grande demais (máx. 80 MB)');
+  console.log(`[lugares] importando Linha do Tempo "${arq.name}" de ${perfil.nome}...`);
+  const { texto } = await baixarArquivo(arq);
+  if (!texto) throw new Error('não consegui baixar o JSON');
+  const r = await importarTimeline(perfil, texto);
+  const resumo = `(Linha do Tempo do Google importada em ${agora().dia}: ${r.visitas} visitas, ${r.lugares} lugares; detalhes só no !lugares)`;
+  await col.replaceOne({ _id: chave }, { _id: chave, arquivoId: arq.id, nome: arq.name, texto: resumo, salvoEm: new Date() }, { upsert: true });
+  await col.deleteMany({ arquivoId: arq.id, _id: { $ne: chave } });
+  console.log(`[lugares] ${perfil.nome}: ${resumo}`);
+  return resumo;
+}
+
 async function textoDoArquivo(arq) {
   const col = colecao('arquivos_pessoa');
   const chave = `${arq.id}:${arq.modifiedTime}`;
@@ -139,6 +157,10 @@ async function sincronizar(perfil, { forcar = false } = {}) {
         // planilha do relógio (Health Connect): vira resumo curto em vez do CSV inteiro, e alimenta pesagens/perfil
         const t = await sincronizarSaude(perfil, arq, { pastaId, hoje: agora().dia }).catch((e) => (console.error(`[saude] falha em "${arq.name}":`, e.message), null));
         st.textos.set(chave, { nome: arq.name, texto: t, saude: true });
+      } else if (ehTimeline(arq)) {
+        // exportação da Linha do Tempo do Google (Timeline.json): vira visitas/lugares, nunca entra no dossiê
+        const t = await importarTimelineDoArquivo(perfil, arq, chave).catch((e) => (console.error(`[lugares] "${arq.name}":`, e.message), null));
+        st.textos.set(chave, { nome: arq.name, texto: t });
       } else {
         const t = await textoDoArquivo(arq);
         st.textos.set(chave, { nome: arq.name, texto: t });

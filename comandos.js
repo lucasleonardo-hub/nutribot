@@ -20,11 +20,12 @@ import { situacaoRelogio } from './relogio.js';
 import { treinoZap } from './treino.js';
 import { agendaZap } from './agenda.js';
 import { pareceAceitePlano } from './consciencia.js';
+import { lugaresZap, marcarLugarAtual, esquecerLugares, mercadosProximos } from './lugares.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras e dicas de compra barata, só com as refeições que você costuma registrar e com a meta de cada dia da semana; de sexta a domingo é o plano da semana que vem; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar; toda sexta ao meio-dia eu pergunto quem quer e basta responder "quero"), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !lugares (se você ligou a localização no app: onde está agora e os lugares que frequenta, com o padrão da semana; !lugares casa, !lugares aqui é academia X, !lugares esquecer), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras e dicas de compra barata, só com as refeições que você costuma registrar e com a meta de cada dia da semana; de sexta a domingo é o plano da semana que vem; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar; toda sexta ao meio-dia eu pergunto quem quer e basta responder "quero"), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -70,6 +71,7 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
     const padrao = padraoAlimentar(minhas, { periodoDias: PERIODO });
     const grupo = repertorioDoGrupo(doGrupo.filter((r) => !minhas.includes(r)));
     // meta por dia da semana pra quem tem relógio (gasto do mesmo dia da semana nas últimas semanas)
+    const mercados = await mercadosProximos(perfil).catch(() => null);
     const gastos = comAgenda?.relogio?.gastos || perfil.relogio?.gastos;
     let metaSemana = null;
     if (gastos) {
@@ -77,7 +79,7 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
       metaSemana = previsaoSemana({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta, semana })?.texto || null;
     }
     const plano = ia.separarAtualizacao(
-      await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana })
+      await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '' })
     ).texto;
     if (!plano) throw new Error('plano vazio');
     await enviar(jidGrupo, plano, msg, { rapido: true });
@@ -418,6 +420,31 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       const png = await renderizar(configGrafico({ nome: p.nome, refeicoes: refs, pesagens: pes, gastos: p.relogio?.gastos, alvo: alvoKcal, dia }));
       if (png) await enviarImagem(jidGrupo, png, `📈 *${p.apelido || p.nome.split(' ')[0]}* · últimos 30 dias${alvoKcal ? ` · meta ${alvoKcal.min} a ${alvoKcal.max} kcal/dia` : ''}`, msg);
       else await enviar(jidGrupo, 'O desenhista do gráfico não respondeu agora 🫠 Tenta de novo daqui a pouco.', msg, { rapido: true });
+    }
+    return true;
+  }
+
+  if (cmd === '!lugares') {
+    const perfil = await buscarPerfil(jids);
+    if (!perfil) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    const arg = texto.slice(cmd.length).trim();
+    try {
+      let resposta;
+      if (/^(esquecer|apagar|zerar)$/i.test(arg)) resposta = await esquecerLugares(perfil);
+      else if (/^casa$/i.test(arg)) resposta = await marcarLugarAtual(perfil, { casa: true });
+      else if (/^aqui\s+[ée]\s+/i.test(arg)) {
+        // "!lugares aqui é academia Smart Fit": primeira palavra é o tipo, o resto é o nome
+        const resto = arg.replace(/^aqui\s+[ée]\s+(a|o|um|uma|minha|meu)?\s*/i, '').trim();
+        const [tipo, ...nome] = resto.split(/\s+/);
+        resposta = await marcarLugarAtual(perfil, { tipo, nome: nome.join(' ') || null });
+      } else resposta = await lugaresZap(perfil);
+      await enviar(jidGrupo, resposta, msg, { rapido: true });
+    } catch (e) {
+      console.error('[lugares]', e.message);
+      await enviar(jidGrupo, 'Não consegui mexer nos lugares agora. Tenta de novo daqui a pouco.', msg, { rapido: true });
     }
     return true;
   }

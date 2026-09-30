@@ -11,6 +11,7 @@ import { atualizarConhecimento, docsPara } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
 import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo, placarSemana } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
+import { linhaSemanaLugares } from './lugares.js';
 import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta } from './previsao.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
@@ -350,6 +351,8 @@ export async function fecharSemana({ dia, perfis, grupo }) {
       console.error(`[previsao] falha para ${p.nome}:`, e.message);
     }
     if (p._treino?.bloco) linhas.push(p._treino.bloco);
+    const lugaresSemana = await linhaSemanaLugares(p).catch(() => null);
+    if (lugaresSemana) linhas.push(lugaresSemana);
     if (linhas.length) previsoes.push(`${p.nome}:\n${linhas.join('\n')}`);
   }
   const blocoPrevisoes = previsoes.join('\n\n');

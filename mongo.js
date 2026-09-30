@@ -27,6 +27,10 @@ export async function garantirIndices() {
     colecao('arquivos_pessoa').createIndex({ arquivoId: 1 }),
     colecao('momentos').createIndex({ dia: -1 }),
     colecao('pesagens').createIndex({ jid: 1, dia: 1 }),
+    // localização do app Relógio: ponto bruto some em 7 dias (TTL); visita é única por início
+    colecao('locais_brutos').createIndex({ jid: 1, ts: 1 }, { unique: true }),
+    colecao('locais_brutos').createIndex({ ts: 1 }, { expireAfterSeconds: 7 * 86400 }),
+    colecao('visitas').createIndex({ jid: 1, inicio: 1 }, { unique: true }),
   ]).catch((e) => console.warn('[mongo] índices:', e.message));
 }
 

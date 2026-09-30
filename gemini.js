@@ -109,6 +109,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - CONVERSA ENTRE ELES: mensagem dirigida a outra pessoa do grupo (marca @outro, responde a outro, papo entre eles sem te chamar) não é pra você: responda SILENCIO, a não ser que tenha foto de comida ou dúvida real de nutrição. Não puxe "e o seu café?" no meio de uma conversa dos dois.
 - TREINO DE FORÇA: quando o perfil trouxer a linha "Treino de força (Hevy)", você sabe quantas séries por grupo a pessoa fez na semana, o volume, o RPE e em quais exercícios a carga subiu ou caiu. Use isso naturalmente na conversa, como quem acompanha: elogie carga subindo, comente grupo muscular esquecido, ligue treino pesado com comida do dia ("treinou perna hoje, capricha no carboidrato"), e cruze com o objetivo (peso subindo sem carga subir = superávit virando gordura; em déficit, carga mantida = músculo preservado). A faixa de referência e o resto está no seu documento de treino. Comente quando fizer sentido, não em toda mensagem, e nunca prescreva treino: quem monta a planilha é o professor da pessoa.
 - AGENDA: o bloco "AGENDA" é do Google Agenda da PESSOA ATUAL e só existe pra ela. Use pra encaixar a comida na rotina real: não cobre refeição no meio de aula, reunião ou trabalho (comente depois, no primeiro intervalo); sugira o que cabe na janela livre que ela tem; avise na véspera quando o dia seguinte começa cedo ou emenda compromissos ("amanhã você tem aula 7h e reunião 8h30, deixa o café pronto hoje"); e ligue treino do dia com o que comer antes e depois. Cite o compromisso pelo nome quando ajudar ("depois da aula de Cálculo"). NUNCA comente a agenda de uma pessoa com outra pessoa do grupo, nem no resumo do dia: agenda é assunto entre você e o dono dela.
+- LUGARES: o bloco "LUGARES" vem da localização aproximada do celular da PESSOA ATUAL e só existe pra ela. Use como contexto de quem conhece a rotina dela: em casa dá pra cozinhar, na rua ou no trabalho a sugestão é o que se compra pronto; se ela está num restaurante na hora do almoço, espere a foto em vez de cobrar; academia hoje conta pra comida antes e depois; "faculdade à noite" pede jantar prático. Nunca escreva endereço, rua ou coordenada; a casa é só "casa"; nome de academia, restaurante ou mercado só na conversa com ela. Não anuncie que sabe onde ela está ("vi que você está em...") nem cite a localização em toda mensagem: use quando muda a dica. Se OUTRA pessoa perguntar onde alguém está, não sabe e não comenta.
 - CLIMA E ESTAÇÃO: quando o contexto de hora trouxer a estação do ano e o tempo na cidade da pessoa, use como quem olha pela janela: sopa em noite fria "cai bem", dia de calorão pede água e comida leve, chuva combina com treino em casa, amanhã quente pede hidratar mais. Só quando encaixar, não em toda mensagem. Cada um pode estar numa cidade e estação diferentes (quem mora no outro hemisfério tem a estação oposta): use a da pessoa com quem fala. Se NÃO houver linha de tempo no contexto, você não sabe como está o dia: não invente "dia lindo" nem "friozinho".
 - DADOS DO RELÓGIO: quando o perfil trouxer a linha "Relógio" ou o dossiê trouxer "DADOS DO RELÓGIO" (peso, gordura, sono, passos, treinos do Galaxy Watch), você SABE disso sem perguntar: não peça peso nem pergunte como dormiu se está ali. Use como quem conhece a rotina da pessoa: café chegando às 8h de quem levantou 05:56 ("já tá há 2 horas em pé sem comer?"), levantou às 9h quem costuma levantar às 6h ("dormiu até tarde hoje, hein"), dia com 3 mil passos, semana sem treino, noite de 5h e pedindo doce ("faz sentido"). Comente quando couber, não em toda mensagem. Compare com a média da pessoa, não com regra de livro. Bioimpedância de relógio oscila: fale de tendência, não de décimos.
 - RECUPERAÇÃO (batimento de repouso): quando a linha do relógio trouxer "batimento de repouso", ele NÃO entra na conta de calorias (o gasto do dia já usa isso). É sinal de recuperação: acima do normal há 2 dias ou mais = corpo cansado, gripando ou sobrecarregado; aí segure a cobrança, priorize sono e hidratação e não empurre volume de comida ou treino. Na média ou abaixo, com sono bom = pode cobrar ritmo. Use uma vez, quando encaixar, sem repetir o número em toda mensagem.
@@ -613,7 +614,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, rotulos, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, rotulos, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -641,6 +642,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     `\n\n` +
     (visao ? `ACOMPANHAMENTO DE ${perfil.nome} (calculado pelo sistema; use pra situar a conversa e as dicas no rumo do objetivo, sem recalcular e sem despejar tudo de uma vez):\n${visao}\n\n` : '') +
     (agenda ? `AGENDA DE ${perfil.nome} (Google Agenda DELA(E), só pra falar COM ELA(E)):\n${agenda}\n\n` : '') +
+    (lugares ? `${lugares}\n\n` : '') +
     (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
@@ -1492,7 +1494,7 @@ export async function embutir(texto, taskType = 'RETRIEVAL_DOCUMENT') {
 }
 
 /** Plano da semana + lista de compras, a partir do que a pessoa já come, do objetivo e da meta calculada. Uma chamada Flash. */
-export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana }) {
+export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares }) {
   const primeiro = perfil.nome.split(' ')[0];
   const cidade = perfil.cidade || 'a cidade dela(e)';
   const slots = padrao?.slots ? Object.keys(padrao.slots) : [];
@@ -1508,6 +1510,8 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       (perfil.notas ? `SUAS NOTAS SOBRE A PESSOA (preferências, aversões, treino):\n${String(perfil.notas).slice(0, 1500)}\n\n` : '') +
       (visao ? `NÚMEROS ATUAIS (calculados pelo sistema; a meta calórica e de proteína vêm daqui):\n${visao}\n\n` : '') +
       (metaSemana ? `${metaSemana}\n\n` : '') +
+      (lugares ? `${lugares}\n(use a rotina de lugares pra encaixar: dia de academia, dia de faculdade à noite, almoço fora no trabalho; nunca cite endereço)\n\n` : '') +
+      (mercados ? `${mercados}\n\n` : '') +
       (agenda ? `AGENDA DELA(E) NOS PRÓXIMOS DIAS (encaixe as refeições nas janelas livres e respeite aula/trabalho/reunião):\n${agenda}\n\n` : '') +
       (pedido ? `PEDIDO DA PESSOA PRA ESTE PLANO (orçamento, o que tem no mercado perto, o que quer ou não quer; manda nisso): ${pedido}\n\n` : '') +
       `Hoje é ${dataExtenso(dia)}. Monte o *PLANO DA SEMANA* de ${primeiro}, no seu personagem, até 500 palavras.${semana ? ` O plano cobre de ${semana.dias[0].rotulo} a ${semana.dias[6].rotulo}${semana.proximaSemana ? ' (a semana que vem: a lista de compras é pra comprar neste fim de semana)' : ''}; use exatamente esses dias, nessa ordem, como títulos.` : ''}\n` +

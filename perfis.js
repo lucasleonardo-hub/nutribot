@@ -3,6 +3,7 @@
 import { refeicoesDesde } from './mongo.js';
 import { treinoDe } from './treino.js';
 import { agendaDe } from './agenda.js';
+import { contextoLugares } from './lugares.js';
 import { diasAnteriores, horariosHabituais, descreverHorarios, fusoValido } from './util.js';
 
 export const DIAS_ROTINA = 21; // janela pra aprender horários
@@ -27,7 +28,9 @@ export async function enriquecerPerfis(perfis, dia) {
       const t = await treinoDe(p, dia, { sincronizar: precisaSincronizar(p) }).catch(() => null);
       // agenda do Google: só de quem é dono da credencial (AGENDA_DONO); nunca vira assunto com outra pessoa
       const ag = await agendaDe(p).catch(() => null);
-      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t, _agenda: ag };
+      // lugares (localização do app Relógio): só de quem ligou no celular; só entra na conversa com a própria pessoa
+      const lg = p.lugaresAtivo ? await contextoLugares(p).catch(() => null) : null;
+      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t, _agenda: ag, _lugares: lg };
     })
   );
 }

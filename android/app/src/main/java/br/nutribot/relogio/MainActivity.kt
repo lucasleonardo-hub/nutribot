@@ -1,6 +1,9 @@
 package br.nutribot.relogio
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -23,6 +26,20 @@ class MainActivity : AppCompatActivity() {
         val faltam = Leitor.permissoes - concedidas
         status.text = if (faltam.isEmpty()) "Permissões OK. Sincronizando..." else "Faltaram ${faltam.size} permissões. Toque em Permissões de novo e marque tudo (inclusive 'em segundo plano')."
         if (faltam.isEmpty()) SyncWorker.agora(this)
+    }
+
+    // Localização: primeiro "enquanto usa" (fina + aproximada), depois "o tempo todo" (o Android exige em dois passos)
+    private val pedirSegundoPlano = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        prefs.localizacao = true
+        status.text = if (ok || Local.temSegundoPlano(this)) "Localização ligada. Um ponto aproximado vai junto de cada envio (a cada 15 min)."
+        else "Localização ligada só com o app aberto. Pra valer em segundo plano, abra as configurações do app e escolha \"Permitir o tempo todo\"."
+        SyncWorker.agora(this)
+    }
+    private val pedirLocalizacao = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        val ok = r[Manifest.permission.ACCESS_COARSE_LOCATION] == true || r[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        if (!ok) { status.text = "Sem permissão de localização; os lugares ficam desligados."; prefs.localizacao = false; return@registerForActivityResult }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !Local.temSegundoPlano(this)) pedirSegundoPlano.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        else { prefs.localizacao = true; status.text = "Localização ligada. Um ponto aproximado vai junto de cada envio (a cada 15 min)."; SyncWorker.agora(this) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,6 +72,16 @@ class MainActivity : AppCompatActivity() {
             SyncWorker.agendar(this)
             SyncWorker.agora(this)
         }
+        findViewById<Button>(R.id.localizacao).setOnClickListener {
+            salvar()
+            if (prefs.localizacao) {
+                // toque de novo desliga
+                prefs.localizacao = false
+                status.text = "Localização desligada. O bot para de receber pontos (e apaga os brutos em 7 dias)."
+                return@setOnClickListener
+            }
+            pedirLocalizacao.launch(Local.permissoesBase)
+        }
         findViewById<Button>(R.id.bateria).setOnClickListener {
             // sem isso o Samsung "adormece" o app e o envio de 15 min vira uma vez por hora ou nunca
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
@@ -82,6 +109,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun atualizarStatus() {
         val r = prefs.ultimoResultado
-        if (r.isNotBlank()) status.text = r + "\nEnvio automático a cada 15 min enquanto houver internet."
+        val loc = if (prefs.localizacao) (if (Local.temSegundoPlano(this)) "Localização: ligada." else "Localização: ligada só com o app aberto (falta \"o tempo todo\").") else "Localização: desligada (opcional)."
+        if (r.isNotBlank()) status.text = r + "\nEnvio automático a cada 15 min enquanto houver internet.\n" + loc
     }
 }

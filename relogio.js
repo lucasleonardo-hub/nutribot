@@ -7,6 +7,7 @@
 import { colecao, listarPerfis } from './mongo.js';
 import { aplicarDadosSaude } from './saude.js';
 import { fusoDe } from './util.js';
+import { receberLocais, descreverSituacao } from './lugares.js';
 
 const DIAS_GUARDADOS = 90;
 const FRESCO_H = 36; // dados do app valem como "atuais" (e dispensam a planilha) por este tempo
@@ -157,6 +158,12 @@ export async function receberEnvio({ token, corpo, hoje, pastaDe }) {
     { upsert: true }
   );
   console.log(`[relogio] ${perfil.nome}: ${novo.pesos.length} pesos, ${novo.sonos.length} noites, ${novo.atividades.length} dias (histórico: ${dados.atividades.length} dias)`);
+  // localização aproximada (opcional, botão 4 do app): vira lugares significativos; o ponto bruto some em 7 dias
+  let local = null;
+  if (Array.isArray(corpo.locais) && corpo.locais.length) {
+    local = await receberLocais(perfil, corpo.locais, fuso).catch((e) => (console.error('[lugares]', e.message), null));
+    if (local?.recebidos) console.log(`[lugares] ${perfil.nome}: ${local.recebidos} ponto(s); ${descreverSituacao(local.situacao)}`);
+  }
   const hojeAt = dados.atividades.find((a) => a.dia === hoje);
   const ultimoPeso = dados.pesos[dados.pesos.length - 1];
   const ultimaNoite = dados.sonos[dados.sonos.length - 1];
@@ -168,6 +175,7 @@ export async function receberEnvio({ token, corpo, hoje, pastaDe }) {
       hojeAt?.passos ? `${hojeAt.passos} passos hoje` : null,
       ultimaNoite ? `sono ${ultimaNoite.dia}: ${Math.floor(ultimaNoite.total / 60)}h${String(Math.round(ultimaNoite.total % 60)).padStart(2, '0')}` : null,
       ultimoPeso ? `peso ${ultimoPeso.dia}: ${String(ultimoPeso.peso).replace('.', ',')} kg` : null,
+      local?.situacao ? descreverSituacao(local.situacao) : null,
     ].filter(Boolean).join(' · '),
   };
 }

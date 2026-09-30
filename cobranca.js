@@ -57,6 +57,12 @@ export async function verificarCobrancas() {
         console.log(`[cobranca] ${p.nome} está em "${ocupado.titulo}" (${ocupado.tipo}) até ${ocupado.terminaEm}; não cobro agora`);
         continue;
       }
+      // pela localização do celular: num restaurante/bar/padaria a comida está vindo; na academia, cobrar é barulho
+      const lugarAgora = p._lugares?.situacao?.estado === 'lugar' ? p._lugares.situacao.lugar : null;
+      if (lugarAgora && ['restaurante', 'bar', 'café', 'padaria', 'academia'].includes(lugarAgora.tipo)) {
+        console.log(`[cobranca] ${p.nome} está em ${lugarAgora.tipo} desde ${p._lugares.situacao.desde}; não cobro agora`);
+        continue;
+      }
       const msg = await ia.cobrarRefeicao({
         perfil: p,
         dia,

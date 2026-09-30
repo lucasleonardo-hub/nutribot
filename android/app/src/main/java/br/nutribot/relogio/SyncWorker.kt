@@ -31,6 +31,11 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         return try {
             val dias = if (prefs.ultimoEnvio == 0L) 14L else 3L
             val corpo = Leitor.ler(applicationContext, prefs.pessoa, dias)
+            // localização aproximada, só se a pessoa ligou (botão 4) e deu a permissão; um ponto por envio
+            if (prefs.localizacao && Local.temPermissao(applicationContext)) {
+                val p = runCatching { Local.ponto(applicationContext) }.getOrNull()
+                if (p != null) corpo.put("locais", Local.lista(p))
+            }
             val resposta = Envio.enviar(prefs.url, prefs.token, corpo)
             val j = runCatching { JSONObject(resposta) }.getOrNull()
             val resumo = j?.optString("resumo")?.takeIf { it.isNotBlank() } ?: resposta.take(120)

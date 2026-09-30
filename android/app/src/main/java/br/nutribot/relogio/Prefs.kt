@@ -26,5 +26,10 @@ class Prefs(context: Context) {
         get() = sp.getString("ultimoResultado", "") ?: ""
         set(v) = sp.edit().putString("ultimoResultado", v).apply()
 
+    /** Localização ligada pela pessoa (botão 4). Desligada por padrão. */
+    var localizacao: Boolean
+        get() = sp.getBoolean("localizacao", false)
+        set(v) = sp.edit().putBoolean("localizacao", v).apply()
+
     val configurado: Boolean get() = url.isNotBlank() && pessoa.isNotBlank() && token.isNotBlank()
 }

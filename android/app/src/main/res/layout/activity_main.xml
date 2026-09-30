@@ -77,6 +77,12 @@
             android:text="@string/botao_sincronizar" />
 
         <Button
+            android:id="@+id/localizacao"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/botao_localizacao" />
+
+        <Button
             android:id="@+id/bateria"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
