@@ -140,6 +140,7 @@ export async function receberNotaDoApp({ perfil, chave, url, texto, dia, avisarG
   }
   if (!lido.itens.length) return { ok: false, erro: 'não reconheci itens no texto da nota', itens: 0 };
   const itens = await padronizarItens(lido.itens, { perfil, dia });
+  if (!itens.length) return { ok: true, itens: 0, loja: lido.loja, resumoCompleto: resumoNota({ loja: lido.loja, itens, ignorados: itens.ignorados }), resumo: `nenhum alimento nessa compra (${lido.itens.length} itens não alimentares)` };
   const r = await registrarNota({ perfil, chave: chave || extrairChave(url) || null, loja: lido.loja, data: lido.data, itens, origem: 'app' });
   const resumo = resumoNota({ loja: lido.loja, dia: r.dia, itens, repetida: r.repetida });
   if (avisarGrupo && r.nova) await avisarGrupo(resumo).catch(() => {});
@@ -152,6 +153,11 @@ export async function limparDespensa(perfil) {
   const [a, b] = await Promise.all([colecao('despensa').deleteMany({ jid }), colecao('notas').deleteMany({ jid })]);
   return (a.deletedCount || 0) + (b.deletedCount || 0);
 }
+
+// não alimentar pelo nome (reforço ao julgamento da IA): higiene, limpeza, pet, remédio, utensílio, papelaria
+const RE_NAO_ALIMENTO = /\b(desodorante|des\.? ?(rexona|dove|nivea)|sabonete|shampoo|xampu|condicionador|creme dental|pasta de dente|escova|fio dental|absorvente|fralda|papel (higi[êe]nico|toalha|alum[íi]nio|filme)|guardanapo|detergente|sab[ãa]o|amaciante|alvejante|desinfetante|multiuso|esponja|saco (de )?lixo|inseticida|repelente|vela|pilha|l[âa]mpada|ra[çc][ãa]o|areia (de|para) gato|petisco (canino|felino)|rem[ée]dio|dipirona|paracetamol|ibuprofeno|vitamina c efervescente|prote[çc][ãa]o solar|protetor solar|hidratante|perfume|l[âa]mina|barbear|gilete|preservativo|cotonete|algod[ãa]o|caneta|caderno|carv[ãa]o|g[áa]s|isqueiro|f[óo]sforo|sacola|copo descart|prato descart|talher descart)\b/i;
+/** Puro. Item que NÃO é comida/bebida: não entra na despensa, por nenhum caminho. */
+export const pareceNaoAlimento = (item) => !!item && (item.alimento === false || ['limpeza', 'higiene', 'pet', 'remédio', 'utensílio', 'papelaria'].includes(String(item.categoria || '').toLowerCase()) || RE_NAO_ALIMENTO.test(`${item.item || ''} ${item.descricaoOriginal || ''}`));
 
 /** Puro. O produto achado por nome no OFF bate com o item? Metade das palavras do item (3+ letras) precisa aparecer no nome do produto. */
 export function nomeBate(item, nomeProduto) {
@@ -172,6 +178,7 @@ export async function padronizarItens(cru, { perfil, dia } = {}) {
   if (!cru?.length) return [];
   const canon = await ia.normalizarItensNota({ itens: cru, nome: perfil?.nome?.split(' ')[0] });
   const saida = [];
+  const ignorados = [];
   let buscasNome = 0;
   for (let i = 0; i < canon.length; i++) {
     const c = canon[i];
@@ -190,6 +197,11 @@ export async function padronizarItens(cru, { perfil, dia } = {}) {
       ean: /^\d{8}$|^\d{12,14}$/.test(String(bruto.codigo || c.ean || '')) ? String(bruto.codigo || c.ean) : null,
     };
     if (!item.item) continue;
+    // só comida e bebida entram (desodorante, detergente, ração... ficam de fora em qualquer caminho: app, PDF, foto, texto)
+    if (pareceNaoAlimento(item)) {
+      ignorados.push(item.item);
+      continue;
+    }
     if (item.alimento) {
       try {
         // in natura (fruta, verdura, legume, carne, frango, peixe, ovo): tabela TACO, não busca por nome no OFF
@@ -211,6 +223,8 @@ export async function padronizarItens(cru, { perfil, dia } = {}) {
     }
     saida.push(item);
   }
+  if (ignorados.length) console.log(`[despensa] ${ignorados.length} item(ns) não alimentar(es) ignorado(s): ${ignorados.join(', ')}`);
+  Object.defineProperty(saida, 'ignorados', { value: ignorados.length, enumerable: false });
   return saida;
 }
 
@@ -340,12 +354,13 @@ export async function despensaZap(perfil) {
   return `🧺 *Tua despensa* (${lista.length} itens)\n\n${blocos.join('\n\n')}\n\n_Baixa: "acabou o iogurte", "usei 2 ovos", ou !despensa tirar iogurte · !despensa add 1 kg frango · foto do cupom pra entrar compra nova._`;
 }
 /** Texto curto depois de ler um cupom. */
-export function resumoNota({ loja, dia, itens, repetida }) {
+export function resumoNota({ loja, dia, itens, repetida, ignorados = itens?.ignorados || 0 }) {
   if (repetida) return 'Essa nota eu já tinha lido. Nada mudou na despensa.';
+  if (!itens?.length) return `🧾 *Cupom lido*${loja ? ` · ${loja}` : ''}\n\nNenhum alimento nessa compra${ignorados ? ` (${ignorados} item(ns) de higiene/limpeza/outros, que eu não guardo)` : ''}.`;
   const comNutri = itens.filter((i) => i.nutri).length;
   const perec = itens.filter((i) => i.perecivel).length;
   const lista = itens.slice(0, 12).map((i) => `- ${i.item}${i.quantidade ? ` · ${fmtQtd(i.quantidade, i.unidade)}` : ''}`).join('\n');
-  return `🧾 *Cupom lido*${loja ? ` · ${loja}` : ''}${dia ? ` · ${dia.slice(8, 10)}/${dia.slice(5, 7)}` : ''}\n\n${itens.length} itens entraram na despensa${perec ? `, ${perec} perecíveis` : ''}${comNutri ? `, ${comNutri} com tabela nutricional` : ''}.\n\n${lista}${itens.length > 12 ? `\n(+${itens.length - 12})` : ''}\n\n_!despensa mostra tudo. Quando algo acabar, é só me dizer._`;
+  return `🧾 *Cupom lido*${loja ? ` · ${loja}` : ''}${dia ? ` · ${dia.slice(8, 10)}/${dia.slice(5, 7)}` : ''}\n\n${itens.length} ${itens.length === 1 ? 'alimento entrou' : 'alimentos entraram'} na despensa${perec ? `, ${perec} perecíveis` : ''}${comNutri ? `, ${comNutri} com tabela nutricional` : ''}${ignorados ? ` (${ignorados} item(ns) não alimentar(es) de fora)` : ''}.\n\n${lista}${itens.length > 12 ? `\n(+${itens.length - 12})` : ''}\n\n_!despensa mostra tudo. Quando algo acabar, é só me dizer._`;
 }
 
 // ---------- validade: pergunta uma vez por dia por pessoa ----------

@@ -38,7 +38,7 @@ test('acharItem casa por palavras; chaveItem normaliza', () => {
 test('resumoNota: texto curto e repetida', () => {
   const t = resumoNota({ loja: 'Bistek', dia: '2026-10-01', itens: [{ item: 'arroz branco', quantidade: 1, unidade: 'kg', perecivel: false }, { item: 'frango', quantidade: 800, unidade: 'g', perecivel: true, nutri: { kcal: 165 } }] });
   assert.match(t, /Cupom lido\* · Bistek · 01\/10/);
-  assert.match(t, /2 itens entraram na despensa, 1 perecíveis, 1 com tabela nutricional/);
+  assert.match(t, /2 alimentos entraram na despensa, 1 perecíveis, 1 com tabela nutricional/);
   assert.match(t, /- frango · 800 g/);
   assert.match(resumoNota({ itens: [], repetida: true }), /já tinha lido/);
 });
@@ -81,4 +81,18 @@ test('nomeBate rejeita o lixo do OFF por nome; TACO cobre hortifrúti/carne por 
   assert.ok(b && !b.gramas && b.kcal > 20 && b.kcal < 70, `tangerina na TACO: ${JSON.stringify(b)}`);
   const f = ancorasDe('frango')[0];
   assert.ok(f && f.p > 15, `frango na TACO: ${JSON.stringify(f)}`);
+});
+
+import { pareceNaoAlimento } from '../despensa.js';
+test('pareceNaoAlimento: higiene, limpeza, pet e remédio ficam de fora; comida, bebida e suplemento entram', () => {
+  assert.equal(pareceNaoAlimento({ item: 'desodorante aerosol rexona active dry men', categoria: 'higiene', alimento: false }), true);
+  assert.equal(pareceNaoAlimento({ item: 'desodorante rexona', categoria: 'outro', alimento: true }), true); // a lista de termos corrige a IA
+  assert.equal(pareceNaoAlimento({ item: 'detergente ypê', categoria: 'limpeza', alimento: false }), true);
+  assert.equal(pareceNaoAlimento({ item: 'ração para gatos', categoria: 'pet', alimento: false }), true);
+  assert.equal(pareceNaoAlimento({ item: 'papel higiênico', categoria: 'outro', alimento: true }), true);
+  assert.equal(pareceNaoAlimento({ item: 'refrigerante laranjinha pureza', categoria: 'bebida', alimento: true }), false);
+  assert.equal(pareceNaoAlimento({ item: 'bergamota', categoria: 'fruta', alimento: true }), false);
+  assert.equal(pareceNaoAlimento({ item: 'whey growth', categoria: 'suplemento', alimento: true }), false);
+  assert.equal(pareceNaoAlimento({ item: 'sabão de coco em barra', categoria: 'limpeza', alimento: false }), true);
+  assert.equal(pareceNaoAlimento({ item: 'coco ralado', categoria: 'mercearia', alimento: true }), false);
 });
