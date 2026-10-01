@@ -89,5 +89,41 @@ test('metaBalancoPara: faixa vem do ritmo até a meta, dentro do saudável; sem 
   // a 1 kg da meta: metade do ritmo; alcançada: manutenção; sem meta de peso: faixa do objetivo
   assert.equal(metaBalancoPara({ objetivo: 'Hipertrofia', peso: 79.2, metaPeso: 80, dia: '2026-10-01' }).fase, 'aproximacao');
   assert.equal(metaBalancoPara({ objetivo: 'Hipertrofia', peso: 79.8, metaPeso: 80, dia: '2026-10-01' }).fase, 'manutencao');
-  assert.deepEqual(metaBalancoPara({ objetivo: 'Hipertrofia', peso: 77, dia: '2026-10-01' }), { min: 250, max: 500, rotulo: 'superávit de 250 a 500 kcal/dia', fonte: 'objetivo' });
+  // sem meta de peso mas com peso e objetivo de ganho: ritmo médio da faixa saudável (sem teto)
+  const sm = metaBalancoPara({ objetivo: 'Hipertrofia', peso: 77, dia: '2026-10-01', ritmo: 'medio' });
+  assert.equal(sm.fonte, 'ritmo');
+  assert.equal(metaBalancoPara({ objetivo: 'Hipertrofia', peso: 77, dia: '2026-10-01' }).fonte, 'objetivo', 'sem ritmo dito, faixa genérica');
+  assert.ok(sm.ritmoKgSemana > 0.28 && sm.ritmoKgSemana < 0.30);
+  // sem peso: faixa genérica do objetivo
+  assert.deepEqual(metaBalancoPara({ objetivo: 'Hipertrofia', dia: '2026-10-01' }), { min: 250, max: 500, rotulo: 'superávit de 250 a 500 kcal/dia', fonte: 'objetivo' });
+});
+
+
+import { tendenciaGordura, proporEtapa } from '../resumo.js';
+test('metas-etapa, ritmo máximo e freio pela gordura', () => {
+  // ritmo máximo com etapa: 75,8 -> 80 kg, prazo só referência; ritmo = 0,5% = 0,379 kg/sem -> ~417 kcal
+  const e = metaBalancoPara({ objetivo: 'Hipertrofia', peso: 75.8, metaPeso: 80, metaPrazo: '2027-01-15', dia: '2026-10-01', ritmo: 'maximo', metaModo: 'etapa' });
+  assert.ok(Math.abs(e.ritmoKgSemana - 75.8 * 0.005) < 0.001, `ritmo ${e.ritmoKgSemana}`);
+  assert.match(e.rotulo, /superávit de ~4[12]0 kcal\/dia .*\[etapa\]$/);
+  assert.match(e.detalhe, /chega a 80 kg por volta de 2026-12-1\d \(prazo 2027-01-15, antes\)/);
+  assert.match(e.detalhe, /ETAPA \(não um teto\)/);
+  // etapa batida: não vira manutenção, segue no ritmo e sinaliza
+  const b = metaBalancoPara({ objetivo: 'Hipertrofia', peso: 80.1, metaPeso: 80, dia: '2026-12-20', ritmo: 'maximo', metaModo: 'etapa' });
+  assert.equal(b.etapaBatida, true);
+  assert.ok(b.ritmoKgSemana > 0.39 && b.ritmoKgSemana < 0.41);
+  // freio: gordura subindo 1,0 ponto em 28 dias derruba do máximo pro médio; 1,6 pro mínimo
+  const f1 = metaBalancoPara({ objetivo: 'Hipertrofia', peso: 76, metaPeso: 80, dia: '2026-10-01', ritmo: 'maximo', metaModo: 'etapa', gorduraTend: 1.0 });
+  assert.ok(Math.abs(f1.ritmoKgSemana - 76 * 0.00375) < 0.001, `ritmo ${f1.ritmoKgSemana}`);
+  assert.match(f1.freio, /um degrau abaixo do ritmo máximo/);
+  const f2 = metaBalancoPara({ objetivo: 'Hipertrofia', peso: 76, metaPeso: 80, dia: '2026-10-01', ritmo: 'maximo', metaModo: 'etapa', gorduraTend: 1.6 });
+  assert.ok(Math.abs(f2.ritmoKgSemana - 76 * 0.0025) < 0.001);
+  // tendência da gordura: sobe 0,05 pp/dia por 28 dias = +1,4 pontos
+  const pes = Array.from({ length: 10 }, (_, i) => ({ dia: `2026-09-${String(1 + i * 3).padStart(2, '0')}`, peso: 76, gordura: 17 + 0.05 * i * 3 }));
+  assert.ok(Math.abs(tendenciaGordura(pes) - 1.4) < 0.15, `tend ${tendenciaGordura(pes)}`);
+  assert.equal(tendenciaGordura(pes.slice(0, 4)), null);
+  // próxima etapa: 80,1 -> 84 kg, ~12 semanas (10,3 no ritmo + 2 de folga)
+  const px = proporEtapa({ peso: 80.1, ganho: true, dia: '2026-12-20' });
+  assert.equal(px.metaPeso, 84);
+  assert.ok(px.semanas >= 11 && px.semanas <= 13, `semanas ${px.semanas}`);
+  assert.match(px.metaPrazo, /^2027-03-/);
 });

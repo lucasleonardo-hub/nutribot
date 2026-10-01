@@ -16,6 +16,7 @@ import { refletirTodos } from './reflexao.js';
 import { fecharPendentes } from './atividades.js';
 import { contextoDoDia, contextoDoDiaDeTodos } from './contexto.js';
 import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta } from './previsao.js';
+import { proporEtapa } from './resumo.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
 import { configGrafico, renderizar } from './graficos.js';
@@ -355,6 +356,19 @@ export async function fecharSemana({ dia, perfis, grupo }) {
           if (ritmo) linhas.push(ritmo);
           const projecao = projetarMeta({ perfil: p, deltaKgSemana: nova.deltaKg, pesoAtual: nova.pesoInicial, dia });
           if (projecao) linhas.push(projecao);
+          // meta-etapa batida (sem teto): sobe o degrau e avisa; o ganho continua no ritmo saudável
+          if (p.metaModo === 'etapa' && p.metaPeso && nova.pesoInicial) {
+            const ganho = /hipertrof|ganh|massa|bulk|for[çc]a/i.test(String(p.objetivo || ''));
+            const bateu = ganho ? nova.pesoInicial >= p.metaPeso - 0.3 : nova.pesoInicial <= p.metaPeso + 0.3;
+            if (bateu) {
+              const prox = proporEtapa({ peso: nova.pesoInicial, ganho, dia });
+              if (prox) {
+                await salvarPerfil({ jids: p.jids, metaPeso: prox.metaPeso, metaPrazo: prox.metaPrazo, atualizacoes: { ...(p.atualizacoes || {}), metaPeso: dia } }).catch(() => {});
+                linhas.push(`ETAPA BATIDA: ${String(p.metaPeso).replace('.', ',')} kg. Próxima etapa definida pelo sistema: ${prox.metaPeso} kg até ${prox.metaPrazo} (~${prox.semanas} semanas no ritmo saudável). Anuncie no resumo como conquista e apresente a próxima.`);
+                console.log(`[meta] ${p.nome}: etapa ${p.metaPeso} kg batida; próxima ${prox.metaPeso} kg até ${prox.metaPrazo}`);
+              }
+            }
+          }
           await salvarPrevisao({ jid: jids[0], nome: p.nome, feitaEm: dia, alvoDia: nova.alvoDia, pesoInicial: nova.pesoInicial, diaInicial: nova.diaInicial, deltaKg: nova.deltaKg, pesoPrevisto: nova.pesoPrevisto, magraKg: nova.magraKg, gorduraKg: nova.gorduraKg, base: nova.base, confianca: nova.confianca }).catch((e) => console.error('[previsao] falha ao salvar:', e.message));
           console.log(`[previsao] ${p.nome}: ${nova.texto.slice(0, 120)}`);
         }

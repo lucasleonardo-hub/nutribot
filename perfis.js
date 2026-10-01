@@ -88,6 +88,16 @@ export function aplicarAtualizacao(perfil, a, dia) {
   if (meta && meta > 25 && meta < 400) set('metaPeso', meta);
   const prazo = str(a.meta_prazo);
   if (prazo && /^\d{4}-\d{2}(-\d{2})?$/.test(prazo)) set('metaPrazo', prazo.length === 7 ? `${prazo}-28` : prazo);
+  // "o mais rápido possível" / "devagar" = ritmo preferido dentro do saudável; "sem teto" = a meta é etapa, não limite
+  const ritmo = str(a.ritmo)?.toLowerCase();
+  if (ritmo && /^(maximo|máximo|medio|médio|minimo|mínimo)$/.test(ritmo)) set('ritmo', ritmo.normalize('NFD').replace(/[̀-ͯ]/g, ''));
+  const modo = str(a.meta_modo)?.toLowerCase();
+  if (modo && /^(etapa|final)$/.test(modo)) set('metaModo', modo);
+  if (a.sem_meta_peso === true) {
+    novo.metaPeso = null;
+    novo.metaPrazo = null;
+    novo.atualizacoes.metaPeso = dia;
+  }
   // produto de uso fixo com rótulo lido ("vai ser sempre esse hipercalórico, deixa salvo"): porção e números pra copiar depois
   if (a.produto && typeof a.produto === 'object') {
     const nome = str(a.produto.nome)?.toLowerCase();
