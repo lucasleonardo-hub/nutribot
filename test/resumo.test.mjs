@@ -65,3 +65,29 @@ test('lerTipoRefeicao entende a linha "Refeição:" da análise', () => {
   assert.equal(lerTipoRefeicao('🕐 *Refeição:* pré-treino da manhã'), 'lanche_manha');
   assert.equal(lerTipoRefeicao('Refeição: lanche da tarde'), 'lanche');
 });
+
+import { metaBalancoPara } from '../resumo.js';
+test('metaBalancoPara: faixa vem do ritmo até a meta, dentro do saudável; sem meta cai no objetivo; perto da meta desacelera', () => {
+  // 77 kg -> 80 kg até 2026-12-24 (12 semanas): 0,25 kg/semana, dentro de 0,19–0,385 (0,25–0,5%) -> ~275 kcal/dia
+  const m = metaBalancoPara({ objetivo: 'Hipertrofia', peso: 77, metaPeso: 80, metaPrazo: '2026-12-24', dia: '2026-10-01' });
+  assert.equal(m.fonte, 'meta');
+  assert.ok(m.ritmoKgSemana > 0.24 && m.ritmoKgSemana < 0.26, `ritmo ${m.ritmoKgSemana}`);
+  assert.ok(m.min >= 170 && m.max <= 380 && m.min < m.max, `faixa ${m.min}–${m.max}`);
+  assert.match(m.rotulo, /superávit de ~2[6-9]0 kcal\/dia \(\+0,25 kg\/semana rumo a 80 kg até 2026-12-24\)/);
+  assert.equal(m.prazoApertado, false);
+  // prazo impossível: trava no teto saudável e avisa
+  const ap = metaBalancoPara({ objetivo: 'Hipertrofia', peso: 77, metaPeso: 85, metaPrazo: '2026-11-01', dia: '2026-10-01' });
+  assert.equal(ap.prazoApertado, true);
+  assert.ok(Math.abs(ap.ritmoKgSemana - 77 * 0.005) < 0.001);
+  // sem prazo: meio da faixa saudável (0,375% = 0,289 kg/sem -> ~318 kcal)
+  const sp = metaBalancoPara({ objetivo: 'Hipertrofia', peso: 77, metaPeso: 80, dia: '2026-10-01' });
+  assert.ok(sp.ritmoKgSemana > 0.28 && sp.ritmoKgSemana < 0.30);
+  // perda: 70 -> 65 em 10 semanas = 0,5 kg/sem (dentro de 0,35–0,7) -> déficit ~550
+  const pd = metaBalancoPara({ objetivo: 'perda de peso', peso: 70, metaPeso: 65, metaPrazo: '2026-12-10', dia: '2026-10-01' });
+  assert.ok(pd.min < 0 && pd.max < 0 && pd.ritmoKgSemana < 0);
+  assert.match(pd.rotulo, /déficit de ~5[4-6]0 kcal\/dia/);
+  // a 1 kg da meta: metade do ritmo; alcançada: manutenção; sem meta de peso: faixa do objetivo
+  assert.equal(metaBalancoPara({ objetivo: 'Hipertrofia', peso: 79.2, metaPeso: 80, dia: '2026-10-01' }).fase, 'aproximacao');
+  assert.equal(metaBalancoPara({ objetivo: 'Hipertrofia', peso: 79.8, metaPeso: 80, dia: '2026-10-01' }).fase, 'manutencao');
+  assert.deepEqual(metaBalancoPara({ objetivo: 'Hipertrofia', peso: 77, dia: '2026-10-01' }), { min: 250, max: 500, rotulo: 'superávit de 250 a 500 kcal/dia', fonte: 'objetivo' });
+});

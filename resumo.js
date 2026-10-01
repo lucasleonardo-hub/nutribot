@@ -412,6 +412,59 @@ export function metaBalanco(objetivo) {
   if (/emagre|perd|reduz|defin|secar|cutting|gordura/.test(o)) return { min: -600, max: -300, rotulo: 'déficit de 300 a 600 kcal/dia' };
   return { min: -150, max: 150, rotulo: 'equilíbrio (entre -150 e +150 kcal/dia)' };
 }
+/**
+ * Faixa de balanço diário LIGADA À META: ritmo necessário pra chegar a metaPeso até metaPrazo (ou o meio da faixa
+ * saudável sem prazo), convertido em kcal/dia (7.700 kcal por kg), limitado à faixa segura (ganho 0,25–0,5% do peso por
+ * semana; perda 0,5–1%). Perto da meta (≤ 1 kg) o ritmo cai pela metade; alcançada (≤ 0,3 kg), vira manutenção.
+ * Sem metaPeso, cai na faixa genérica do objetivo (metaBalanco). Recalculada a cada chamada com o peso atual.
+ */
+export function metaBalancoPara({ objetivo, peso, metaPeso, metaPrazo, dia } = {}) {
+  const base = metaBalanco(objetivo);
+  const p = Number(peso) || 0;
+  const alvoKg = Number(metaPeso) || 0;
+  if (!p || !alvoKg) return { ...base, fonte: 'objetivo' };
+  const falta = alvoKg - p;
+  if (Math.abs(falta) <= 0.3) return { min: -150, max: 150, rotulo: `manutenção (meta de ${String(alvoKg).replace('.', ',')} kg alcançada: está em ${String(Math.round(p * 10) / 10).replace('.', ',')} kg)`, detalhe: 'META ALCANÇADA: faixa de manutenção (−150 a +150 kcal/dia) até ela decidir o próximo passo.', fonte: 'meta', ritmoKgSemana: 0, fase: 'manutencao' };
+  const ganho = falta > 0;
+  const segura = ganho ? { min: p * 0.0025, max: p * 0.005 } : { min: p * 0.005, max: p * 0.01 }; // kg/semana, em módulo
+  let ritmo = (segura.min + segura.max) / 2;
+  let nota = 'sem prazo: ritmo do meio da faixa saudável';
+  let prazoApertado = false;
+  if (metaPrazo && dia) {
+    const semanas = (new Date(`${metaPrazo}T12:00:00Z`) - new Date(`${dia}T12:00:00Z`)) / (86400000 * 7);
+    if (semanas > 0.5) {
+      const necessario = Math.abs(falta) / semanas;
+      if (necessario > segura.max) {
+        ritmo = segura.max;
+        prazoApertado = true;
+        nota = `prazo ${metaPrazo} pede ${String(Math.round(necessario * 100) / 100).replace('.', ',')} kg/semana, acima do saudável: fica no teto seguro e o prazo vai escorregar`;
+      } else if (necessario < segura.min) {
+        ritmo = segura.min;
+        nota = `prazo ${metaPrazo} dá folga: ritmo mínimo saudável já chega antes`;
+      } else {
+        ritmo = necessario;
+        nota = `ritmo pra chegar a ${String(alvoKg).replace('.', ',')} kg até ${metaPrazo}`;
+      }
+    } else nota = `prazo ${metaPrazo} já passou ou está em cima: ritmo do meio da faixa saudável`;
+  }
+  let fase = 'curso';
+  if (Math.abs(falta) <= 1) {
+    ritmo = ritmo / 2;
+    fase = 'aproximacao';
+    nota += '; a 1 kg da meta, ritmo pela metade pra não passar do ponto';
+  }
+  const kcalDia = (ritmo * 7700) / 7; // módulo
+  const centro = ganho ? kcalDia : -kcalDia;
+  const arred = (x) => Math.round(x / 10) * 10;
+  // ±100 em volta do centro, sem sair de uma faixa de segurança larga
+  const min = Math.max(ganho ? 100 : -900, arred(centro - 100));
+  const max = Math.min(ganho ? 700 : -100, arred(centro + 100));
+  const ritmoTxt = `${ganho ? '+' : '−'}${String(Math.round(ritmo * 100) / 100).replace('.', ',')} kg/semana`;
+  const rotulo = `${ganho ? 'superávit' : 'déficit'} de ~${Math.abs(arred(centro))} kcal/dia (${ritmoTxt} rumo a ${String(alvoKg).replace('.', ',')} kg${metaPrazo ? ` até ${metaPrazo}` : ''})`;
+  const detalhe = `META DE PESO: ${String(alvoKg).replace('.', ',')} kg${metaPrazo ? ` até ${metaPrazo}` : ''}; está em ${String(Math.round(p * 10) / 10).replace('.', ',')} kg, faltam ${String(Math.round(Math.abs(falta) * 10) / 10).replace('.', ',')} kg; ritmo alvo ${ritmoTxt} (${nota}) = ${ganho ? 'superávit' : 'déficit'} de ~${Math.abs(arred(centro))} kcal/dia. A faixa diária é recalculada com o peso atual: quando o peso muda, a meta de calorias e de proteína mudam junto.`;
+  return { min, max, rotulo, detalhe, fonte: 'meta', ritmoKgSemana: ganho ? ritmo : -ritmo, prazoApertado, fase, falta: Math.round(falta * 10) / 10 };
+}
+
 const media = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 const _kcal = (n) => `${Math.round(n).toLocaleString('pt-BR')} kcal`;
 const _sinal = (n) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(Math.round(n)).toLocaleString('pt-BR')}`;
@@ -453,7 +506,7 @@ export function previsaoGastoAmanha(params) {
   return previsaoGastoDia(params);
 }
 /** Mesma previsão pra um dia qualquer à frente (diaAlvo AAAA-MM-DD); sem diaAlvo, amanhã. */
-export function previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlvo }) {
+export function previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlvo, perfil = null }) {
   if (!gastos || !dia) return null;
   const entradas = Object.entries(gastos).filter(([d, k]) => d < dia && Number(k) > 800).sort(([a], [b]) => a.localeCompare(b)); // dias fechados; hoje ainda está incompleto
   if (entradas.length < 7) return null;
@@ -472,7 +525,7 @@ export function previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlv
     if (relogio28) fator = Math.min(1.25, Math.max(0.8, metaAdaptativa.gasto / relogio28));
   }
   const previsto = Math.round((base * fator) / 10) * 10;
-  const alvo = metaBalanco(objetivo);
+  const alvo = perfil ? metaBalancoPara({ objetivo: perfil.objetivo || objetivo, peso: perfil.peso, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia }) : metaBalanco(objetivo);
   const min = Math.round((previsto + alvo.min) / 10) * 10;
   const max = Math.round((previsto + alvo.max) / 10) * 10;
   const ajuste = Math.abs(fator - 1) >= 0.02 ? `, ajustada pelo gasto real da meta adaptativa (x${fator.toFixed(2).replace('.', ',')})` : '';
@@ -517,9 +570,9 @@ export function semanaDoPlano(dia) {
  * Meta calórica por dia da semana do plano, pra quem tem relógio: gasto previsto no mesmo dia da semana das últimas
  * semanas e a faixa de ingestão que o objetivo pede. null sem relógio ou com menos de 7 dias fechados.
  */
-export function previsaoSemana({ gastos, dia, objetivo, metaAdaptativa, semana }) {
+export function previsaoSemana({ gastos, dia, objetivo, metaAdaptativa, semana, perfil = null }) {
   const sem = semana || semanaDoPlano(dia);
-  const dias = sem.dias.map((d) => ({ ...d, prev: previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlvo: d.dia }) })).filter((d) => d.prev);
+  const dias = sem.dias.map((d) => ({ ...d, prev: previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlvo: d.dia, perfil }) })).filter((d) => d.prev);
   if (!dias.length) return null;
   const linhas = dias.map((d) => `- ${d.rotulo}: gasto previsto ${_kcal(d.prev.previsto)} (${d.prev.criterio}) -> comer entre ${_kcal(d.prev.alvo.min)} e ${_kcal(d.prev.alvo.max)}`);
   const mediaAlvo = Math.round(media(dias.map((d) => (d.prev.alvo.min + d.prev.alvo.max) / 2)) / 10) * 10;
@@ -572,7 +625,7 @@ export function calcularVisao({ refeicoes = [], pesagens = [], perfil = {}, dia,
   const meta = gastoAdaptativo({ refeicoes, pesagens, perfil, dia, gastos });
   let balanco = null;
   if (gastos && Object.keys(gastos).length) {
-    const alvo = metaBalanco(perfil.objetivo);
+    const alvo = metaBalancoPara({ objetivo: perfil.objetivo, peso: pesagens.length ? [...pesagens].sort((a, b) => a.dia.localeCompare(b.dia)).pop().peso : perfil.peso, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia });
     const hoje = porDia.get(dia);
     const diasGasto = Object.keys(gastos).filter((d) => d <= dia).sort();
     const ultimoGasto = diasGasto[diasGasto.length - 1];
@@ -587,7 +640,7 @@ export function calcularVisao({ refeicoes = [], pesagens = [], perfil = {}, dia,
       situacao: media7 == null ? null : media7 < alvo.min ? 'abaixo' : media7 > alvo.max ? 'acima' : 'dentro',
     };
   }
-  const amanha = previsaoGastoAmanha({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta });
+  const amanha = previsaoGastoAmanha({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta, perfil });
   return { sete, trinta, sequencia, meta, balanco, metaP, amanha };
 }
 
@@ -609,6 +662,7 @@ export function visaoPeriodo(params) {
   const linhas = [periodo(v.sete), periodo(v.trinta)];
   if (v.sequencia >= 2) linhas.push(`SEQUÊNCIA: ${v.sequencia} dia(s) seguidos registrando o dia completo.`);
   linhas.push(v.meta.texto);
+  if (v.meta?.faixa?.detalhe) linhas.push(v.meta.faixa.detalhe);
   if (v.balanco) {
     const b = v.balanco;
     const partes = [];
@@ -649,10 +703,12 @@ export function visaoZap(params) {
   const partes = [bloco('Últimos 7 dias', v.sete), bloco('Últimos 30 dias', v.trinta)];
   if (v.sequencia >= 2) partes.push(`*Sequência*\n• ${v.sequencia} dias seguidos com o dia completo`);
   const m = v.meta;
+  if (m?.status === 'calibrado' && m.faixa?.fonte === 'meta') partes.push(`*Ritmo alvo*\n• ${m.faixa.rotulo}`);
   if (m?.status === 'calibrado') {
     const t = m.tendenciaKgSemana;
     partes.push([`*Meta adaptativa* (${m.diasCompletos} dias completos)`, `• Gasto real: ${_kcal(m.gasto)}/dia`, `• Tendência de peso: ${Math.abs(t) < 0.05 ? 'estável' : `${t > 0 ? '+' : ''}${String(t).replace('.', ',')} kg/semana`}`, `• Comer: ${_kcal(m.alvo.min)} a ${_kcal(m.alvo.max)}/dia`].join('\n'));
   } else if (m?.status === 'relogio') {
+    if (m.faixa?.fonte === 'meta') partes.push(`*Ritmo alvo*\n• ${m.faixa.rotulo}`);
     partes.push([`*Meta provisória* (pelo relógio)`, `• Gasto: ${_kcal(m.gasto)}/dia`, `• Comer: ${_kcal(m.alvo.min)} a ${_kcal(m.alvo.max)}/dia`, m.diasCompletos < 10 ? `• Meta adaptativa em ${10 - m.diasCompletos} dia(s) completo(s)` : null].filter(Boolean).join('\n'));
   } else if (m) {
     partes.push(`*Meta*\n• Ainda calibrando (${m.diasCompletos} de 10 dias completos)`);
@@ -701,7 +757,8 @@ export function gastoAdaptativo({ refeicoes = [], pesagens = [], perfil = {}, di
   }
   const completos = [...porDia.entries()].filter(([, t]) => t.n >= DIA_COMPLETO_MIN_REF || t.kcal >= DIA_COMPLETO_MIN_KCAL).map(([d, t]) => ({ dia: d, kcal: t.kcal }));
   const pesos = pesagens.filter((p) => p.peso && (dias.includes(p.dia) || p.dia === dia)).sort((a, b) => a.dia.localeCompare(b.dia));
-  const meta = metaBalanco(perfil.objetivo);
+  // a faixa vem da META DE PESO (ritmo necessário até o prazo, dentro do saudável) e do peso mais recente; sem meta, do tipo de objetivo
+  const meta = metaBalancoPara({ objetivo: perfil.objetivo, peso: pesos.length ? pesos[pesos.length - 1].peso : perfil.peso, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia });
   const alvo = (gasto) => ({ min: Math.round((gasto + meta.min) / 10) * 10, max: Math.round((gasto + meta.max) / 10) * 10 });
   const gastoRelogio = gastos ? media(Object.entries(gastos).filter(([d]) => dias.includes(d)).map(([, k]) => k).filter(Boolean)) : null;
 
@@ -725,6 +782,7 @@ export function gastoAdaptativo({ refeicoes = [], pesagens = [], perfil = {}, di
       tendenciaKgSemana: tend,
       diasCompletos: completos.length,
       alvo: a,
+      faixa: meta,
       texto: `META ADAPTATIVA: gasto real estimado ~${_kcal(gasto)}/dia (ingestão média ${_kcal(ingestao)} em ${completos.length} dias completos, peso ${Math.abs(tend) < 0.05 ? 'estável' : `${tend > 0 ? '+' : ''}${String(tend).replace('.', ',')} kg/semana`}${gastoRelogio ? `; relógio dizia ~${_kcal(gastoRelogio)}` : ''}). Objetivo "${perfil.objetivo || '?'}": comer entre ${_kcal(a.min)} e ${_kcal(a.max)} por dia.`,
     };
   }
@@ -733,7 +791,7 @@ export function gastoAdaptativo({ refeicoes = [], pesagens = [], perfil = {}, di
   if (pesos.length < 4 || spanDias < 7) faltam.push(`pesagens cobrindo 7 dias (tem ${pesos.length})`);
   if (gastoRelogio) {
     const a = alvo(gastoRelogio);
-    return { status: 'relogio', gasto: Math.round(gastoRelogio), diasCompletos: completos.length, alvo: a, texto: `META (provisória, pelo relógio): gasto ~${_kcal(gastoRelogio)}/dia; objetivo "${perfil.objetivo || '?'}" -> comer entre ${_kcal(a.min)} e ${_kcal(a.max)} por dia. A meta adaptativa pela tendência do peso entra quando houver ${faltam.join(' e ')}.` };
+    return { status: 'relogio', gasto: Math.round(gastoRelogio), diasCompletos: completos.length, alvo: a, faixa: meta, texto: `META (provisória, pelo relógio): gasto ~${_kcal(gastoRelogio)}/dia; objetivo "${perfil.objetivo || '?'}" -> comer entre ${_kcal(a.min)} e ${_kcal(a.max)} por dia. A meta adaptativa pela tendência do peso entra quando houver ${faltam.join(' e ')}.` };
   }
   return { status: 'calibrando', diasCompletos: completos.length, alvo: null, texto: `META ADAPTATIVA: ainda calibrando; falta ${faltam.join(' e ')}.` };
 }

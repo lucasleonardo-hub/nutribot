@@ -81,7 +81,7 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
     let metaSemana = null;
     if (gastos) {
       const meta = gastoAdaptativo({ refeicoes: minhas, pesagens, perfil, dia, gastos });
-      metaSemana = previsaoSemana({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta, semana })?.texto || null;
+      metaSemana = previsaoSemana({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta, semana, perfil })?.texto || null;
     }
     const plano = ia.separarAtualizacao(
       await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '', despensa })
