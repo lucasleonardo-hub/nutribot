@@ -333,7 +333,7 @@ const MODELOS_RESERVA = (process.env.GEMINI_MODELOS_RESERVA || 'gemini-3.8-flash
   .filter((m) => m && m !== MODELO);
 // Modelos "leves" (Flash Lite): no nível gratuito têm 500 pedidos/dia cada, contra 20 dos Flash. Tarefas que não
 // precisam do melhor modelo (papo, extração de dados, notas, rotina, cobrança) começam por eles e poupam a cota dos Flash.
-const MODELOS_LEVES = (process.env.GEMINI_MODELOS_LEVES || 'gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite')
+const MODELOS_LEVES = (process.env.GEMINI_MODELOS_LEVES || 'gemini-3.5-flash-lite,gemini-3.1-flash-lite')
   .split(',')
   .map((m) => m.trim())
   .filter((m) => m && m !== MODELO && !MODELOS_RESERVA.includes(m));
