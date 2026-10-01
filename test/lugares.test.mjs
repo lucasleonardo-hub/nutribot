@@ -312,3 +312,35 @@ test('treinoXRefeicoes: café 29 min depois da academia é o pós-treino; whey 2
   assert.match(r.linhas[1], /Vôlei de areia 17:30–20:00: pré = nada registrado até 90 min antes; pós = nada registrado até 90 min depois/);
   assert.deepEqual(treinoXRefeicoes({ refeicoes, sessoes: [] }).linhas, []);
 });
+
+import { resumirSessaoHevy } from '../contexto.js';
+test('resumirSessaoHevy: melhor série, volume, RPE e progressão contra a sessão anterior; cobertura pré/pós no bloco', () => {
+  const hoje = { titulo: 'Superior B', inicio: '2026-10-01T10:13:00Z', exercicios: [
+    { title: 'Supino reto', sets: [{ type: 'warmup', weight_kg: 40, reps: 10 }, { type: 'normal', weight_kg: 70, reps: 8, rpe: 8 }, { type: 'normal', weight_kg: 70, reps: 7, rpe: 9 }] },
+    { title: 'Remada curvada', sets: [{ type: 'normal', weight_kg: 60, reps: 10, rpe: 7 }, { type: 'normal', weight_kg: 60, reps: 10 }] },
+  ] };
+  const antes = { titulo: 'Superior B', inicio: '2026-09-24T10:10:00Z', exercicios: [
+    { title: 'Supino reto', sets: [{ type: 'normal', weight_kg: 67.5, reps: 8 }, { type: 'normal', weight_kg: 67.5, reps: 8 }] },
+    { title: 'Remada curvada', sets: [{ type: 'normal', weight_kg: 60, reps: 10 }, { type: 'normal', weight_kg: 60, reps: 10 }] },
+  ] };
+  const r = resumirSessaoHevy(hoje, [antes]);
+  assert.equal(r.series, 4);
+  assert.equal(r.volume, 70 * 8 + 70 * 7 + 60 * 20);
+  assert.equal(r.rpe, 8);
+  assert.equal(r.subiu, 1);
+  assert.equal(r.caiu, 0);
+  assert.match(r.detalhe, /2 exercícios, 4 séries, volume 2\.250 kg, RPE médio 8/);
+  assert.match(r.detalhe, /Supino reto 70 kg×8 \(\+2,5 kg vs 24\/09\)/);
+  assert.match(r.detalhe, /Remada curvada 60 kg×10 \(igual vs 24\/09\)/);
+  // cobertura: pós com 35 g de proteína pra 77 kg (alvo 23 g) e energia +673 pra hipertrofia
+  const refeicoes = [
+    { slot: 'lanche_manha', horaLocal: '06:43', descricao: 'whey', estimativa: { kcal: 303, p: 30 } },
+    { slot: 'cafe', horaLocal: '08:29', descricao: 'pão e Pro Force', estimativa: { kcal: 680, p: 35 } },
+  ];
+  const linhas = treinoXRefeicoes({ refeicoes, sessoes: [{ nome: 'Superior B (Hevy)', inicio: 7 * 60 + 13, fim: 7 * 60 + 59, kcal: 310, hevy: r }], perfil: { peso: 77, objetivo: 'Hipertrofia' } }).linhas;
+  assert.match(linhas[0], /~310 kcal \(relógio\) · Hevy: 2 exercícios/);
+  assert.match(linhas[0], /proteína no pós 35 g \(alvo ≥ 23 g\) ✓/);
+  assert.match(linhas[0], /energia em volta do treino 983 kcal vs ~310 kcal gastas → \+673 kcal, coerente o ganho de massa pede ✓/);
+  const perda = treinoXRefeicoes({ refeicoes, sessoes: [{ nome: 'X', inicio: 7 * 60 + 13, fim: 7 * 60 + 59, kcal: 310 }], perfil: { peso: 70, objetivo: 'perda de peso' } }).linhas[0];
+  assert.match(perda, /fora do que a perda de peso pede ✗/);
+});
