@@ -262,3 +262,18 @@ test('agruparVisitas: ponto em movimento (vel > 2 m/s) não vira lugar nem esten
   assert.equal(visitas[0].hIni, 9);
   assert.equal(visitas[1].hIni, 11);
 });
+
+import { ruaPermitida, abreviarRua } from '../lugares.js';
+test('ruaPermitida e abreviarRua: rua só em lugar público; casa, casa de alguém e hotel nunca', () => {
+  assert.equal(ruaPermitida({ tipo: 'academia', rua: 'Rua X' }), true);
+  assert.equal(ruaPermitida({ tipo: 'faculdade' }), true);
+  assert.equal(ruaPermitida({ papel: 'trabalho', tipo: 'trabalho' }), true);
+  assert.equal(ruaPermitida({ papel: 'casa', tipo: 'residência' }), false);
+  assert.equal(ruaPermitida({ tipo: 'residência' }), false);
+  assert.equal(ruaPermitida({ tipo: 'casa', nome: 'da mãe do Heitor' }), false);
+  assert.equal(ruaPermitida({ tipo: 'hotel' }), false);
+  assert.equal(ruaPermitida(null), false);
+  assert.equal(abreviarRua('Rua Lauro Linhares'), 'R. Lauro Linhares');
+  assert.equal(abreviarRua('Avenida Beira-Mar Norte'), 'Av. Beira-Mar Norte');
+  assert.equal(abreviarRua('Servidão Ana Bernardo'), 'Serv. Ana Bernardo');
+});

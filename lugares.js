@@ -417,10 +417,16 @@ async function nominatim(lat, lon) {
   return {
     bairro: a.suburb || a.neighbourhood || a.quarter || a.city_district || a.village || null,
     cidade: a.city || a.town || a.municipality || a.county || null,
+    rua: a.road || a.pedestrian || a.footway || null, // só é guardada em lugar público (ruaPermitida); nunca número
     tipo,
     nome: tipo && !['residência', 'trabalho', 'outro'].includes(tipo) ? j.name || null : null,
   };
 }
+/** Rua só identifica lugar público (academia, restaurante, mercado, faculdade, trabalho, praça); casa de quem quer que seja, nunca. */
+export const ruaPermitida = (l) => !!l && l.papel !== 'casa' && !['residência', 'casa', 'hotel', 'casa de alguém'].includes(l.tipo || '') && !/^casa\b/i.test(l.nome || '');
+/** "Garra Academia (Córrego Grande, R. Lauro Linhares)": rua abreviada, só quando permitida e conhecida. */
+const comRua = (l, texto) => (ruaPermitida(l) && l.rua ? texto.replace(/\)$/, `, ${abreviarRua(l.rua)})`).replace(/^(.*[^)])$/, `$1 (${abreviarRua(l.rua)})`) : texto);
+export const abreviarRua = (r) => String(r || '').replace(/^Rua\s+/i, 'R. ').replace(/^Avenida\s+/i, 'Av. ').replace(/^Rodovia\s+/i, 'Rod. ').replace(/^Servid[ãa]o\s+/i, 'Serv. ').replace(/^Travessa\s+/i, 'Tv. ').trim();
 /** Tipo, nome (só de POI: academia, restaurante, mercado; nunca de casa), bairro e cidade de um ponto; cache de 30 dias. */
 export async function classificarOSM({ lat, lon }) {
   const chave = `${lat.toFixed(4)},${lon.toFixed(4)}`;
@@ -430,14 +436,15 @@ export async function classificarOSM({ lat, lon }) {
   // resposta completa vale 30 dias; se o Overpass falhou, o bairro fica guardado e o tipo é tentado de novo em 1 h.
   // Entrada antiga sem a lista de candidatos é refeita (a escolha por plausibilidade precisa dela).
   if (c && c.dado?.candidatos && idade < (c.completo ? 30 * 86400_000 : 3600_000)) return c.dado;
-  const dado = { tipo: null, nome: null, bairro: c?.dado?.bairro || null, cidade: c?.dado?.cidade || null, candidatos: [] };
+  const dado = { tipo: null, nome: null, bairro: c?.dado?.bairro || null, cidade: c?.dado?.cidade || null, rua: c?.dado?.rua || null, candidatos: [] };
   let completo = true;
-  // 1) Nominatim (rápido e estável): bairro, cidade e o objeto mais próximo como tipo provisório
+  // 1) Nominatim (rápido e estável): bairro, cidade, rua e o objeto mais próximo como tipo provisório
   let nom = null;
   try {
     nom = await nominatim(lat, lon);
     dado.bairro = nom.bairro || dado.bairro;
     dado.cidade = nom.cidade || dado.cidade;
+    dado.rua = nom.rua || dado.rua;
   } catch (e) {
     completo = false;
     console.warn('[lugares] nominatim:', e.message);
@@ -508,8 +515,30 @@ export async function receberLocais(perfil, locais, fuso = fusoDe(perfil)) {
   if (!perfil.lugaresAtivo) await salvarPerfil({ jids: perfil.jids, lugaresAtivo: true }).catch(() => {});
   // agrupamento é rápido e responde ao app; a consulta ao OpenStreetMap (lenta, às vezes fora do ar) roda depois, sem segurar a resposta
   const situacao = await atualizarLugares({ ...perfil, lugaresAtivo: true }, { classificar: false }).catch((e) => (console.error('[lugares] atualizar:', e.message), null));
-  classificarPendentes(perfil).catch((e) => console.warn('[lugares] classificar:', e.message));
+  classificarPendentes(perfil)
+    .then(() => completarRuas(perfil))
+    .catch((e) => console.warn('[lugares] classificar:', e.message));
   return { recebidos: inseridos, situacao };
+}
+
+/** Lugar público já classificado mas sem rua (classificado antes de a rua existir): só o Nominatim, até 4 por rodada. */
+export async function completarRuas(perfil) {
+  const atual = (await colecao('perfis').findOne({ jids: { $in: perfil.jids || [] } }, { projection: { lugares: 1 } }))?.lugares || [];
+  const semRua = atual.filter((l) => l.tipo && l.rua === undefined && ruaPermitida(l)).slice(0, 4);
+  if (!semRua.length) return 0;
+  const ruas = new Map();
+  for (const l of semRua) {
+    try {
+      const n = await nominatim(l.lat, l.lon);
+      ruas.set(l.id, n.rua || null);
+    } catch (e) {
+      console.warn('[lugares] rua:', e.message);
+    }
+  }
+  if (!ruas.size) return 0;
+  const fresco = (await colecao('perfis').findOne({ jids: { $in: perfil.jids || [] } }, { projection: { lugares: 1 } }))?.lugares || [];
+  await salvarPerfil({ jids: perfil.jids, lugares: fresco.map((l) => (ruas.has(l.id) && ruaPermitida(l) ? { ...l, rua: ruas.get(l.id) } : l)) });
+  return ruas.size;
 }
 
 let classificando = false;
@@ -534,6 +563,7 @@ export async function classificarPendentes(perfil) {
       const c = patch.get(l.id);
       if (!c || l.manual) return l;
       const base = { ...l, tipo: c.tipo || l.tipo || null, nome: l.papel === 'casa' ? null : c.nome || l.nome || null, bairro: c.bairro || l.bairro || null, cidade: c.cidade || l.cidade || null, candidatos: c.candidatos || [] };
+      base.rua = ruaPermitida(base) ? c.rua || l.rua || null : null;
       // o mapa diz o que há em volta; o jeito de usar (hora, duração, dias) diz o que o lugar É pra ela
       const melhor = escolherTipoPlausivel(base);
       if (melhor) {
@@ -607,6 +637,7 @@ export async function atualizarLugares(perfil, { classificar = true } = {}) {
     }
   }
   for (const l of stats) if (l.papel === 'casa') l.nome = null; // casa nunca leva nome de estabelecimento
+  for (const l of stats) if (!ruaPermitida(l)) l.rua = null; // rua só em lugar público; se virou casa/residência, a rua sai
   await salvarPerfil({ jids: perfil.jids, lugares: stats, lugaresAtualizadoEm: new Date().toISOString() }).catch((e) => console.error('[lugares] salvar:', e.message));
   return situacaoAtual({ ...perfil, lugares: stats }, pontos);
 }
@@ -701,10 +732,10 @@ export async function contextoLugares(perfil) {
   const linhas = lugares
     .filter((l) => l.visitas >= 2 || l.papel || l.manual)
     .slice(0, 10)
-    .map((l) => `- ${rotuloLugar(l)}: ${l.padrao || 'sem padrão ainda'} · ${l.visitas} visita(s) em ${l.dias} dia(s)${l.ultimaVez ? `, última ${l.ultimaVez}` : ''}`);
+    .map((l) => `- ${comRua(l, rotuloLugar(l))}: ${l.padrao || 'sem padrão ainda'} · ${l.visitas} visita(s) em ${l.dias} dia(s)${l.ultimaVez ? `, última ${l.ultimaVez}` : ''}`);
   const semana = ultimos7(visitas, lugares);
   const bloco =
-    `LUGARES DE ${perfil.nome.split(' ')[0]} (localização aproximada do celular DELA(E); só existe pra falar COM ELA(E)):\n` +
+    `LUGARES DE ${perfil.nome.split(' ')[0]} (localização do celular DELA(E); só existe pra falar COM ELA(E); a rua aparece só em lugar público e pode ser citada pra identificar, ex.: "o mercado da Lauro Linhares"; casa de ninguém tem rua):\n` +
     `- Agora: ${descreverSituacao(situacao)}${companhia.length ? `, junto de ${companhia.join(' e ')} (do grupo; pode comentar com naturalidade, sem virar vigilância)` : ''}\n` +
     (linhas.length ? `Lugares que frequenta:\n${linhas.join('\n')}\n` : 'Ainda não há lugares com padrão (poucos dias de dados).\n') +
     (semana.length ? `Últimos 7 dias fora de casa: ${semana.join(' · ')}` : '');
@@ -724,7 +755,7 @@ export async function lugaresZap(perfil) {
   if (!perfil?.lugaresAtivo) return 'Você ainda não ligou a localização no app Relógio (botão 4). Quando ligar, em uns dias eu aprendo teus lugares: casa, trabalho, academia, onde almoça fora.';
   const [ctx, companhia] = await Promise.all([contextoLugares(perfil), companhiaAtual(perfil).catch(() => [])]);
   const lugares = (perfil.lugares || []).filter((l) => l.visitas >= 2 || l.papel || l.manual).slice(0, 12);
-  const linhas = lugares.map((l) => `- *${rotuloLugar(l)}*\n${l.padrao || 'sem padrão ainda'}\n${l.visitas} visita(s) em ${l.dias} dia(s)${l.ultimaVez ? ` · última ${l.ultimaVez.slice(8, 10)}/${l.ultimaVez.slice(5, 7)}` : ''}`);
+  const linhas = lugares.map((l) => `- *${rotuloLugar(l)}*${ruaPermitida(l) && l.rua ? `\n${abreviarRua(l.rua)}` : ''}\n${l.padrao || 'sem padrão ainda'}\n${l.visitas} visita(s) em ${l.dias} dia(s)${l.ultimaVez ? ` · última ${l.ultimaVez.slice(8, 10)}/${l.ultimaVez.slice(5, 7)}` : ''}`);
   return (
     `📍 *Teus lugares*\n\n` +
     `*Agora*\n${descreverSituacao(ctx?.situacao)}${companhia.length ? `, junto de ${companhia.join(' e ')}` : ''}\n\n` +
@@ -788,7 +819,8 @@ export async function mercadosProximos(perfil) {
   for (const a of ancoras) {
     try {
       const el = await overpass(a.lat, a.lon, 800, ['[shop~"^(supermarket|greengrocer|butcher|bakery|convenience|grocery|deli)$"]', '[amenity=marketplace]']);
-      const nomes = [...new Set(el.map((e) => e.tags?.name || e.tags?.brand).filter(Boolean))].slice(0, 6);
+      // nome + rua (do próprio mapa, addr:street): "Bistek (R. Lauro Linhares)" identifica melhor que só o nome
+      const nomes = [...new Set(el.map((e) => (e.tags?.name || e.tags?.brand ? `${e.tags.name || e.tags.brand}${e.tags['addr:street'] ? ` (${abreviarRua(e.tags['addr:street'])})` : ''}` : null)).filter(Boolean))].slice(0, 6);
       if (nomes.length) linhas.push(`- perto de ${rotuloLugar(a, { comNome: false })}: ${nomes.join(', ')}`);
     } catch (e) {
       console.warn('[lugares] mercados:', e.message);
