@@ -113,6 +113,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - NÃO SE REPITA: cada comentário de contexto (clima, sono, passos, agenda de amanhã, total do dia, a mesma dica) aparece UMA vez por conversa, e o grupo inteiro lê tudo: se já falou do frio pra uma pessoa, não fala pra próxima; se já citou o sono curto, não cita de novo na resposta seguinte. O bloco "JÁ DITO" lista o que saiu nas últimas 2 h. Quando a pessoa só confirma, agradece ou concorda ("vou confiar em você", "beleza", "ok"), responda em 1 ou 2 frases, sem bloco, sem repetir os números e os argumentos que acabou de dar.
 - GÊNERO E CONCORDÂNCIA: cada perfil traz o gênero da pessoa. Adjetivos, apelidos e gírias concordam com ele: pra homem "divo", "meu rei", "menino", "passado", "amigo"; pra mulher "diva", "rainha", "menina", "passada", "amiga"; "outro" ou desconhecido = forma neutra ("criatura", "gente", o nome). Apelido que você criou segue a mesma regra: nada de "diva" pra homem. Se o gênero não estiver no perfil, deduza pelo nome só pra concordância e pergunte quando couber (via ATUALIZAR genero).
 - ATIVIDADES FIXAS: o bloco "ATIVIDADES FIXAS" lista esporte sem relógio (vôlei, futebol) com dia, horário e gasto estimado por MET. O sistema confere pela localização e SOMA o gasto no dia sozinho quando confirma; você não soma por conta própria nem assume que houve. Se estiver "em dúvida", a pessoa responde "teve"/"não teve" e o sistema anota. Use pra contexto: dia de vôlei à noite pede lanche antes e proteína depois; se não houve, o gasto do dia é menor.
+- LINHA OCULTA ATIVIDADE: quando a pessoa contar que FEZ uma atividade fixa fora do horário cadastrado, ou que NÃO teve ("adiantei o vôlei pras 18h", "hoje não rolou vôlei", "joguei areia ontem das 17h às 19h"), acrescente no fim a linha ATIVIDADE: {"nome": "vôlei de quadra", "feita": true, "inicio": "18:00", "fim": "20:00", "dia": "AAAA-MM-DD"} (inicio/fim/dia só se ela disse; feita false quando não houve). O sistema ajusta o gasto do dia; você não soma calorias por conta própria. Não use pra treino de academia (esse vem do relógio/Hevy).
 - CRUZE AS FONTES: agenda, lugares, roteiro do dia, treino, relógio e acompanhamento são pedaços da MESMA pessoa. Antes de dar dica, junte: academia às 7h + aula às 10h = café que caiba na mochila e proteína logo depois do treino; faculdade até 22h = jantar precisa estar pronto ou ser simples; gasto alto no relógio hoje + almoço leve = a fome da noite vai vir, antecipe; janela apertada entre dois compromissos = comida pronta, não receita. Uma dica que ignora o roteiro do dia dela é dica genérica; evite.
 - CLIMA E ESTAÇÃO: quando o contexto de hora trouxer a estação do ano e o tempo na cidade da pessoa, use como quem olha pela janela: sopa em noite fria "cai bem", dia de calorão pede água e comida leve, chuva combina com treino em casa, amanhã quente pede hidratar mais. Só quando encaixar, não em toda mensagem. Cada um pode estar numa cidade e estação diferentes (quem mora no outro hemisfério tem a estação oposta): use a da pessoa com quem fala. Se NÃO houver linha de tempo no contexto, você não sabe como está o dia: não invente "dia lindo" nem "friozinho".
 - DADOS DO RELÓGIO: quando o perfil trouxer a linha "Relógio" ou o dossiê trouxer "DADOS DO RELÓGIO" (peso, gordura, sono, passos, treinos do Galaxy Watch), você SABE disso sem perguntar: não peça peso nem pergunte como dormiu se está ali. Use como quem conhece a rotina da pessoa: café chegando às 8h de quem levantou 05:56 ("já tá há 2 horas em pé sem comer?"), levantou às 9h quem costuma levantar às 6h ("dormiu até tarde hoje, hein"), dia com 3 mil passos, semana sem treino, noite de 5h e pedindo doce ("faz sentido"). Comente quando couber, não em toda mensagem. Compare com a média da pessoa, não com regra de livro. Bioimpedância de relógio oscila: fale de tendência, não de décimos.
@@ -769,7 +770,19 @@ export function separarAtualizacao(resposta) {
     texto = texto.slice(0, m.index).trim();
   }
   if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
-  return { texto, atualizacao, habito, audio, registro, refeicao, produto, reacao };
+  // linha oculta ATIVIDADE: {"nome": "vôlei", "feita": true, "inicio": "18:00", "fim": "20:00"} -> relato sobre atividade fixa sem relógio
+  let atividade = null;
+  const at = texto.match(/\n?\s*ATIVIDADE:\s*(\{[^\n]*\})\s*/i);
+  if (at) {
+    try {
+      const j = JSON.parse(at[1]);
+      if (j && typeof j === 'object' && j.nome) atividade = j;
+    } catch {
+      atividade = null;
+    }
+    texto = `${texto.slice(0, at.index)}\n${texto.slice(at.index + at[0].length)}`.trim();
+  }
+  return { texto, atualizacao, habito, audio, registro, refeicao, produto, reacao, atividade };
 }
 
 // ============================================================

@@ -37,12 +37,15 @@ export function avaliarPresenca({ pontos = [], lugar, casa = null, duracao = 60 
   if (!lugar || !pontos.length) return { estado: 'incerto', minutosNoLugar: 0, pontos: pontos.length, motivo: pontos.length ? 'sem lugar cadastrado' : 'sem sinal do celular na janela' };
   const raio = lugar.raioM || RAIO_PADRAO_M;
   const noLugar = pontos.filter((p) => distanciaM(p, lugar) <= raio);
-  if (noLugar.length) {
+  // um ponto só pode ser a passagem de quem estava saindo da faculdade ao lado (30/09: 1 ponto virou "vôlei feito" com 20 min);
+  // presente de verdade = 2 pontos ou mais no lugar
+  if (noLugar.length >= 2) {
     // estadia = do primeiro ao último ponto no lugar, com crédito de meia amostra em cada ponta (15 min entre pontos)
     const ts = noLugar.map((p) => new Date(p.ts).getTime()).sort((a, b) => a - b);
     const minutos = Math.min(duracao, Math.round((ts[ts.length - 1] - ts[0]) / 60000) + 15);
-    return { estado: 'presente', minutosNoLugar: Math.max(20, minutos), pontos: pontos.length, motivo: `${noLugar.length} ponto(s) no lugar` };
+    return { estado: 'presente', minutosNoLugar: Math.max(30, minutos), pontos: pontos.length, motivo: `${noLugar.length} pontos no lugar` };
   }
+  if (noLugar.length === 1) return { estado: 'incerto', minutosNoLugar: 0, pontos: pontos.length, motivo: 'só 1 ponto no lugar (pode ter sido passagem)' };
   const emCasa = casa ? pontos.filter((p) => distanciaM(p, casa) <= RAIO_PADRAO_M).length : 0;
   const longe = pontos.filter((p) => distanciaM(p, lugar) > 1500).length;
   // a janela inteira em casa ou longe (com mais de um ponto pra não ser um ponto perdido) = não foi
@@ -152,6 +155,32 @@ export async function responderPendente(perfil, texto) {
   const minutos = duracaoMin(a);
   const r = await registrar(perfil, p.dia, a, { feita: resposta, kcal: kcalAtividade(a.met, perfil.peso, minutos), minutos, como: 'resposta' });
   return r.feita ? `Anotado: ${a.nome} feito, somei uns *${r.kcal} kcal* no teu gasto de ${p.dia === agora(fusoDe(perfil)).dia ? 'hoje' : p.dia.slice(8, 10) + '/' + p.dia.slice(5, 7)}. 🏐` : `Anotado: sem ${a.nome} ${p.dia === agora(fusoDe(perfil)).dia ? 'hoje' : 'nesse dia'}. Gasto fica só o do relógio.`;
+}
+
+/**
+ * Relato na conversa, vindo da linha oculta ATIVIDADE da IA: { nome, feita, inicio?, fim?, dia? }.
+ * "adiantei o vôlei pras 18h" = feita com o horário dito; "hoje não teve vôlei" = não feita. Devolve texto curto ou null.
+ */
+export async function registrarRelato(perfil, relato, diaHoje) {
+  if (!relato || !perfil?.atividades?.length) return null;
+  const alvo = String(relato.nome || '').toLowerCase();
+  const a = perfil.atividades.find((x) => x.nome.toLowerCase().includes(alvo) || alvo.includes(x.nome.toLowerCase().split(' ')[0])) || (perfil.atividades.length === 1 ? perfil.atividades[0] : null);
+  if (!a) return null;
+  const dia = /^\d{4}-\d{2}-\d{2}$/.test(relato.dia || '') ? relato.dia : diaHoje;
+  const feita = relato.feita !== false;
+  let minutos = duracaoMin(a);
+  if (hMin(relato.inicio) != null && hMin(relato.fim) != null && hMin(relato.fim) > hMin(relato.inicio)) minutos = hMin(relato.fim) - hMin(relato.inicio);
+  const kcal = kcalAtividade(a.met, perfil.peso, minutos);
+  // já estava registrada pela localização com valor diferente? o relato da pessoa manda: desfaz o anterior no gasto
+  const anterior = (perfil.atividadesFeitas?.[dia] || []).find((f) => f.id === a.id);
+  if (anterior?.kcal && perfil.relogio?.gastos?.[dia] != null) {
+    const relogio = { ...perfil.relogio, gastos: { ...perfil.relogio.gastos } };
+    relogio.gastos[dia] = Math.round(relogio.gastos[dia] - anterior.kcal);
+    await salvarPerfil({ jids: perfil.jids, relogio });
+    perfil = { ...perfil, relogio };
+  }
+  await registrar(perfil, dia, a, { feita, kcal, minutos, como: 'relato', detalhe: relato.inicio ? `disse que foi ${relato.inicio}–${relato.fim || '?'}` : 'disse na conversa' });
+  return feita ? `(${a.nome}: +${kcal} kcal no gasto de ${dia === diaHoje ? 'hoje' : dia})` : `(${a.nome}: sem ${dia === diaHoje ? 'hoje' : dia}, gasto só do relógio)`;
 }
 
 /** No fechamento do dia: pergunta sem resposta vira "não feita (sem resposta)", pra não inflar o gasto. */

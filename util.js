@@ -161,6 +161,7 @@ export const semLinhaAtualizar = (texto) =>
     .replace(/\n?\s*HABITO:\s*\{[^\n]*\}\s*/gi, '\n')
     .replace(/\n?\s*REGISTRO:\s*\{[^\n]*\}\s*/gi, '\n')
     .replace(/\n?\s*REFEICAO:\s*\{[^\n]*\}\s*/gi, '\n')
+    .replace(/\n?\s*ATIVIDADE:\s*\{[^\n]*\}\s*/gi, '\n')
     .replace(/\n?\s*ATUALIZAR:\s*\{[\s\S]*\}\s*$/i, '')
     .trim();
 

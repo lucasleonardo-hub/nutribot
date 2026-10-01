@@ -22,7 +22,7 @@ import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragme
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
-import { responderPendente } from './atividades.js';
+import { responderPendente, registrarRelato } from './atividades.js';
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 
@@ -725,9 +725,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   let refeicao = null; // linha REFEICAO da IA: números e tipo da refeição consumida, estruturados
   let produto = null; // "PRODUTO: x": ela quer o rótulo do Open Food Facts antes de responder
   let reacao = null; // linha REAGIR: ⭐ -> reação com emoji na mensagem da pessoa
+  let atividadeRelato = null; // linha ATIVIDADE: relato de atividade fixa feita/não feita fora do horário
   try {
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
-    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto, reacao } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
+    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto, reacao, atividade: atividadeRelato } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
   } catch (e) {
     // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -897,6 +898,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     enviado = await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
     // reação com emoji na mensagem da pessoa (linha REAGIR da IA): prato nota 10, piada boa, conquista
     if (reacao && !contestacao) reagir(jidGrupo, msg.key, reacao).catch(() => {});
+    if (atividadeRelato) {
+      const nota = await registrarRelato(eu, atividadeRelato, dia).catch((e) => (console.error('[atividades] relato:', e.message), null));
+      if (nota) console.log(`[atividades] relato de ${perfil.nome}: ${nota}`);
+    }
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
     // Nota de voz: sempre quando a pessoa pediu; fora de pedido só quando ela marcou AUDIO: sim, com teto (1 por dia, 2 por semana)
     const pediu = pedidoDeAudio(texto);
