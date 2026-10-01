@@ -633,7 +633,9 @@ export async function situacaoAtual(perfil, pontosCarregados = null) {
   const desde = localDe(pontos[i].ts, fuso).hhmm;
   const minutos = Math.round((new Date(ultimo.ts) - new Date(pontos[i].ts)) / 60000);
   // velocidade do GNSS (app 1.3+) decide "em deslocamento" sem adivinhar pelo histórico de pontos
-  const movendoAgora = ultimo.vel != null ? ultimo.vel > VEL_MOVENDO : i === pontos.length - 1;
+  // sem velocidade (dentro de prédio o GNSS não dá), um ponto único NUM LUGAR CONHECIDO é "acabou de chegar", não deslocamento;
+  // deslocamento sem velocidade só quando o ponto está fora de qualquer lugar e não há ponto anterior ali
+  const movendoAgora = ultimo.vel != null ? ultimo.vel > VEL_MOVENDO : !lugar && i === pontos.length - 1;
   if (lugar && !movendoAgora) return { estado: lugar.papel === 'casa' ? 'casa' : 'lugar', lugar, desde, minutos, acc: ultimo.acc ?? null };
   return { estado: 'fora', desde, minutos, movendo: movendoAgora, acc: ultimo.acc ?? null };
 }
