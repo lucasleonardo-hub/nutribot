@@ -800,7 +800,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', jaDito: temasJaDitos(historico, hora), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', jaDito: temasJaDitos(historico, hora), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(texto), rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -927,6 +927,18 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     }
   }
 
+  // Plano/pedido de opinião: se a IA ainda assim montou bloco de refeição, ele sai ("🕐 Refeição", "O que eu vi", Veredito); a estimativa vira "se comer isso"
+  if (!temImagem && !temAudio && parecePedidoOuPlano(texto) && /Refei[cç][aã]o:|O que eu vi/i.test(resposta || '')) {
+    const antes = resposta;
+    resposta = String(resposta || '')
+      .split('\n')
+      .filter((l) => !/^\s*(?:🕐|⚖️)|Refei[cç][aã]o:\*?\s*(caf[eé]|almo[cç]o|lanche|jantar|ceia)|^\s*\*?Veredito/i.test(l))
+      .map((l) => l.replace(/^(\s*🍽️\s*\*?)O que eu vi:?\*?/i, '$1Se for isso:*').replace(/^(\s*🔥\s*\*?)Estimativa:?\*?/i, '$1Ficaria em:*'))
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (resposta !== antes) console.log(`[consciencia] plano de ${perfil.nome} ("${texto.slice(0, 40)}"): bloco de refeição retirado da resposta`);
+  }
   // Papo curto ("hehe", "ai demora um pouco"): resposta de uma ou duas frases, sem bloco, Dica nem [[links]]
   if (papoCurto(texto, { temImagem, temAudio }) && !contestacao) {
     const enxuta = enxugarPapo(resposta);
@@ -1097,6 +1109,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       estimativa, // kcal e macros da análise (ou estimativa de reserva), gravados agora: o resumo semanal soma daqui
       correcao: Boolean(correcaoRecente),
       manual: retroativa, // retroativa não se funde com o registro vizinho no banco
+      // "lanche" 1 min depois do almoço é outra refeição, não complemento: quando a pessoa nomeia outra refeição, não funde
+      slotExplicito: Boolean(minhaUltima) && slotFinal !== minhaUltima.slot && mencionaOutraRefeicao(texto, minhaUltima.slot),
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
     refeicaoRegistrada = { slot: slotFinal, minutos: correcaoRecente ? minhaUltima.minutos : minutosDe(horaRegistro) };
     const mensagens = estado.memoria.mensagens;

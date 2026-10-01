@@ -113,3 +113,12 @@ test('parecePedidoOuPlano e pareceCorrecao', () => {
   assert.equal(pareceCorrecao('a vitamina tinha também whey'), true);
   assert.equal(pareceCorrecao('vou comer algo às 18h'), false);
 });
+
+import { parecePedidoOuPlano as planoOuPedido, pareceConsumo as consumoDito } from '../util.js';
+test('parecePedidoOuPlano: "ia ser", "vai ser", "o que acha", "pode ser" são plano/pedido; relato de consumo não', () => {
+  for (const t of ['Lanche ia ser iogurte', 'O que acha?', 'o que vc acha de arroz com ovo', 'a janta vai ser frango', 'pode ser iogurte com aveia', 'será que compensa', 'tô pensando em comer uma omelete', 'vou de frango hoje', 'seria legal um lanche agora'])
+    assert.equal(planoOuPedido(t), true, t);
+  for (const t of ['comi iogurte com aveia', 'almocei arroz, feijão e frango', 'acabei de tomar o whey', 'esse foi meu lanche'])
+    assert.equal(planoOuPedido(t), false, t);
+  assert.equal(consumoDito('comi iogurte'), true);
+});

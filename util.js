@@ -201,7 +201,7 @@ export function comTempo(promessa, ms, rotulo = 'operação') {
 // ============================================================
 // A mensagem relata comida consumida, pede sugestão/plano, ou corrige uma análise?
 // ============================================================
-const RE_PEDIDO = /\?|sugest|indica|o que (eu )?(como|posso|devo)|tem algo|alguma (ideia|dica|op[cç][aã]o)|me (d[aá]|passa) (uma|umas)|irei|vou (tentar|comer|almo[cç]ar|jantar|lanchar|comprar)|pretendo|talvez|depois|mais tarde|[àa]s \d{1,2}h/i;
+const RE_PEDIDO = /\?|sugest|indica|o que (eu )?(como|posso|devo)|tem algo|alguma (ideia|dica|op[cç][aã]o)|me (d[aá]|passa) (uma|umas)|irei|vou (tentar|comer|almo[cç]ar|jantar|lanchar|comprar|fazer|tomar|pedir|de\b)|pretendo|talvez|depois|mais tarde|[àa]s \d{1,2}h|\b(ia|vai|iria|deve|pode|poderia) ser\b|\bseria\b|ser[áa] que|(o que|que|oq) (vc|voc[êe]|tu|c[êe]) acha|que acha|acha que|pensando em|pensei em|t[ôo] pensando|t[áa] pensando|planejando|plano (é|era|seria)|ideia (é|era|seria)|d[áa] pra (comer|tomar)|posso (comer|tomar)|devo (comer|tomar)/i;
 const RE_CONSUMO = /\b(comi|tomei|almocei|jantei|lanchei|bebi|acabei de|comendo|tô comendo|to comendo|foi (meu|minha|o|a)|esse foi|essa foi|aqui (o|a|meu|minha)|minha sobremesa|meu lanche (foi|é)|sobraram|arrasei|devorei|mandei pra dentro)\b/i;
 // inclui rótulo/tabela mandados depois da análise ("segue a tabela do hipercalórico, dá uma ajustada"): é correção da refeição, não refeição nova
 const RE_CORRECAO = /n[ãa]o (é|era|foi|tinha|tem)|na verdade|era[m]?\s+\d|tinha (tamb[ée]m|mais|s[óo])|esqueci|faltou|tamb[ée]m tinha|corrig|na real|ajust|r[óo]tulo|tabela nutricional|segue (aqui )?a tabela|valores? (certos?|exatos?|do r[óo]tulo)/i;

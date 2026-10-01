@@ -178,7 +178,8 @@ export async function momentosRecentes(limite = 30, pessoa) {
 
 // ---------- Refeições registradas (pra aprender a rotina de cada um e cobrar quem sumiu) ----------
 
-export async function registrarRefeicao(r) {
+export async function registrarRefeicao(entrada) {
+  const { slotExplicito = false, ...r } = entrada;
   // r = { jid, nome, dia, hora, minutos, slot, resumo }
   // Complemento/correção da mesma refeição poucos minutos depois ("a vitamina tem whey") atualiza o registro em vez de criar outro
   const col = colecao('refeicoes');
@@ -186,7 +187,9 @@ export async function registrarRefeicao(r) {
   // e a sobremesa 7 min depois da janta (que ela chamou de "ceia") são a MESMA refeição, não uma segunda.
   // Só o registro manual (!refeicao) com tipo diferente fica separado, porque ali a pessoa disse o tipo de propósito.
   const ultima = await col.find({ jid: r.jid, dia: r.dia }).sort({ minutos: -1 }).limit(1).next();
-  const mesmaRefeicao = ultima && Math.abs(r.minutos - ultima.minutos) <= 30 && (ultima.slot === r.slot || !r.manual);
+  // mesma refeição: mesmo tipo em até 30 min; tipo diferente só funde quando não foi dito de propósito (sobremesa 7 min
+  // depois da janta funde; "lanche" nomeado 1 min depois do almoço não funde, nem o registro manual)
+  const mesmaRefeicao = ultima && Math.abs(r.minutos - ultima.minutos) <= 30 && (ultima.slot === r.slot || (!r.manual && !slotExplicito));
   if (mesmaRefeicao) {
     const set = { atualizadoEm: new Date() };
     // correção ("eram 2 pães", rótulo): a estimativa nova é da refeição inteira e SUBSTITUI a anterior.
