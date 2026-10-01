@@ -91,6 +91,8 @@ export function aplicarAtualizacao(perfil, a, dia) {
   // "o mais rápido possível" / "devagar" = ritmo preferido dentro do saudável; "sem teto" = a meta é etapa, não limite
   const ritmo = str(a.ritmo)?.toLowerCase();
   if (ritmo && /^(maximo|máximo|medio|médio|minimo|mínimo)$/.test(ritmo)) set('ritmo', ritmo.normalize('NFD').replace(/[̀-ͯ]/g, ''));
+  const biotipo = str(a.biotipo)?.toLowerCase();
+  if (biotipo && /^(ectomorfo|mesomorfo|endomorfo)$/.test(biotipo)) set('biotipo', biotipo);
   const modo = str(a.meta_modo)?.toLowerCase();
   if (modo && /^(etapa|final)$/.test(modo)) set('metaModo', modo);
   if (a.sem_meta_peso === true) {
