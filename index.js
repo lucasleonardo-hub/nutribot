@@ -68,7 +68,7 @@ app.get('/estado', (_req, res) =>
 // e o que isto grava (Mongo, um arquivo no Drive) não disputa nada com uma resposta em andamento.
 app.post('/relogio', express.json({ limit: '4mb' }), async (req, res) => {
   try {
-    const r = await receberEnvio({ token: req.get('x-relogio-token'), corpo: req.body, hoje: agora().dia, pastaDe });
+    const r = await receberEnvio({ token: req.get('x-relogio-token'), corpo: req.body, hoje: agora().dia, pastaDe, lembrar });
     res.json(r);
   } catch (e) {
     if (!e.status) console.error('[relogio] falha:', e.message);

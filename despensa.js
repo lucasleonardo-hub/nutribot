@@ -363,6 +363,29 @@ export function resumoNota({ loja, dia, itens, repetida, ignorados = itens?.igno
   return `🧾 *Cupom lido*${loja ? ` · ${loja}` : ''}${dia ? ` · ${dia.slice(8, 10)}/${dia.slice(5, 7)}` : ''}\n\n${itens.length} ${itens.length === 1 ? 'alimento entrou' : 'alimentos entraram'} na despensa${perec ? `, ${perec} perecíveis` : ''}${comNutri ? `, ${comNutri} com tabela nutricional` : ''}${ignorados ? ` (${ignorados} item(ns) não alimentar(es) de fora)` : ''}.\n\n${lista}${itens.length > 12 ? `\n(+${itens.length - 12})` : ''}\n\n_!despensa mostra tudo. Quando algo acabar, é só me dizer._`;
 }
 
+// ---------- saiu do mercado: pergunta se comprou (uma vez por dia; só se nenhuma nota chegou nas últimas 3 h) ----------
+export async function perguntarCompra(perfil, lugar, { lembrar } = {}) {
+  const grupo = estado.memoria.grupo;
+  if (!grupo || estado.statusConexao !== 'conectado' || !perfil?.onboarded) return false;
+  const { dia, hora } = agora(fusoDe(perfil));
+  const h = Number(hora.slice(0, 2));
+  if (h < 7 || h >= 23) return false;
+  if (perfil.despensaPerguntaEm === dia) return false; // uma por dia
+  const recente = await colecao('notas').findOne({ jid: jidDe(perfil), criadoEm: { $gte: new Date(Date.now() - 3 * 3600_000) } }).catch(() => null);
+  if (recente) return false; // já mandou a nota
+  const onde = lugar?.nome ? `no ${lugar.nome}` : `no ${lugar?.tipo || 'mercado'}`;
+  const texto = `${perfil.nome.split(' ')[0]}, vi que você passou ${onde} agora há pouco. Comprou algo pra despensa? Manda a foto do cupom (ou lê o QR no app) que eu anoto. Se não foi comida, só diz "nada". 🧺`;
+  await salvarPerfilDespensa(perfil, { despensaPerguntaEm: dia });
+  await enviar(grupo, texto).catch(() => {});
+  if (lembrar) await lembrar({ hora: agora().hora, jid: null, nome: 'bot', texto, tipo: 'bot' }).catch(() => {});
+  console.log(`[despensa] perguntei a ${perfil.nome} se comprou algo (${onde})`);
+  return true;
+}
+async function salvarPerfilDespensa(perfil, patch) {
+  const { salvarPerfil } = await import('./mongo.js');
+  await salvarPerfil({ jids: perfil.jids, ...patch }).catch(() => {});
+}
+
 // ---------- validade: pergunta uma vez por dia por pessoa ----------
 export async function perguntarValidades({ lembrar } = {}) {
   const grupo = estado.memoria.grupo;
@@ -392,8 +415,15 @@ export async function resumoDespensaPeriodo(perfil, dia) {
   const gasto = notas.reduce((a, n) => a + n.itens.reduce((b, i) => b + (Number(i.preco) || 0), 0), 0);
   const recorrentes = lista.filter((i) => (i.compras || 0) >= 2).map((i) => i.item).slice(0, 10);
   const vencidos = lista.filter((i) => i.perecivel && i.estado !== 'acabou' && diasAte(i.validadeEm, dia) < -2).map((i) => i.item).slice(0, 8);
+  // idas a lugar de compra (pela localização) x notas lidas: o que ela compra e não conta
+  let idas = 0;
+  try {
+    const idsCompra = new Set((perfil.lugares || []).filter((l) => ['mercado', 'padaria', 'feira', 'hortifruti', 'açougue', 'shopping'].includes(String(l.tipo || '').toLowerCase())).map((l) => l.id));
+    if (idsCompra.size) idas = await colecao('visitas').countDocuments({ jid, lugarId: { $in: [...idsCompra] }, dia: { $gte: desde }, min: { $gte: 10 } });
+  } catch {}
   return (
     `DESPENSA (últimos 28 dias): ${notas.length} nota(s) de mercado${gasto ? `, ~R$ ${Math.round(gasto)} em itens lidos` : ''}; ${lista.filter((i) => i.estado !== 'acabou').length} itens em casa.` +
+    (idas ? ` Idas a mercado/padaria pela localização: ${idas}${notas.length < idas ? ` (${idas - notas.length} sem nota lida: compras que você não viu)` : ''}.` : '') +
     (recorrentes.length ? ` Compra sempre: ${recorrentes.join(', ')}.` : '') +
     (vencidos.length ? ` Perecíveis passados do prazo sem baixa (desperdício provável): ${vencidos.join(', ')}.` : '')
   );

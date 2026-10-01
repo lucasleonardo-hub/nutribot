@@ -8,6 +8,7 @@ import { colecao, listarPerfis } from './mongo.js';
 import { aplicarDadosSaude } from './saude.js';
 import { fusoDe } from './util.js';
 import { receberLocais, descreverSituacao } from './lugares.js';
+import { perguntarCompra } from './despensa.js';
 
 const DIAS_GUARDADOS = 90;
 const FRESCO_H = 36; // dados do app valem como "atuais" (e dispensam a planilha) por este tempo
@@ -135,7 +136,7 @@ function erroHttp(status, msg) {
  * Valida o token, acha a pessoa pelo primeiro nome, funde com o histórico, roda o caminho comum do saude.js.
  * `pastaDe(perfil)` é injetado por quem chama (pessoas.js), pra este módulo não depender do Drive.
  */
-export async function receberEnvio({ token, corpo, hoje, pastaDe }) {
+export async function receberEnvio({ token, corpo, hoje, pastaDe, lembrar }) {
   const tokens = tokensRelogio();
   if (!Object.keys(tokens).length) throw erroHttp(503, 'RELOGIO_TOKENS não configurado no servidor');
   const pessoa = semAcento(corpo?.pessoa);
@@ -163,6 +164,8 @@ export async function receberEnvio({ token, corpo, hoje, pastaDe }) {
   if (Array.isArray(corpo.locais) && corpo.locais.length) {
     local = await receberLocais(perfil, corpo.locais, fuso).catch((e) => (console.error('[lugares]', e.message), null));
     if (local?.recebidos) console.log(`[lugares] ${perfil.nome}: ${local.recebidos} ponto(s); ${descreverSituacao(local.situacao)}`);
+    // saiu do mercado/padaria depois de 10 min+ lá: pergunta se comprou algo pra despensa (fora do caminho da resposta ao app)
+    if (local?.evento?.evento === 'saiu_de_compra') perguntarCompra(perfil, local.evento.lugar, { lembrar }).catch((e) => console.warn('[despensa] pergunta:', e.message));
   }
   const hojeAt = dados.atividades.find((a) => a.dia === hoje);
   const ultimoPeso = dados.pesos[dados.pesos.length - 1];

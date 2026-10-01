@@ -515,10 +515,19 @@ export async function receberLocais(perfil, locais, fuso = fusoDe(perfil)) {
   if (!perfil.lugaresAtivo) await salvarPerfil({ jids: perfil.jids, lugaresAtivo: true }).catch(() => {});
   // agrupamento é rápido e responde ao app; a consulta ao OpenStreetMap (lenta, às vezes fora do ar) roda depois, sem segurar a resposta
   const situacao = await atualizarLugares({ ...perfil, lugaresAtivo: true }, { classificar: false }).catch((e) => (console.error('[lugares] atualizar:', e.message), null));
+  // transição: saiu de um mercado/padaria onde ficou 10 min+? (quem chama pergunta se comprou algo pra despensa)
+  let evento = null;
+  if (situacao) {
+    const anterior = perfil.ultimaSituacao || null;
+    evento = transicaoDeSaida(anterior, situacao);
+    const resumoSit = { estado: situacao.estado, lugar: situacao.lugar ? { id: situacao.lugar.id, tipo: situacao.lugar.tipo, nome: situacao.lugar.nome || null, bairro: situacao.lugar.bairro || null, papel: situacao.lugar.papel || null } : null, desde: situacao.desde || null, minutos: situacao.minutos || 0, em: new Date().toISOString() };
+    const mudou = !anterior || anterior.estado !== resumoSit.estado || (anterior.lugar?.id || null) !== (resumoSit.lugar?.id || null) || (resumoSit.minutos || 0) - (anterior.minutos || 0) >= 10;
+    if (mudou) await salvarPerfil({ jids: perfil.jids, ultimaSituacao: resumoSit }).catch(() => {});
+  }
   classificarPendentes(perfil)
     .then(() => completarRuas(perfil))
     .catch((e) => console.warn('[lugares] classificar:', e.message));
-  return { recebidos: inseridos, situacao };
+  return { recebidos: inseridos, situacao, evento };
 }
 
 /** Lugar público já classificado mas sem rua (classificado antes de a rua existir): só o Nominatim, até 4 por rodada. */
@@ -687,6 +696,31 @@ export async function companhiaAtual(perfil) {
   return perfis.map((p) => p.nome.split(' ')[0]);
 }
 
+/** Visitas de hoje (fora de casa), com o rótulo do lugar e horários locais. */
+export async function visitasDeHoje(perfil, dia) {
+  const jid = jidDe(perfil);
+  if (!jid) return [];
+  const vs = await colecao('visitas').find({ jid, dia }).sort({ inicio: 1 }).toArray().catch(() => []);
+  const h = (x) => `${String(Math.floor(x)).padStart(2, '0')}:${String(Math.round((x % 1) * 60)).padStart(2, '0')}`;
+  return vs
+    .map((v) => ({ v, l: (perfil.lugares || []).find((x) => x.id === v.lugarId) }))
+    .filter(({ l }) => l && l.papel !== 'casa')
+    .map(({ v, l }) => ({ lugar: l, rotulo: rotuloLugar(l), inicio: h(v.hIni), fim: h(v.hFim), min: v.min, hIni: v.hIni, hFim: v.hFim }));
+}
+const TIPOS_COMPRA = ['mercado', 'padaria', 'feira', 'hortifruti', 'açougue', 'shopping'];
+export const lugarDeCompra = (l) => !!l && TIPOS_COMPRA.includes(String(l.tipo || '').toLowerCase());
+/**
+ * Puro. Comparando a situação guardada com a nova: saiu de um lugar de compra onde ficou 10 min ou mais?
+ * anterior/atual = { estado, lugar, desde, minutos }. Devolve { evento: 'saiu_de_compra', lugar } ou null.
+ */
+export function transicaoDeSaida(anterior, atual) {
+  if (!anterior || anterior.estado !== 'lugar' || !lugarDeCompra(anterior.lugar)) return null;
+  const aindaLa = atual?.estado === 'lugar' && atual.lugar?.id === anterior.lugar.id;
+  if (aindaLa || !atual || atual.estado === 'sem_sinal') return null;
+  if ((anterior.minutos || 0) < 10) return null; // passou na porta, não comprou
+  return { evento: 'saiu_de_compra', lugar: anterior.lugar };
+}
+
 // ---------- textos ----------
 export const rotuloLugar = (l, { comNome = true } = {}) => {
   if (l.papel === 'casa') return `casa${l.bairro ? ` (${l.bairro})` : ''}`;
@@ -727,7 +761,8 @@ const ultimos7 = (visitas, lugares) => {
 export async function contextoLugares(perfil) {
   if (!perfil?.lugaresAtivo) return null;
   const jid = jidDe(perfil);
-  const [situacao, visitas, companhia] = await Promise.all([situacaoAtual(perfil).catch(() => null), visitasRecentes(jid, 28).catch(() => []), companhiaAtual(perfil).catch(() => [])]);
+  const hojeDia = localDe(new Date(), fusoDe(perfil)).dia;
+  const [situacao, visitas, companhia, hoje, notasHoje] = await Promise.all([situacaoAtual(perfil).catch(() => null), visitasRecentes(jid, 28).catch(() => []), companhiaAtual(perfil).catch(() => []), visitasDeHoje(perfil, hojeDia).catch(() => []), colecao('notas').countDocuments({ jid, dia: hojeDia }).catch(() => 0)]);
   const lugares = perfil.lugares || [];
   const linhas = lugares
     .filter((l) => l.visitas >= 2 || l.papel || l.manual)
@@ -737,6 +772,7 @@ export async function contextoLugares(perfil) {
   const bloco =
     `LUGARES DE ${perfil.nome.split(' ')[0]} (localização do celular DELA(E); só existe pra falar COM ELA(E); a rua aparece só em lugar público e pode ser citada pra identificar, ex.: "o mercado da Lauro Linhares"; casa de ninguém tem rua):\n` +
     `- Agora: ${descreverSituacao(situacao)}${companhia.length ? `, junto de ${companhia.join(' e ')} (do grupo; pode comentar com naturalidade, sem virar vigilância)` : ''}\n` +
+    (hoje.length ? `- Hoje passou em: ${hoje.map((v) => `${v.rotulo} ${v.inicio}–${v.fim}${lugarDeCompra(v.lugar) ? (notasHoje ? ' (nota de compra lida ✓)' : ' (nenhuma nota de compra lida hoje: se couber, pergunte UMA vez se comprou algo pra despensa)') : ''}`).join(' · ')}\n` : '') +
     (linhas.length ? `Lugares que frequenta:\n${linhas.join('\n')}\n` : 'Ainda não há lugares com padrão (poucos dias de dados).\n') +
     (semana.length ? `Últimos 7 dias fora de casa: ${semana.join(' · ')}` : '');
   return { bloco, situacao, semana };
