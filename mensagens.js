@@ -3,7 +3,7 @@
 
 import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, apagarRefeicaoPorId, registrarHabito, registrarCorrecao } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, apagarRefeicaoPorId, registrarHabito, registrarCorrecao, pesagensDesde } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
@@ -11,7 +11,7 @@ import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
 import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot, acharRegistro } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
-import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio } from './util.js';
+import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir, estaDigitando } from './whatsapp.js';
 import { sintetizar } from './voz.js';
@@ -24,6 +24,13 @@ import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
 import { responderPendente, registrarRelato } from './atividades.js';
 import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, aplicarLinhaDespensa, blocoDespensa, testarConsultaSefaz, parsearTextoNfce, receberNotaDoApp } from './despensa.js';
+import { blocoForcaRecuperacao } from './contexto.js';
+import { metaBalancoPara, tendenciaGordura } from './resumo.js';
+import { linhaDeTendencia } from './previsao.js';
+
+// a pessoa está falando de treino, carga, platô, recuperação ou suplemento? aí o bloco FORÇA x RECUPERAÇÃO entra
+const RE_TREINO = /\b(treino|treinei|treinar|academia|carga|peso (no|na|do) (supino|agach|exerc)|supino|agachamento|levantamento|terra|remada|puxada|repeti[çc][õo]es|s[ée]ries?|plat[ôo]|estagn|evolu[çc][ãa]o|progress|for[çc]a|recupera[çc][ãa]o|descanso|deload|dor muscular|creatina|whey|hipercal[óo]rico|suplemento|hevy|rpe)\b/i;
+export const falaDeTreino = (t) => RE_TREINO.test(String(t || ''));
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 
@@ -137,6 +144,17 @@ const ESPERA_FRAGMENTO_MAX_MS = Number(process.env.ESPERA_FRAGMENTO_MAX_MS) || 9
 const esperaFragmentos = new Map(); // jid da pessoa -> { msgs, desde, timer }
 
 const imagemMsg = (m) => Boolean(extractMessageContent(m?.message)?.imageMessage);
+/** Bloco FORÇA x RECUPERAÇÃO com a faixa e a massa magra da pessoa (pesagens de 60 dias). */
+async function blocoForcaDe(perfil, dia) {
+  const pes = await pesagensDesde(perfil.jids, diasAnteriores(dia, 60)[0]).catch(() => []);
+  const pesoAtual = [...pes].sort((a, b) => a.dia.localeCompare(b.dia)).pop()?.peso || perfil.peso;
+  const faixa = metaBalancoPara({ objetivo: perfil.objetivo, peso: pesoAtual, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia, ritmo: perfil.ritmo, metaModo: perfil.metaModo, gorduraTend: tendenciaGordura(pes.filter((p) => p.dia >= diasAnteriores(dia, 28)[0])) });
+  const tend = linhaDeTendencia({ pesagens: pes, perfil, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null, semanas: 4 });
+  const gasto = perfil.relogio?.gastos ? Object.values(perfil.relogio.gastos).slice(-14).filter(Boolean) : [];
+  const gastoMedio = gasto.length ? gasto.reduce((a, b) => a + b, 0) / gasto.length : null;
+  const faixaKcal = faixa && gastoMedio ? { min: Math.round(gastoMedio + faixa.min), max: Math.round(gastoMedio + faixa.max) } : null;
+  return blocoForcaRecuperacao(perfil, dia, { magraSem: tend?.magraSem ?? null, faixa: faixaKcal });
+}
 function textoDe(m) {
   const c = extractMessageContent(m?.message);
   return (c?.conversation || c?.extendedTextMessage?.text || c?.imageMessage?.caption || '').trim();
@@ -800,7 +818,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: temasJaDitos(historico, hora), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(texto), rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: temasJaDitos(historico, hora), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(texto), forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;

@@ -203,6 +203,121 @@ export async function blocoTreinoRefeicoes(perfil, dia, { rel = null } = {}) {
   return `TREINO x REFEIÇÕES HOJE (calculado pelo sistema: refeição até 90 min depois do treino É o pós-treino, mesmo sendo o café da manhã; até 90 min antes é o pré; "Hevy" traz exercícios, melhor série e progressão de carga contra a última vez; "cobertura" diz se o pós teve proteína suficiente e se a energia em volta do treino combina com o objetivo):\n${linhas.join('\n')}`;
 }
 
+// ---------- progressão de força (platô por exercício) + recuperação + suplementos, cruzados em código ----------
+/**
+ * Puro. Por exercício com 3+ sessões no período: melhor carga por sessão, semanas desde a última subida, situação.
+ * sessoes = [{ inicio, exercicios: [{ title, sets }] }] (ordem qualquer). Devolve { exercicios: [...], parados, subindo, caindo }.
+ */
+export function progressaoForca(sessoes = [], { dia, semanas = 8 } = {}) {
+  const desde = new Date(new Date(`${dia}T12:00:00Z`).getTime() - semanas * 7 * 86400_000).toISOString();
+  const ordenadas = [...sessoes].filter((s) => String(s.inicio) >= desde).sort((a, b) => String(a.inicio).localeCompare(String(b.inicio)));
+  const porEx = new Map();
+  for (const s of ordenadas) {
+    for (const e of s.exercicios || []) {
+      const validas = (e.sets || []).filter(serieValida);
+      if (!validas.length) continue;
+      const melhor = Math.max(...validas.map((x) => x.weight_kg || 0));
+      const repsNaMelhor = Math.max(...validas.filter((x) => (x.weight_kg || 0) === melhor).map((x) => x.reps || 0));
+      const lista = porEx.get(e.title) || [];
+      lista.push({ dia: String(s.inicio).slice(0, 10), melhor, reps: repsNaMelhor, volume: validas.reduce((a, x) => a + (x.weight_kg || 0) * (x.reps || 0), 0) });
+      porEx.set(e.title, lista);
+    }
+  }
+  const exercicios = [];
+  for (const [title, lista] of porEx) {
+    if (lista.length < 3) continue;
+    const ultimo = lista[lista.length - 1];
+    // última sessão em que a carga (ou as reps na mesma carga) subiram em relação à anterior
+    let ultimaSubida = null;
+    for (let i = 1; i < lista.length; i++) {
+      const a = lista[i - 1];
+      const b = lista[i];
+      if (b.melhor > a.melhor || (b.melhor === a.melhor && b.reps > a.reps)) ultimaSubida = b.dia;
+    }
+    const semanasParado = ultimaSubida ? Math.floor((new Date(`${ultimo.dia}T12:00:00Z`) - new Date(`${ultimaSubida}T12:00:00Z`)) / (7 * 86400_000)) : Math.floor((new Date(`${ultimo.dia}T12:00:00Z`) - new Date(`${lista[0].dia}T12:00:00Z`)) / (7 * 86400_000));
+    const primeiro = lista[0];
+    const caiu = ultimo.melhor < primeiro.melhor - 0.01 && ultimo.melhor < lista[lista.length - 2].melhor;
+    const situacao = caiu ? 'caindo' : semanasParado >= 2 ? 'parado' : 'subindo';
+    exercicios.push({ title, sessoes: lista.length, melhor: ultimo.melhor, reps: ultimo.reps, desde: primeiro.melhor, ultimaSubida, semanasParado, situacao });
+  }
+  exercicios.sort((a, b) => b.semanasParado - a.semanasParado);
+  return { exercicios, parados: exercicios.filter((e) => e.situacao === 'parado'), subindo: exercicios.filter((e) => e.situacao === 'subindo'), caindo: exercicios.filter((e) => e.situacao === 'caindo') };
+}
+/** Puro. Suplementos pelos registros de refeição (descrições): dias com creatina, whey por dia, hipercalórico. */
+export function suplementosPelosRegistros(refeicoes = [], { dias = 14 } = {}) {
+  const porDia = new Map();
+  for (const r of refeicoes) {
+    const d = porDia.get(r.dia) || { creatina: false, whey: 0, hiper: 0 };
+    const t = `${r.descricao || ''} ${r.resumo || ''}`.toLowerCase();
+    if (/creatina/.test(t)) d.creatina = true;
+    const w = t.match(/(\d{1,3})\s*g\s*(?:de\s*)?(?:whey|prote[íi]na isolada|iso\b)/g);
+    if (w) for (const m of w) d.whey += Number((m.match(/\d+/) || [0])[0]);
+    else if (/whey|scoop|dose de prote/.test(t)) d.whey += 30;
+    if (/hipercal[óo]rico|mass ?gainer|pro ?force|growth mass/.test(t)) d.hiper += 1;
+    porDia.set(r.dia, d);
+  }
+  const lista = [...porDia.values()];
+  const n = Math.max(1, Math.min(dias, lista.length));
+  return { diasComRegistro: lista.length, diasCreatina: lista.filter((d) => d.creatina).length, wheyMedio: Math.round(lista.reduce((a, d) => a + d.whey, 0) / n), diasWhey: lista.filter((d) => d.whey > 0).length, hipercalorico: lista.reduce((a, d) => a + d.hiper, 0) };
+}
+/**
+ * Bloco FORÇA x RECUPERAÇÃO: progressão por exercício (Hevy, 8 semanas), sono médio 7 dias, proteína e calorias da semana,
+ * suplementos pelos registros, e uma LEITURA em código (recuperação / comida / estímulo). '' sem Hevy.
+ */
+export async function blocoForcaRecuperacao(perfil, dia, { magraSem = null, faixa = null } = {}) {
+  const jids = perfil.jids || [];
+  if (!jids.length) return '';
+  const desde8 = new Date(new Date(`${dia}T12:00:00Z`).getTime() - 56 * 86400_000).toISOString();
+  const [sessoes, rel, refs14] = await Promise.all([
+    colecao('treinos').find({ jid: { $in: jids }, inicio: { $gte: desde8 } }).toArray().catch(() => []),
+    colecao('saude_relogio').findOne({ _id: jids[0] }, { projection: { sonos: { $slice: -7 }, fcRepouso: 1, fcMedia: 1, recuperacao: 1 } }).catch(() => null),
+    colecao('refeicoes').find({ jid: { $in: jids }, dia: { $gte: new Date(new Date(`${dia}T12:00:00Z`).getTime() - 13 * 86400_000).toISOString().slice(0, 10), $lte: dia } }).toArray().catch(() => []),
+  ]);
+  if (!sessoes.length) return '';
+  const prog = progressaoForca(sessoes, { dia });
+  const sonos = (rel?.sonos || []).filter((s) => s.total);
+  const sonoMedioMin = sonos.length ? Math.round(sonos.reduce((a, s) => a + s.total, 0) / sonos.length) : null;
+  const ult7 = refs14.filter((r) => r.dia > new Date(new Date(`${dia}T12:00:00Z`).getTime() - 7 * 86400_000).toISOString().slice(0, 10));
+  const porDia = new Map();
+  for (const r of ult7) {
+    const d = porDia.get(r.dia) || { kcal: 0, p: 0 };
+    d.kcal += r.estimativa?.kcal || 0;
+    d.p += r.estimativa?.p || 0;
+    porDia.set(r.dia, d);
+  }
+  const diasRef = [...porDia.values()].filter((d) => d.kcal >= 1000);
+  const kcalMedia = diasRef.length ? Math.round(diasRef.reduce((a, d) => a + d.kcal, 0) / diasRef.length) : null;
+  const pMedia = diasRef.length ? Math.round(diasRef.reduce((a, d) => a + d.p, 0) / diasRef.length) : null;
+  const peso = Number(perfil.peso) || 0;
+  const pAlvo = peso ? Math.round(peso * 1.6) : null;
+  const sup = suplementosPelosRegistros(refs14);
+  const hs = (min) => `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}`;
+  // leitura em código, na ordem do conhecimento: sono -> comida -> composição -> estímulo
+  const leitura = [];
+  const sonoCurto = sonoMedioMin != null && sonoMedioMin < 390;
+  const comidaBaixa = (faixa && kcalMedia != null && kcalMedia < faixa.min) || (pAlvo && pMedia != null && pMedia < pAlvo);
+  const recupRuim = rel?.recuperacao && /segur|alta|acima/i.test(String(rel.recuperacao));
+  if (prog.caindo.length >= 3 && (sonoCurto || recupRuim)) leitura.push(`carga caindo em ${prog.caindo.length} exercícios com ${sonoCurto ? `sono médio ${hs(sonoMedioMin)}` : 'batimento de repouso acima da média'}: sinal de deload/descanso, não de puxar`);
+  if (prog.parados.length) {
+    const nomes = prog.parados.slice(0, 3).map((e) => `${e.title} (${fmtKg(e.melhor)} kg há ${e.semanasParado} sem.)`).join(', ');
+    if (sonoCurto) leitura.push(`carga parada em ${prog.parados.length} exercício(s) [${nomes}] e sono médio ${hs(sonoMedioMin)} na semana: recuperação primeiro, carga depois`);
+    else if (comidaBaixa) leitura.push(`carga parada em ${prog.parados.length} exercício(s) [${nomes}] e ${kcalMedia != null && faixa && kcalMedia < faixa.min ? `calorias abaixo da faixa (${kcalMedia} vs ${faixa.min})` : `proteína abaixo da meta (${pMedia} g vs ${pAlvo} g)`}: comida primeiro`);
+    else if (magraSem != null && magraSem < 0.05) leitura.push(`carga parada em ${prog.parados.length} exercício(s) [${nomes}] com massa magra parada: superávit virando gordura? ajustar composição do prato antes de carga`);
+    else leitura.push(`carga parada em ${prog.parados.length} exercício(s) [${nomes}] com sono${sonoMedioMin != null ? ` ${hs(sonoMedioMin)}` : ''}, comida e massa magra em dia: pode PUXAR (+1,25 a 2,5 kg, ou +1 a 2 repetições, uma mudança por vez)`);
+  }
+  if (!prog.parados.length && !prog.caindo.length && prog.subindo.length) leitura.push(`carga subindo em ${prog.subindo.length} exercício(s): estímulo e recuperação em dia; manter`);
+  return (
+    `FORÇA x RECUPERAÇÃO (8 semanas de Hevy; calculado pelo sistema):\n` +
+    `- Progressão: ${prog.subindo.length} subindo, ${prog.parados.length} parado(s) há 2+ semanas, ${prog.caindo.length} caindo` +
+    (prog.parados.length ? `. Parados: ${prog.parados.slice(0, 5).map((e) => `${e.title} ${fmtKg(e.melhor)} kg×${e.reps} desde ${e.ultimaSubida ? e.ultimaSubida.slice(8, 10) + '/' + e.ultimaSubida.slice(5, 7) : 'o início'}`).join('; ')}` : '') +
+    (prog.subindo.length ? `. Subindo: ${prog.subindo.slice(0, 4).map((e) => `${e.title} ${fmtKg(e.desde)}→${fmtKg(e.melhor)} kg`).join('; ')}` : '') + '\n' +
+    `- Recuperação (7 dias): sono médio ${sonoMedioMin != null ? hs(sonoMedioMin) : '?'}${rel?.fcRepouso ? `, repouso ${rel.fcRepouso} bpm${rel.fcMedia ? ` (média ${Math.round(rel.fcMedia)})` : ''}` : ''}${rel?.recuperacao ? `, sinal: ${rel.recuperacao}` : ''}\n` +
+    `- Comida (7 dias): ${kcalMedia != null ? `${kcalMedia} kcal/dia` : 'sem dias completos'}${faixa ? ` (faixa ${faixa.min}–${faixa.max})` : ''}${pMedia != null ? `, proteína ${pMedia} g/dia${pAlvo ? ` (mínimo ${pAlvo} g)` : ''}` : ''}${magraSem != null ? `, massa magra ${magraSem >= 0 ? '+' : '−'}${Math.abs(magraSem).toFixed(2).replace('.', ',')} kg/semana` : ''}\n` +
+    `- Suplementos pelos registros (14 dias): creatina em ${sup.diasCreatina} de ${sup.diasComRegistro} dias${sup.diasCreatina >= 10 ? ' (constante: saturado, efeito pleno)' : sup.diasCreatina ? ' (irregular: estoque não satura)' : ''}; whey ~${sup.wheyMedio} g/dia em ${sup.diasWhey} dias; hipercalórico ${sup.hipercalorico}x\n` +
+    (leitura.length ? `- LEITURA: ${leitura.join(' | ')}` : '- LEITURA: sem sinal claro')
+  );
+}
+
 /** O mesmo pra várias pessoas, separado por pessoa (diário, momentos). */
 export async function contextoDoDiaDeTodos(perfis, dia) {
   const blocos = [];

@@ -9,7 +9,7 @@ import { enriquecerPerfis } from './perfis.js';
 import { padraoAlimentar, resumirHoje } from './resumo.js';
 import { situacaoRelogio } from './relogio.js';
 import { blocoDespensa } from './despensa.js';
-import { contextoDoDia, blocoTreinoRefeicoes } from './contexto.js';
+import { contextoDoDia, blocoTreinoRefeicoes, blocoForcaRecuperacao } from './contexto.js';
 import { agora, fusoDe, diasAnteriores } from './util.js';
 import { estado } from './estado.js';
 import * as ia from './gemini.js';
@@ -32,6 +32,7 @@ async function retratoDoDia(perfil, dia) {
     contextoDoDia(perfil, dia).catch(() => ''),
   ]);
   const padrao = padraoAlimentar(ult28, { periodoDias: 28 });
+  const forca = await blocoForcaRecuperacao(perfil, dia).catch(() => '');
   const hojeTexto = hoje.length ? resumirHoje(hoje, [perfil], dia) : '(nenhuma refeição registrada até agora)';
   const visitasHoje = (contexto.match(/Lugares de hoje: ([^\n]+)/) || [])[1] || '';
   const assinatura = assinaturaNovidade({ refeicoes: hoje.length, visitas: visitasHoje ? visitasHoje.split(' · ').length : 0, notas: /Compras de hoje/.test(contexto) ? 1 : 0, atividades: (perfil.atividadesFeitas?.[dia] || []).length, passos: rel?.passosHoje || 0, hora: agora(fusoDe(perfil)).hora });
@@ -43,6 +44,7 @@ async function retratoDoDia(perfil, dia) {
     (rel ? `RELÓGIO HOJE: ${rel.passosHoje ? `${rel.passosHoje} passos` : 'passos ?'}${rel.caloriasHoje ? `, gasto ${Math.round(rel.caloriasHoje)} kcal até agora` : ''}${rel.ultimaNoite ? `, sono da última noite ${Math.floor(rel.ultimaNoite.total / 60)}h${String(Math.round(rel.ultimaNoite.total % 60)).padStart(2, '0')}` : ''}${rel.treinosHoje?.length ? `, treinos: ${rel.treinosHoje.map((t) => `${t.nome} ${t.min || '?'} min`).join(', ')}` : ''}\n\n` : '') +
     (comExtras._atividades ? `${comExtras._atividades}\n\n` : '') +
     (comExtras._treinoHoje ? `${comExtras._treinoHoje}\n\n` : '') +
+    (forca ? `${forca}\n\n` : '') +
     (despensa ? `${despensa}\n\n` : '') +
     (contexto ? `${contexto}\n\n` : '');
   return { texto, assinatura, comExtras };

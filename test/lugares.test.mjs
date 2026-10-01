@@ -354,3 +354,35 @@ test('sem kcal do relógio, o gasto do treino é estimado por MET e a cobertura 
   assert.match(l, /~295 kcal \(estimativa por MET; FC média 124 no relógio\)/);
   assert.match(l, /vs ~295 kcal gastas \(estimativa por MET\) → \+385 kcal, coerente o ganho de massa pede ✓/);
 });
+
+import { progressaoForca, suplementosPelosRegistros } from '../contexto.js';
+test('progressaoForca: parado há 2+ semanas, subindo e caindo por exercício; suplementos pelos registros', () => {
+  const sess = (dia, supino, remada, reps = 8) => ({ inicio: `${dia}T10:00:00Z`, exercicios: [
+    { title: 'Supino reto', sets: [{ type: 'normal', weight_kg: supino, reps }] },
+    { title: 'Remada', sets: [{ type: 'normal', weight_kg: remada, reps: 10 }] },
+  ] });
+  const sessoes = [sess('2026-08-20', 65, 50), sess('2026-08-27', 67.5, 52), sess('2026-09-03', 70, 54), sess('2026-09-10', 70, 56), sess('2026-09-17', 70, 58), sess('2026-09-24', 70, 60), sess('2026-10-01', 70, 62)];
+  const p = progressaoForca(sessoes, { dia: '2026-10-01' });
+  const supino = p.exercicios.find((e) => e.title === 'Supino reto');
+  const remada = p.exercicios.find((e) => e.title === 'Remada');
+  assert.equal(supino.situacao, 'parado');
+  assert.equal(supino.semanasParado, 4);
+  assert.equal(supino.ultimaSubida, '2026-09-03');
+  assert.equal(remada.situacao, 'subindo');
+  assert.equal(p.parados.length, 1);
+  assert.equal(p.subindo.length, 1);
+  // caindo: última menor que a primeira e que a anterior
+  const queda = [sess('2026-09-10', 70, 60), sess('2026-09-17', 67.5, 60), sess('2026-09-24', 65, 60)];
+  assert.equal(progressaoForca(queda, { dia: '2026-10-01' }).exercicios.find((e) => e.title === 'Supino reto').situacao, 'caindo');
+  const sup = suplementosPelosRegistros([
+    { dia: '2026-09-28', descricao: '30g whey, 5g creatina, 300ml leite' },
+    { dia: '2026-09-29', descricao: '30g whey, 5g creatina' },
+    { dia: '2026-09-29', descricao: '1 Pro Force 250ml, pão' },
+    { dia: '2026-09-30', descricao: 'arroz e frango' },
+  ]);
+  assert.equal(sup.diasComRegistro, 3);
+  assert.equal(sup.diasCreatina, 2);
+  assert.equal(sup.diasWhey, 2);
+  assert.equal(sup.hipercalorico, 1);
+  assert.equal(sup.wheyMedio, 20);
+});

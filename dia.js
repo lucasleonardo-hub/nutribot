@@ -14,7 +14,7 @@ import { visaoDe } from './acompanhamento.js';
 import { linhaSemanaLugares } from './lugares.js';
 import { refletirTodos } from './reflexao.js';
 import { fecharPendentes } from './atividades.js';
-import { contextoDoDia, contextoDoDiaDeTodos } from './contexto.js';
+import { contextoDoDia, contextoDoDiaDeTodos, blocoForcaRecuperacao } from './contexto.js';
 import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta, linhaDeTendencia } from './previsao.js';
 import { proporEtapa, metaBalancoPara, tendenciaGordura } from './resumo.js';
 import { indexarDia } from './memoria_semantica.js';
@@ -362,6 +362,8 @@ export async function fecharSemana({ dia, perfis, grupo }) {
             const faixa = metaBalancoPara({ objetivo: p.objetivo, peso: nova.pesoInicial, metaPeso: p.metaPeso, metaPrazo: p.metaPrazo, dia, ritmo: p.ritmo, metaModo: p.metaModo, gorduraTend: tendenciaGordura(pes30) });
             const tend = linhaDeTendencia({ pesagens: pes60, perfil: p, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
             if (tend) linhas.push(tend.texto);
+            const forca = await blocoForcaRecuperacao(p, dia, { magraSem: tend?.magraSem ?? null }).catch(() => '');
+            if (forca) linhas.push(forca);
           } catch (e) {
             console.warn('[tendencia]', e.message);
           }
