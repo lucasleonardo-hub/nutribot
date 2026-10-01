@@ -10,7 +10,7 @@ object Envio {
         val con = URL(url).openConnection() as HttpURLConnection
         try {
             con.requestMethod = "POST"
-            con.connectTimeout = 20_000
+            con.connectTimeout = 30_000 // o Render grátis demora pra aceitar conexão quando está acordando
             con.readTimeout = 90_000 // o Render grátis pode estar dormindo e demorar pra acordar
             con.doOutput = true
             con.setRequestProperty("Content-Type", "application/json; charset=utf-8")

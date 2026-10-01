@@ -11,6 +11,7 @@ export const PARADA_MIN = 20; // parada que conta como visita
 const CREDITO_MIN = 10; // amostra a cada 15 min: a estadia real é maior que o intervalo entre o primeiro e o último ponto
 const CORTE_GAP_MIN = 180; // mais de 3 h sem ponto (celular desligado) fecha a estadia
 const ACC_MAX_M = 500; // ponto pior que isso não serve
+const VEL_MOVENDO = 2; // m/s (7 km/h): acima disso a pessoa está se deslocando, não parada num lugar
 const ATUAL_MIN = 45; // último ponto vale como "agora" por este tempo
 const BRUTOS_DIAS = 7;
 const VISITAS_DIAS = 90;
@@ -75,6 +76,11 @@ export function agruparVisitas({ pontos, lugares = [], fuso = 'America/Sao_Paulo
   };
   const ordenados = [...pontos].map((p) => ({ ...p, ts: p.ts instanceof Date ? p.ts : new Date(p.ts) })).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && !Number.isNaN(p.ts.getTime())).sort((a, b) => a.ts - b.ts);
   for (const p of ordenados) {
+    // ponto colhido em movimento (ônibus, carro, bicicleta; velocidade do GNSS acima de 2 m/s) fecha a estadia e não vira lugar
+    if (p.vel != null && p.vel > VEL_MOVENDO) {
+      fechar();
+      continue;
+    }
     let lugar = maisPerto(p, lista) || maisPerto(p, [...novos.values()]);
     if (!lugar) {
       lugar = { id: idDe(p), lat: p.lat, lon: p.lon, n: 0, somaLat: 0, somaLon: 0, novo: true };
@@ -486,7 +492,9 @@ export async function receberLocais(perfil, locais, fuso = fusoDe(perfil)) {
     const ts = new Date(l.ts || l.hora || Date.now());
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180 || Number.isNaN(ts.getTime())) continue;
     if (acc != null && acc > ACC_MAX_M) continue;
-    docs.push({ jid, ts, dia: localDe(ts, fuso).dia, lat, lon, acc, em: new Date() });
+    const vel = l.vel == null ? null : Number(l.vel); // m/s, do GNSS (app 1.3+): > 2 m/s = em movimento, não vira lugar
+    const prov = l.prov ? String(l.prov).slice(0, 40) : null; // alta/equilibrada/ultima + provedor do Android
+    docs.push({ jid, ts, dia: localDe(ts, fuso).dia, lat, lon, acc, vel: Number.isFinite(vel) ? vel : null, prov, em: new Date() });
   }
   if (!docs.length) return { recebidos: 0 };
   const col = colecao('locais_brutos');
@@ -624,8 +632,10 @@ export async function situacaoAtual(perfil, pontosCarregados = null) {
   }
   const desde = localDe(pontos[i].ts, fuso).hhmm;
   const minutos = Math.round((new Date(ultimo.ts) - new Date(pontos[i].ts)) / 60000);
-  if (lugar) return { estado: lugar.papel === 'casa' ? 'casa' : 'lugar', lugar, desde, minutos };
-  return { estado: 'fora', desde, minutos, movendo: i === pontos.length - 1 };
+  // velocidade do GNSS (app 1.3+) decide "em deslocamento" sem adivinhar pelo histórico de pontos
+  const movendoAgora = ultimo.vel != null ? ultimo.vel > VEL_MOVENDO : i === pontos.length - 1;
+  if (lugar && !movendoAgora) return { estado: lugar.papel === 'casa' ? 'casa' : 'lugar', lugar, desde, minutos, acc: ultimo.acc ?? null };
+  return { estado: 'fora', desde, minutos, movendo: movendoAgora, acc: ultimo.acc ?? null };
 }
 
 /** Quem do grupo (com localização ligada) está a até 150 m da pessoa agora: ["Ale"]. Só primeiros nomes; só pra conversa com ela. */

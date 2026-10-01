@@ -248,3 +248,17 @@ test('plausibilidade e escolherTipoPlausivel: restaurante às 8h de ter/qui por 
   assert.deepEqual(c.map((x) => x.tipo), ['restaurante', 'padaria', 'faculdade']);
   assert.equal(c[2].grande, true);
 });
+
+test('agruparVisitas: ponto em movimento (vel > 2 m/s) não vira lugar nem estende a estadia', () => {
+  const pontos = [
+    ...serie('2026-09-28T12:00:00Z', TRAB, 4), // 09:00–09:45 parado
+    { ts: new Date('2026-09-28T13:00:00Z'), lat: TRAB.lat + 0.0005, lon: TRAB.lon, vel: 8.3 }, // passando de carro ao lado
+    { ts: new Date('2026-09-28T13:15:00Z'), lat: TRAB.lat + 0.01, lon: TRAB.lon, vel: 12 }, // na estrada
+    ...serie('2026-09-28T14:00:00Z', TRAB, 3), // 11:00–11:30 de volta, parado
+  ];
+  const { lugares, visitas } = agruparVisitas({ pontos, fuso: F });
+  assert.equal(lugares.length, 1, 'o ponto na estrada não cria lugar');
+  assert.equal(visitas.length, 2, 'a passagem de carro separa as duas estadias');
+  assert.equal(visitas[0].hIni, 9);
+  assert.equal(visitas[1].hIni, 11);
+});

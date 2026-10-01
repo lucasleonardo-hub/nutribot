@@ -1,6 +1,7 @@
 package br.nutribot.relogio
 
 import android.content.Context
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -15,6 +16,9 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -25,6 +29,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun doWork(): Result {
         val prefs = Prefs(applicationContext)
         if (!prefs.configurado) return Result.success(workDataOf("msg" to "não configurado"))
+        // periódico, "agora" e repetição podem cair juntos: se acabou de mandar (menos de 60 s), não manda de novo
+        val manual = inputData.getBoolean("manual", false)
+        if (!manual && System.currentTimeMillis() - prefs.ultimoEnvio < 60_000) return Result.success(workDataOf("msg" to "já enviado há pouco"))
         if (!Leitor.disponivel(applicationContext)) return falha(prefs, "Health Connect indisponível neste aparelho")
         val faltando = Leitor.permissoes - Leitor.concedidas(applicationContext)
         if (faltando.any { !it.endsWith("READ_HEALTH_DATA_IN_BACKGROUND") }) return falha(prefs, "faltam permissões do Health Connect (abra o app e toque em Permissões)")
@@ -44,8 +51,10 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             Result.success(workDataOf("msg" to prefs.ultimoResultado))
         } catch (e: Exception) {
             val msg = e.message ?: e.javaClass.simpleName
-            prefs.ultimoResultado = "ERRO ${hora()} · $msg"
-            if (runAttemptCount < 3) Result.retry() else falha(prefs, msg)
+            val semRede = e is UnknownHostException || e is SocketTimeoutException || e is ConnectException || msg.contains("HTTP 502") || msg.contains("HTTP 503")
+            // sem rede ou servidor reiniciando: não é erro do app; tenta de novo em 2 min (até 5 vezes), e o status diz isso
+            prefs.ultimoResultado = if (semRede) "SEM CONEXÃO ${hora()} · tento de novo em 2 min ($msg)" else "ERRO ${hora()} · $msg"
+            if (runAttemptCount < (if (semRede) 5 else 3)) Result.retry() else falha(prefs, msg)
         }
     }
 
@@ -63,13 +72,16 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         fun agendar(context: Context) {
             val req = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 2, TimeUnit.MINUTES)
                 .build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODICO, ExistingPeriodicWorkPolicy.KEEP, req)
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODICO, ExistingPeriodicWorkPolicy.UPDATE, req)
         }
 
         fun agora(context: Context) {
             val req = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setBackoffCriteria(BackoffPolicy.LINEAR, 2, TimeUnit.MINUTES)
+                .setInputData(workDataOf("manual" to true))
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(AGORA, ExistingWorkPolicy.REPLACE, req)
         }

@@ -11,8 +11,8 @@ android {
         applicationId = "br.nutribot.relogio"
         minSdk = 28
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2" // 1.1: batimento de repouso, HRV e batimentos por treino · 1.2: localização aproximada opcional (lugares)
+        versionCode = 4
+        versionName = "1.3" // 1.2: localização opcional · 1.3: alta precisão (GNSS L1+L5) com velocidade, nova tentativa em 2 min, 30 s de conexão, sem envio duplicado
     }
 
     // Assinatura estável (mesma chave em todo build, senão o Android recusa atualizar por cima):
