@@ -142,7 +142,7 @@ export async function receberNotaDoApp({ perfil, chave, url, texto, dia, avisarG
   const r = await registrarNota({ perfil, chave: chave || extrairChave(url) || null, loja: lido.loja, data: lido.data, itens, origem: 'app' });
   const resumo = resumoNota({ loja: lido.loja, dia: r.dia, itens, repetida: r.repetida });
   if (avisarGrupo && r.nova) await avisarGrupo(resumo).catch(() => {});
-  return { ok: true, itens: itens.length, repetida: Boolean(r.repetida), loja: lido.loja, resumo: r.repetida ? 'nota já lida antes' : `${itens.length} itens na despensa${lido.loja ? ` (${lido.loja})` : ''}` };
+  return { ok: true, itens: itens.length, repetida: Boolean(r.repetida), loja: lido.loja, resumoCompleto: resumo, resumo: r.repetida ? 'nota já lida antes' : `${itens.length} itens na despensa${lido.loja ? ` (${lido.loja})` : ''}` };
 }
 /** !despensa limpar: zera despensa e notas da pessoa (começar do zero depois de um teste). */
 export async function limparDespensa(perfil) {

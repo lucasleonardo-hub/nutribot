@@ -23,7 +23,7 @@ import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
 import { responderPendente, registrarRelato } from './atividades.js';
-import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, aplicarLinhaDespensa, blocoDespensa, testarConsultaSefaz } from './despensa.js';
+import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, aplicarLinhaDespensa, blocoDespensa, testarConsultaSefaz, parsearTextoNfce, receberNotaDoApp } from './despensa.js';
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 
@@ -419,6 +419,17 @@ async function tratarPrivado(msg) {
   const perfil = await buscarPerfil(jidsPriv).catch(() => null);
   const ehAdmin = jidsPriv.includes(ADMIN_PRIVADO) || Boolean(perfil?.jids?.includes(ADMIN_PRIVADO));
   if (!ehAdmin) return;
+  // ---------- texto da página da SEFAZ colado no privado: entra na despensa de verdade ----------
+  if (perfil?.onboarded && texto.length > 120 && parsearTextoNfce(texto).itens.length) {
+    const jidPriv = msg.key.remoteJid;
+    try {
+      const r = await receberNotaDoApp({ perfil, chave: null, url: '', texto, dia: agora().dia });
+      await enviar(jidPriv, r.ok ? r.resumoCompleto || r.resumo : `Não consegui separar os itens: ${r.erro}`, msg, { rapido: true });
+    } catch (e) {
+      await enviar(jidPriv, `Deu erro ao ler a nota: ${e.message}`, msg, { rapido: true });
+    }
+    return;
+  }
   // ---------- modo de teste do cupom (só no privado do admin, nada é gravado): foto com QR ou link da SEFAZ ----------
   if (temFoto || /^https?:\/\/\S+/i.test(texto)) {
     const jidPriv = msg.key.remoteJid;
@@ -501,7 +512,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // a foto pode estar na mensagem ou numa das que vieram junto (fragmentos: "tem alface" e depois a foto da abóbora)
   const temImagem = Boolean(conteudo.imageMessage) || fotosExtras.some((e) => Boolean(extractMessageContent(e.message)?.imageMessage));
   const temAudio = Boolean(conteudo.audioMessage);
-  if (!texto && !temImagem && !temAudio) return; // sticker, vídeo, documento etc.
+  const temPdf = /pdf/i.test(conteudo.documentMessage?.mimetype || '') || /\.pdf$/i.test(conteudo.documentMessage?.fileName || '');
+  if (!texto && !temImagem && !temAudio && !temPdf) return; // sticker, vídeo, outros documentos etc.
 
   await garantirDiaAtual();
   if (!GRUPO_PERMITIDO && estado.memoria.grupo !== jidGrupo) {
@@ -588,6 +600,27 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     await enviar(jidGrupo, bemVindo);
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: bemVindo, tipo: 'bot' });
     salvarFicha(perfil, mdPerfil(perfil)).catch((e) => console.error('[drive]', e.message));
+    return;
+  }
+
+  // ---------- Nota de compra sem app: texto da página da SEFAZ colado, ou PDF da nota ----------
+  if (temPdf || (texto.length > 120 && parsearTextoNfce(texto).itens.length)) {
+    try {
+      let textoNota = texto;
+      if (temPdf) {
+        enviar(jidGrupo, 'Lendo o PDF...', msg, { rapido: true }).catch(() => {});
+        const pdf = await baixarMidia(msg);
+        textoNota = await ia.transcreverPdf(pdf);
+      }
+      const r = await receberNotaDoApp({ perfil, chave: null, url: '', texto: textoNota, dia });
+      const resposta = r.ok ? r.resumoCompleto || r.resumo : 'Vi que é uma nota, mas não consegui separar os itens. Se for a página da SEFAZ, cola o texto inteiro (Selecionar tudo, Copiar) ou manda a captura de tela com rolagem.';
+      await enviar(jidGrupo, resposta, msg, { rapido: true });
+      await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: temPdf ? '📄 [PDF de nota de compra]' : '📋 [texto da nota de compra colado]', tipo: 'texto' });
+      await lembrar({ hora, jid: null, nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
+    } catch (e) {
+      console.error('[despensa] nota por texto/PDF:', e.message);
+      await enviar(jidGrupo, 'Não consegui ler essa nota agora. Tenta de novo daqui a pouco.', msg, { rapido: true });
+    }
     return;
   }
 
