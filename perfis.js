@@ -6,6 +6,7 @@ import { agendaDe } from './agenda.js';
 import { contextoLugares, roteiroDoDia, localDe } from './lugares.js';
 import { situacaoRelogio } from './relogio.js';
 import { blocoAtividades, atividadesComoAgenda } from './atividades.js';
+import { blocoTreinoRefeicoes } from './contexto.js';
 import { fusoDe } from './util.js';
 import { diasAnteriores, horariosHabituais, descreverHorarios, fusoValido } from './util.js';
 
@@ -46,11 +47,14 @@ export async function enriquecerPerfis(perfis, dia) {
         console.warn('[perfis] roteiro:', e.message);
       }
       let atividadesBloco = '';
+      let treinoHoje = '';
       try {
         const al = localDe(new Date(), fusoDe(p));
         atividadesBloco = blocoAtividades(p, { dia: al.dia, dow: al.dow });
+        // pré e pós-treino de hoje calculados em código (café das 8h29 depois da Garra das 7h06 É o pós-treino)
+        treinoHoje = await blocoTreinoRefeicoes(p, al.dia, { rel: p.relogio ? await situacaoRelogio(p, al.dia).catch(() => null) : null }).catch(() => '');
       } catch {}
-      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t, _agenda: ag, _lugares: lg, _roteiro: roteiro, _atividades: atividadesBloco };
+      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t, _agenda: ag, _lugares: lg, _roteiro: roteiro, _atividades: atividadesBloco, _treinoHoje: treinoHoje };
     })
   );
 }

@@ -292,3 +292,23 @@ test('transicaoDeSaida: saiu do mercado depois de 10 min+ dispara; passagem ráp
   assert.equal(lugarDeCompra({ tipo: 'padaria' }), true);
   assert.equal(lugarDeCompra({ tipo: 'faculdade' }), false);
 });
+
+import { treinoXRefeicoes } from '../contexto.js';
+test('treinoXRefeicoes: café 29 min depois da academia é o pós-treino; whey 23 min antes é o pré; vôlei à noite sem pós', () => {
+  const refeicoes = [
+    { slot: 'lanche_manha', horaLocal: '06:43', descricao: '30g whey, creatina, leite' },
+    { slot: 'cafe', horaLocal: '08:29', descricao: 'pão, queijo, Pro Force' },
+    { slot: 'almoco', horaLocal: '14:03', descricao: 'arroz, feijão, linguiça' },
+  ];
+  const sessoes = [
+    { nome: 'Body Pump (relógio)', inicio: 7 * 60 + 6, fim: 8 * 60 },
+    { nome: 'Vôlei de areia', inicio: 17 * 60 + 30, fim: 20 * 60 },
+  ];
+  const r = treinoXRefeicoes({ refeicoes, sessoes });
+  assert.equal(r.porRefeicao.get('06:43'), 'pré-treino de Body Pump (relógio)');
+  assert.equal(r.porRefeicao.get('08:29'), 'pós-treino de Body Pump (relógio) (29 min depois)');
+  assert.equal(r.porRefeicao.has('14:03'), false);
+  assert.match(r.linhas[0], /^- Body Pump \(relógio\) 07:06–08:00: pré = lanche da manhã 06:43 \(30g whey, creatina, leite\); pós = café da manhã 08:29 \(pão, queijo, Pro Force\), 29 min depois$/);
+  assert.match(r.linhas[1], /Vôlei de areia 17:30–20:00: pré = nada registrado até 90 min antes; pós = nada registrado até 90 min depois/);
+  assert.deepEqual(treinoXRefeicoes({ refeicoes, sessoes: [] }).linhas, []);
+});

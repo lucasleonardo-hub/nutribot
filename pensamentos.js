@@ -9,7 +9,7 @@ import { enriquecerPerfis } from './perfis.js';
 import { padraoAlimentar, resumirHoje } from './resumo.js';
 import { situacaoRelogio } from './relogio.js';
 import { blocoDespensa } from './despensa.js';
-import { contextoDoDia } from './contexto.js';
+import { contextoDoDia, blocoTreinoRefeicoes } from './contexto.js';
 import { agora, fusoDe, diasAnteriores } from './util.js';
 import { estado } from './estado.js';
 import * as ia from './gemini.js';
@@ -42,6 +42,7 @@ async function retratoDoDia(perfil, dia) {
     (comExtras._lugares?.bloco ? `${comExtras._lugares.bloco}\n\n` : '') +
     (rel ? `RELÓGIO HOJE: ${rel.passosHoje ? `${rel.passosHoje} passos` : 'passos ?'}${rel.caloriasHoje ? `, gasto ${Math.round(rel.caloriasHoje)} kcal até agora` : ''}${rel.ultimaNoite ? `, sono da última noite ${Math.floor(rel.ultimaNoite.total / 60)}h${String(Math.round(rel.ultimaNoite.total % 60)).padStart(2, '0')}` : ''}${rel.treinosHoje?.length ? `, treinos: ${rel.treinosHoje.map((t) => `${t.nome} ${t.min || '?'} min`).join(', ')}` : ''}\n\n` : '') +
     (comExtras._atividades ? `${comExtras._atividades}\n\n` : '') +
+    (comExtras._treinoHoje ? `${comExtras._treinoHoje}\n\n` : '') +
     (despensa ? `${despensa}\n\n` : '') +
     (contexto ? `${contexto}\n\n` : '');
   return { texto, assinatura, comExtras };
