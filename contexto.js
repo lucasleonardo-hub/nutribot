@@ -3,8 +3,24 @@
 // e nos momentos, além da conversa (via lugares/despensa). Sem endereço de casa, sem CPF, sem total da nota.
 
 import { colecao } from './mongo.js';
-import { visitasDeHoje } from './lugares.js';
+import { visitasDeHoje, localDe } from './lugares.js';
 import { fusoDe } from './util.js';
+
+// gasto estimado por MET quando o relógio não traz kcal da sessão (o Hevy grava a sessão sem calorias): MET × kg × h
+const MET_POR_NOME = [
+  [/body ?pump|cross|hiit|funcional|circuito/i, 6.5],
+  [/corrida|running|run\b/i, 9],
+  [/bike|ciclismo|spinning|pedal/i, 7],
+  [/nata[çc][ãa]o|swim/i, 7],
+  [/caminhada|walk/i, 3.5],
+  [/v[ôo]lei|volei/i, 5.5],
+  [/futebol|futsal/i, 7.5],
+  [/superior|inferior|perna|peito|costas|ombro|bra[çc]o|for[çc]a|muscula|strength|push|pull|legs|upper|lower|abd[ôo]men|treino/i, 5],
+];
+export const kcalEstimadoSessao = (nome, minutos, pesoKg) => {
+  const met = (MET_POR_NOME.find(([re]) => re.test(String(nome || ''))) || [null, 5])[1];
+  return Math.round((met * (Number(pesoKg) || 70) * (Number(minutos) || 0)) / 60);
+};
 
 /** Texto curto com o dia da pessoa fora da comida: lugares, compras, atividade. '' se não houver nada. */
 export async function contextoDoDia(perfil, dia) {
@@ -63,14 +79,17 @@ export function treinoXRefeicoes({ refeicoes = [], sessoes = [], perfil = null }
         partes.push(`proteína no pós ${p} g (alvo ≥ ${alvoP} g) ${p >= alvoP ? '✓' : '✗'}`);
       }
       const kcalVolta = (pre?.estimativa?.kcal || 0) + (pos?.estimativa?.kcal || 0);
-      if (s.kcal && kcalVolta) {
-        const saldo = Math.round(kcalVolta - s.kcal);
+      // sem kcal do relógio (o Hevy grava a sessão sem calorias), estima por MET pela duração e pelo peso
+      const gasto = s.kcal || (peso ? kcalEstimadoSessao(s.nome, s.fim - s.inicio, peso) : 0);
+      if (gasto && kcalVolta) {
+        const saldo = Math.round(kcalVolta - gasto);
         const ok = quer === 'ganho' ? saldo >= 150 : quer === 'perda' ? saldo <= 250 : Math.abs(saldo) <= 300;
-        partes.push(`energia em volta do treino ${Math.round(kcalVolta)} kcal vs ~${Math.round(s.kcal)} kcal gastas → ${saldo >= 0 ? '+' : ''}${saldo} kcal, ${ok ? 'coerente' : 'fora do que'} ${quer === 'ganho' ? 'o ganho de massa pede' : quer === 'perda' ? 'a perda de peso pede' : 'a manutenção pede'} ${ok ? '✓' : '✗'}`);
-      } else if (kcalVolta) partes.push(`energia em volta do treino ${Math.round(kcalVolta)} kcal (sem gasto medido do relógio)`);
+        partes.push(`energia em volta do treino ${Math.round(kcalVolta)} kcal vs ~${Math.round(gasto)} kcal gastas${s.kcal ? '' : ' (estimativa por MET)'} → ${saldo >= 0 ? '+' : ''}${saldo} kcal, ${ok ? 'coerente' : 'fora do que'} ${quer === 'ganho' ? 'o ganho de massa pede' : quer === 'perda' ? 'a perda de peso pede' : 'a manutenção pede'} ${ok ? '✓' : '✗'}`);
+      } else if (kcalVolta) partes.push(`energia em volta do treino ${Math.round(kcalVolta)} kcal (sem gasto medido)`);
       cobertura = partes.length ? ` | cobertura: ${partes.join('; ')}` : '';
     }
-    const extra = `${s.kcal ? ` · ~${Math.round(s.kcal)} kcal${s.fcMedia ? `, FC média ${s.fcMedia}` : ''} (relógio)` : ''}${s.hevy ? ` · Hevy: ${s.hevy.detalhe}` : ''}`;
+    const gastoTxt = s.kcal ? ` · ~${Math.round(s.kcal)} kcal${s.fcMedia ? `, FC média ${s.fcMedia}` : ''} (relógio)` : peso ? ` · ~${kcalEstimadoSessao(s.nome, s.fim - s.inicio, peso)} kcal (estimativa por MET${s.fcMedia ? `; FC média ${s.fcMedia} no relógio` : ''})` : '';
+    const extra = `${gastoTxt}${s.hevy ? ` · Hevy: ${s.hevy.detalhe}` : ''}`;
     linhas.push(
       `- ${s.nome} ${hhmmDe(s.inicio)}–${hhmmDe(s.fim)}${extra}: pré = ${pre ? nomeRef(pre) : 'nada registrado até 90 min antes'}; pós = ${pos ? `${nomeRef(pos)}, ${pos.min - s.fim} min depois` : s.jaAcabou === false ? 'ainda não acabou' : 'nada registrado até 90 min depois'}${cobertura}`
     );

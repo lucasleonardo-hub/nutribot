@@ -344,3 +344,13 @@ test('resumirSessaoHevy: melhor série, volume, RPE e progressão contra a sess�
   const perda = treinoXRefeicoes({ refeicoes, sessoes: [{ nome: 'X', inicio: 7 * 60 + 13, fim: 7 * 60 + 59, kcal: 310 }], perfil: { peso: 70, objetivo: 'perda de peso' } }).linhas[0];
   assert.match(perda, /fora do que a perda de peso pede ✗/);
 });
+
+import { kcalEstimadoSessao } from '../contexto.js';
+test('sem kcal do relógio, o gasto do treino é estimado por MET e a cobertura é calculada mesmo assim', () => {
+  assert.equal(kcalEstimadoSessao('Quinta — Superior B + abdômen', 46, 77), Math.round((5 * 77 * 46) / 60));
+  assert.equal(kcalEstimadoSessao('Body Pump', 51, 77), Math.round((6.5 * 77 * 51) / 60));
+  const refeicoes = [{ slot: 'cafe', horaLocal: '08:29', descricao: 'pão', estimativa: { kcal: 680, p: 35 } }];
+  const l = treinoXRefeicoes({ refeicoes, sessoes: [{ nome: 'Superior B (Hevy)', inicio: 7 * 60 + 13, fim: 7 * 60 + 59, fcMedia: 124 }], perfil: { peso: 77, objetivo: 'Hipertrofia' } }).linhas[0];
+  assert.match(l, /~295 kcal \(estimativa por MET; FC média 124 no relógio\)/);
+  assert.match(l, /vs ~295 kcal gastas \(estimativa por MET\) → \+385 kcal, coerente o ganho de massa pede ✓/);
+});
