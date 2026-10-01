@@ -118,7 +118,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - LINHA OCULTA ATIVIDADE: quando a pessoa contar que FEZ uma atividade fixa fora do horário cadastrado, ou que NÃO teve ("adiantei o vôlei pras 18h", "hoje não rolou vôlei", "joguei areia ontem das 17h às 19h"), acrescente no fim a linha ATIVIDADE: {"nome": "vôlei de quadra", "feita": true, "inicio": "18:00", "fim": "20:00", "dia": "AAAA-MM-DD"} (inicio/fim/dia só se ela disse; feita false quando não houve). O sistema ajusta o gasto do dia; você não soma calorias por conta própria. Não use pra treino de academia (esse vem do relógio/Hevy).
 - DESPENSA (o que tem em casa): o bloco "DESPENSA" lista o que a pessoa tem em casa pelas notas de mercado. Use pra sugerir refeição com o que HÁ ("você tem frango e brócolis vencendo, hoje é dia disso"), pra lembrar o que vence, e como âncora quando ela comer um item dali (a tabela nutricional por 100 g está entre colchetes). Não invente item que não está no bloco. Baixas pela linha oculta no FIM da resposta: DESPENSA: [{"item": "iogurte grego", "acao": "acabou"}] com acao em usei (com "qtd" quando souber: ovos, iogurtes, frutas), acabou, acabando, comprei (com qtd/unidade) ou tem (ela confirmou que ainda tem). Emita quando: a refeição registrada usou itens da despensa (usei), ela disser que algo acabou/está acabando/comprou, ou responder a uma pergunta sua de validade. Granel (arroz, azeite) só muda de estado, nunca por grama.
 - CUPOM DE MERCADO: se a foto for um cupom fiscal / nota de compras (lista de itens com preços, não comida), NÃO analise como refeição. Responda curto no personagem ("peguei tua compra") e acrescente no FIM a linha NOTA: {"loja": "nome", "data": "AAAA-MM-DD", "itens": [{"descricao": "como impresso", "qtd": 1, "unidade": "un", "valorTotal": 12.9, "codigo": "ean se houver"}]} com TODOS os itens legíveis. Sem bloco de estimativa, sem linha REFEICAO.
-- CRUZE AS FONTES: agenda, lugares, roteiro do dia, treino, relógio e acompanhamento são pedaços da MESMA pessoa. Antes de dar dica, junte: academia às 7h + aula às 10h = café que caiba na mochila e proteína logo depois do treino; faculdade até 22h = jantar precisa estar pronto ou ser simples; gasto alto no relógio hoje + almoço leve = a fome da noite vai vir, antecipe; janela apertada entre dois compromissos = comida pronta, não receita. Uma dica que ignora o roteiro do dia dela é dica genérica; evite.
+- CRUZE AS FONTES: agenda, lugares, roteiro do dia, treino, relógio, despensa e acompanhamento são pedaços da MESMA pessoa. Passou no mercado e não veio nota: pergunte UMA vez, leve, se comprou algo pra despensa; comprou frango e não apareceu frango nas refeições da semana: comente; está na rua na hora do almoço: a dica é o que se compra pronto. Antes de dar dica, junte: academia às 7h + aula às 10h = café que caiba na mochila e proteína logo depois do treino; faculdade até 22h = jantar precisa estar pronto ou ser simples; gasto alto no relógio hoje + almoço leve = a fome da noite vai vir, antecipe; janela apertada entre dois compromissos = comida pronta, não receita. Uma dica que ignora o roteiro do dia dela é dica genérica; evite.
 - CLIMA E ESTAÇÃO: quando o contexto de hora trouxer a estação do ano e o tempo na cidade da pessoa, use como quem olha pela janela: sopa em noite fria "cai bem", dia de calorão pede água e comida leve, chuva combina com treino em casa, amanhã quente pede hidratar mais. Só quando encaixar, não em toda mensagem. Cada um pode estar numa cidade e estação diferentes (quem mora no outro hemisfério tem a estação oposta): use a da pessoa com quem fala. Se NÃO houver linha de tempo no contexto, você não sabe como está o dia: não invente "dia lindo" nem "friozinho".
 - DADOS DO RELÓGIO: quando o perfil trouxer a linha "Relógio" ou o dossiê trouxer "DADOS DO RELÓGIO" (peso, gordura, sono, passos, treinos do Galaxy Watch), você SABE disso sem perguntar: não peça peso nem pergunte como dormiu se está ali. Use como quem conhece a rotina da pessoa: café chegando às 8h de quem levantou 05:56 ("já tá há 2 horas em pé sem comer?"), levantou às 9h quem costuma levantar às 6h ("dormiu até tarde hoje, hein"), dia com 3 mil passos, semana sem treino, noite de 5h e pedindo doce ("faz sentido"). Comente quando couber, não em toda mensagem. Compare com a média da pessoa, não com regra de livro. Bioimpedância de relógio oscila: fale de tendência, não de décimos.
 - RECUPERAÇÃO (batimento de repouso): quando a linha do relógio trouxer "batimento de repouso", ele NÃO entra na conta de calorias (o gasto do dia já usa isso). É sinal de recuperação: acima do normal há 2 dias ou mais = corpo cansado, gripando ou sobrecarregado; aí segure a cobrança, priorize sono e hidratação e não empurre volume de comida ou treino. Na média ou abaixo, com sono bom = pode cobrar ritmo. Use uma vez, quando encaixar, sem repetir o número em toda mensagem.
@@ -994,7 +994,7 @@ export async function evoluirPersona({ dia, personaAtual, perfis, historico, mom
 }
 
 /** Diário pessoal da Nutri: uma entrada por noite, em primeira pessoa, sobre o dia com o grupo. Só acrescenta. */
-export async function diarioDaNutri({ dia, perfis, historico, personaAtual, resultados, refeicoes }) {
+export async function diarioDaNutri({ dia, perfis, historico, personaAtual, resultados, refeicoes, contexto }) {
   if (!historico?.length) return '';
   return gerar({
     contents:
@@ -1005,6 +1005,7 @@ export async function diarioDaNutri({ dia, perfis, historico, personaAtual, resu
       `NÚMEROS: calorias e proteína de cada um vêm SÓ do bloco REGISTROS OFICIAIS; o que foi dito na conversa (inclusive por você) pode ter sido corrigido depois, e nesse caso o registro vence. Se você errou um número durante o dia e foi corrigida, isso pode entrar no diário como autocrítica, mas o número certo é o do bloco.\n\n` +
       `PERFIS:\n${blocoPerfis(perfis)}\n\nSUA MEMÓRIA DE PERSONALIDADE:\n${personaAtual?.trim() || '(vazia)'}\n\n` +
       (refeicoes ? `REGISTROS OFICIAIS DO DIA (compilados pelo sistema, depois das correções):\n${refeicoes}\n\n` : '') +
+      (contexto ? `O DIA DE CADA UM FORA DA COMIDA (lugares, compras, atividades; cruze com o que comeram):\n${contexto}\n\n` : '') +
       (resultados ? `RESULTADOS (calculados pelo sistema: 7 e 30 dias, peso, balanço energético de quem tem relógio):\n${resultados}\n\n` : '') +
       `TRANSCRIÇÃO DE HOJE:\n${blocoHistorico(historico, 300)}`,
     config: { systemInstruction: montarSystem('', { documento: true }), temperature: 0.9, pensar: false, maxOutputTokens: 600, leve: true },
@@ -1117,7 +1118,7 @@ export async function revisarRespostaReserva({ perfil, texto, imagem, mimeType, 
 }
 
 /** Momentos memoráveis do dia (vexames, acertos, frases, promessas) -> memória de longo prazo que só cresce. */
-export async function extrairMomentos({ dia, perfis, historico, refeicoes }) {
+export async function extrairMomentos({ dia, perfis, historico, refeicoes, contexto }) {
   if (!historico?.length || !perfis?.length) return [];
   const json = await gerar({
     contents:
@@ -1125,6 +1126,7 @@ export async function extrairMomentos({ dia, perfis, historico, refeicoes }) {
       `Cada momento: uma frase curta (até 25 palavras), concreta, em terceira pessoa, com o nome da pessoa (${perfis.map((p) => p.nome).join(', ')}). Só o que realmente aconteceu. Dia comum sem nada marcante = lista vazia.\n` +
       `NÚMEROS: calorias e proteína do dia só podem vir do bloco REGISTROS OFICIAIS abaixo. Totais ditos na conversa (inclusive por você) podem ter sido corrigidos depois: se a conversa disser "4.700 kcal" e o bloco disser 2.979, o bloco vence e a conversa está errada. Momento sobre "comeu demais/de menos" só se o bloco confirmar.\n\n` +
       (refeicoes ? `REGISTROS OFICIAIS DO DIA (compilados pelo sistema, depois das correções):\n${refeicoes}\n\n` : '') +
+      (contexto ? `O DIA DE CADA UM FORA DA COMIDA (lugares, compras, atividades):\n${contexto}\n\n` : '') +
       `TRANSCRIÇÃO:\n${blocoHistorico(historico, 400)}`,
     config: {
       temperature: 0.3,
@@ -1601,7 +1603,7 @@ export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugare
   });
 }
 
-export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historico, dia, refeicoes }) {
+export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historico, dia, refeicoes, contexto }) {
   const falas = falasDe(historico, perfil.nome);
   if (!falas.length) return notasAtuais || '';
   return gerar({
@@ -1609,6 +1611,7 @@ export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historic
       `Você é a ${nomeDaBot()}, nutricionista. Hoje é ${dataExtenso(dia)}. Reescreva SUAS NOTAS sobre ${perfil.nome} (${perfil.peso} kg, ${perfil.altura} cm, objetivo: ${perfil.objetivo}).\n\n` +
       `NOTAS ATUAIS:\n${notasAtuais?.trim() || '(nenhuma ainda)'}\n\n` +
       (refeicoes ? `REGISTROS OFICIAIS DE HOJE (compilados pelo sistema depois das correções; totais de calorias e proteína SÓ daqui, nunca da conversa, que pode ter número já corrigido):\n${refeicoes}\n\n` : '') +
+      (contexto ? `${contexto}\n(cruze com a comida: compra x o que registrou, lugar x horário das refeições, atividade x apetite)\n\n` : '') +
       `DOCUMENTOS QUE A PESSOA DEIXOU NA PASTA (você NÃO precisa repetir isso nas notas, só complementar ou registrar mudanças):\n${(dossieDocs || '(nenhum)').slice(0, 6000)}\n\n` +
       `TRANSCRIÇÃO DE HOJE (só falas dela e suas respostas a ela; NÃO há nada de outras pessoas do grupo aqui, e nada delas deve entrar nas notas):\n${blocoHistorico(falas, 150)}\n\n` +
       `Escreva as notas atualizadas em até 300 palavras, em tópicos curtos (linhas começando com "- "), terceira pessoa, só FATOS que a pessoa disse ou que você observou, SEMPRE com data quando for medida, meta ou dado que muda (ex: "- 2026-09-16: pesou 73,2 kg"; "- 2026-09-18: mora em Curitiba"). Dado novo SUBSTITUI o antigo (mantenha só o mais recente de peso, cidade, dieta, objetivo; pode registrar a evolução como "peso: 73,2 (09-16) -> 74,5 (09-18)"). Cubra o que importa pro seu trabalho: idade, cidade/fuso, dieta e restrições, trabalho/estudo e horários, treinos/esportes e dias, preferências e aversões alimentares, sono, álcool, metas numéricas, respostas a perguntas que você fez, e detalhes pessoais que ajudam a brincar com carinho. Corte o irrelevante. Se não houver nada novo, devolva as notas atuais. Sem markdown de cabeçalho (#), sem emojis.`,

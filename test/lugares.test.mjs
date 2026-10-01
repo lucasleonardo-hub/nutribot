@@ -277,3 +277,18 @@ test('ruaPermitida e abreviarRua: rua só em lugar público; casa, casa de algu�
   assert.equal(abreviarRua('Avenida Beira-Mar Norte'), 'Av. Beira-Mar Norte');
   assert.equal(abreviarRua('Servidão Ana Bernardo'), 'Serv. Ana Bernardo');
 });
+
+import { transicaoDeSaida, lugarDeCompra } from '../lugares.js';
+test('transicaoDeSaida: saiu do mercado depois de 10 min+ dispara; passagem rápida, mesmo lugar ou sem sinal não', () => {
+  const mercado = { id: 'm1', tipo: 'mercado', nome: 'Bistek' };
+  const dentro = { estado: 'lugar', lugar: mercado, desde: '17:02', minutos: 28 };
+  assert.deepEqual(transicaoDeSaida(dentro, { estado: 'casa', desde: '17:45', minutos: 3 }), { evento: 'saiu_de_compra', lugar: mercado });
+  assert.deepEqual(transicaoDeSaida(dentro, { estado: 'fora', movendo: true }), { evento: 'saiu_de_compra', lugar: mercado });
+  assert.equal(transicaoDeSaida(dentro, { estado: 'lugar', lugar: mercado, minutos: 40 }), null);
+  assert.equal(transicaoDeSaida(dentro, { estado: 'sem_sinal' }), null);
+  assert.equal(transicaoDeSaida({ ...dentro, minutos: 4 }, { estado: 'casa' }), null);
+  assert.equal(transicaoDeSaida({ estado: 'lugar', lugar: { id: 'a', tipo: 'academia' }, minutos: 60 }, { estado: 'casa' }), null);
+  assert.equal(transicaoDeSaida(null, { estado: 'casa' }), null);
+  assert.equal(lugarDeCompra({ tipo: 'padaria' }), true);
+  assert.equal(lugarDeCompra({ tipo: 'faculdade' }), false);
+});

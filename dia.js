@@ -14,6 +14,7 @@ import { visaoDe } from './acompanhamento.js';
 import { linhaSemanaLugares } from './lugares.js';
 import { refletirTodos } from './reflexao.js';
 import { fecharPendentes } from './atividades.js';
+import { contextoDoDia, contextoDoDiaDeTodos } from './contexto.js';
 import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta } from './previsao.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
@@ -164,7 +165,8 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       // Momentos memoráveis do dia -> memória de longo prazo (Mongo + Perfis/Nutri-Momentos.md, só acrescenta)
       let momentosDoDia = [];
       try {
-        const momentos = await ia.extrairMomentos({ dia, perfis, historico, refeicoes: compilado.texto });
+        const contextoTodos = await contextoDoDiaDeTodos(perfis, dia).catch(() => '');
+        const momentos = await ia.extrairMomentos({ dia, perfis, historico, refeicoes: compilado.texto, contexto: contextoTodos });
         momentosDoDia = momentos;
         if (momentos.length) {
           await registrarMomentos(momentos);
@@ -201,7 +203,7 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
         try {
           const notasAtuais = await notasDe(p);
           const dossieDocs = (await dossieDe(p)).split('--- Suas notas sobre')[0];
-          const notas = await ia.atualizarNotas({ perfil: p, notasAtuais, dossieDocs, historico, dia, refeicoes: compilado.texto });
+          const notas = await ia.atualizarNotas({ perfil: p, notasAtuais, dossieDocs, historico, dia, refeicoes: compilado.texto, contexto: await contextoDoDia(p, dia).catch(() => '') });
           const encolheuDemais = notasAtuais.trim().length > 300 && (notas?.trim().length || 0) < notasAtuais.trim().length * 0.4;
           if (encolheuDemais) console.warn(`[pessoas] notas de ${p.nome} descartadas: reescrita perdeu mais de 60% do conteúdo`);
           if (notas?.trim() && !encolheuDemais && notas.trim() !== notasAtuais.trim()) {
@@ -218,7 +220,7 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       // Diário pessoal dela (só acrescenta): Mongo + Perfis/Nutri-Diario.md
       let entradaDiario = '';
       try {
-        let entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona, resultados, refeicoes: compilado.texto }))?.trim();
+        let entrada = (await ia.diarioDaNutri({ dia, perfis, historico, personaAtual: estado.persona, resultados, refeicoes: compilado.texto, contexto: await contextoDoDiaDeTodos(perfis, dia).catch(() => '') }))?.trim();
         // rede de segurança: nenhum texto gravado pode ser a palavra de silêncio do papo (já aconteceu com o modelo leve)
         if (entrada && /^sil[êe]ncio\W*$/i.test(entrada)) {
           console.warn('[diario-nutri] modelo devolveu "SILENCIO" no lugar do diário; descartado');
