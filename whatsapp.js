@@ -27,6 +27,17 @@ import { protegerNumeros } from './util.js';
 
 export const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
+// libsignal (por baixo do Baileys) imprime via console.info cada sessão Signal fechada, objeto inteiro, com chave privada
+// dentro ("Closing session: SessionEntry { ... privKey ... }"). Não serve pra nada no log do Render e não é coisa de
+// deixar lá: silencia só essas duas mensagens; o resto do console.info segue normal.
+{
+  const infoOriginal = console.info.bind(console);
+  console.info = (...args) => {
+    if (typeof args[0] === 'string' && /^(Closing session|Removing old closed session):/.test(args[0])) return;
+    infoOriginal(...args);
+  };
+}
+
 // IDs das mensagens que o próprio bot enviou (pra não responder a si mesmo quando roda no número de um dos usuários)
 export const enviadosPeloBot = new Set();
 
