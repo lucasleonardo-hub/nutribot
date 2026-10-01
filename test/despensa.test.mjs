@@ -69,3 +69,16 @@ test('parsearTextoNfce lê o texto da página da SEFAZ (modelo SC/SP): itens, lo
   assert.equal(r.itens[2].valorTotal, 6.99);
   assert.equal(parsearTextoNfce('SecurityVerify Verificando seu navegador').itens.length, 0);
 });
+
+import { nomeBate } from '../despensa.js';
+import { ancorasDe } from '../taco.js';
+test('nomeBate rejeita o lixo do OFF por nome; TACO cobre hortifrúti/carne por 100 g', () => {
+  assert.equal(nomeBate('refrigerante laranjinha pureza', 'Aceite girasol'), false);
+  assert.equal(nomeBate('iogurte grego', 'Iogurte Grego Natural Vigor'), true);
+  assert.equal(nomeBate('pão de forma integral', 'Pão de forma integral Wickbold'), true);
+  assert.equal(nomeBate('whey growth', 'Growth Whey Protein Concentrado'), true);
+  const b = ancorasDe('bergamota')[0] || ancorasDe('tangerina')[0];
+  assert.ok(b && !b.gramas && b.kcal > 20 && b.kcal < 70, `tangerina na TACO: ${JSON.stringify(b)}`);
+  const f = ancorasDe('frango')[0];
+  assert.ok(f && f.p > 15, `frango na TACO: ${JSON.stringify(f)}`);
+});

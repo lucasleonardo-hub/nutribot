@@ -215,3 +215,22 @@ test('temasJaDitos e removerRepeticoes: clima e sono ditos duas vezes seguidas (
   // sem nada repetido, não mexe
   assert.equal(removerRepeticoes('Boa noite, gente!', []).texto, 'Boa noite, gente!');
 });
+
+import { papoCurto, enxugarPapo, pareceMetaConversa as metaC } from '../consciencia.js';
+test('papoCurto e enxugarPapo: "hehe"/"ai demora um pouco" viram resposta curta sem Dica nem links; "apenas testando" é meta', () => {
+  assert.equal(papoCurto('Hehe'), true);
+  assert.equal(papoCurto('Ai demora um pouco pra preparar'), true);
+  assert.equal(papoCurto('Ja mando to em casa'), true);
+  assert.equal(papoCurto('comi arroz e frango'), false);
+  assert.equal(papoCurto('quantas calorias tem?'), false);
+  assert.equal(papoCurto('hehe', { temImagem: true }), false);
+  assert.equal(metaC('Apenas testando aqui'), true);
+  assert.equal(metaC('só um teste'), true);
+  assert.equal(metaC('comi um teste de bolo'), true); // aceito: raro, e cai no caminho leve
+  const longa = 'Paciência, meu engenheiro! A carne não pula sozinha da panela, né? 😅\n\nQuem tá focado na [[Hipertrofia]] sabe que a cozinha dá trabalho.\n\n💡 *Dica:* Se a correria aperta, deixa marmitas prontas no fim de semana.\n\nBora almoçar, criatura!';
+  const curta = enxugarPapo(longa);
+  assert.doesNotMatch(curta, /Dica|\[\[/);
+  assert.match(curta, /^Paciência, meu engenheiro!/);
+  assert.match(curta, /Hipertrofia/); // link vira palavra, sem colchetes
+  assert.equal(curta.split(/\n\s*\n/).length, 2);
+});

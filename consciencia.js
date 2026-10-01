@@ -138,7 +138,7 @@ export function removerFrasesCom(texto, termos) {
 
 // ---------- Conversa SOBRE a bot (bug, ajuste, sistema) e menção a outra refeição ----------
 const RE_META =
-  /\b(bugs?|bugou|bugada|vou ajustar|vou arrumar|vou ver aqui|vou corrigir (ela|isso|o bot|a bot)|arrumar (isso|ela)|ajustar (isso|ela|o bot|a bot|amanh[ãa]|depois|dps)|atualiza[çc][ãa]o|atualizar (ela|o bot|a bot)|deploy|c[óo]digo|codigo|sistema|painel|planilha|compila|banco de dados|servidor|render|prompt|api|prob\w*ma de vis[ãa]o|doidinh\w*|caducando|caducou|alta demanda|rodando (uma )?atualiza|t[áa] rodando|ela (t[áa]|est[áa]|ficou|cismou|pensa|entende|aprende|corrige|errou|confundiu|leu)|coitada|meio estranho|dps ela corrige|depois ela corrige)\b/i;
+  /\b(bugs?|bugou|bugada|vou ajustar|vou arrumar|vou ver aqui|vou corrigir (ela|isso|o bot|a bot)|arrumar (isso|ela)|ajustar (isso|ela|o bot|a bot|amanh[ãa]|depois|dps)|atualiza[çc][ãa]o|atualizar (ela|o bot|a bot)|deploy|c[óo]digo|codigo|sistema|painel|planilha|compila|banco de dados|servidor|render|prompt|api|prob\w*ma de vis[ãa]o|doidinh\w*|caducando|caducou|alta demanda|rodando (uma )?atualiza|t[áa] rodando|ela (t[áa]|est[áa]|ficou|cismou|pensa|entende|aprende|corrige|errou|confundiu|leu)|coitada|meio estranho|dps ela corrige|depois ela corrige|testando|testei|(?:s[óo]|apenas|apenas um|um|fazendo um|fazendo) teste|testar (?:aqui|isso|o app|o bot|a bot|a leitura))\b/i;
 /** A mensagem fala DA bot (bug, ajuste, sistema, "ela cismou"), não de comida? */
 export const pareceMetaConversa = (texto) => RE_META.test(String(texto || ''));
 
@@ -166,6 +166,25 @@ export function blocoLicoes(regras) {
   return `MINHAS LIÇÕES (erros que eu já cometi com este grupo e regras que adotei; valem em TODA resposta, antes de qualquer número ou bronca):\n${lista.map((r) => `- ${r}`).join('\n')}`;
 }
 
+// ---------- Papo curto: "hehe", "ai demora um pouco", "já mando" não merecem bloco, Dica nem sermão ----------
+const RE_COMIDA_CURTA = /\b(comi|almo[çc]|jant|caf[ée]|lanche|ceia|prato|refei[çc]|kcal|calorias?|prote[íi]na|arroz|feij[ãa]o|frango|carne|ovo|p[ãa]o|whey|fruta|salada|pizza|lanche|doce|bolo|suco|refri|cerveja|vinho|[áa]gua)\b/i;
+/** Mensagem curta de conversa, sem comida, sem pergunta, sem número: pede resposta de uma frase. */
+export function papoCurto(texto, { temImagem = false, temAudio = false } = {}) {
+  const t = String(texto || '').trim();
+  if (!t || temImagem || temAudio || t.startsWith('!')) return false;
+  if (/\?/.test(t) || /\d/.test(t) || RE_COMIDA_CURTA.test(t)) return false;
+  return t.split(/\s+/).length <= 8;
+}
+/** Tira de uma resposta a papo curto o que não cabe: blocos (Dica, Veredito, Estimativa), [[links]] e parágrafos além do segundo. */
+export function enxugarPapo(resposta) {
+  const paras = String(resposta || '')
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p && !/^\s*(?:[🕐🍽️🔥⚖️💡📊]|\*?(?:Dica|Sugest[ãa]o|Veredito|Estimativa)\b)/u.test(p));
+  const texto = paras.slice(0, 2).join('\n\n').replace(/\[\[([^\]]+)\]\]/g, '$1').trim();
+  return texto || String(resposta || '').trim();
+}
+
 // ---------- Repetição entre mensagens seguidas (clima, sono, agenda, total do dia ditos duas vezes) ----------
 const CATEGORIAS_CONTEXTO = [
   ['clima', /\b\d{1,2}\s?°\s?c\b|graus|garoa|chuva|chuvisc|friozinho|frio\b|calor[ãa]o|calor\b|tempinho|tempo (?:fechado|abafado|nublado)|nublado|ventando|vento\b|sol forte/i],
@@ -173,6 +192,7 @@ const CATEGORIAS_CONTEXTO = [
   ['agenda', /\bamanh[ãa]\b[^.!?\n]{0,60}\b(aula|reuni[ãa]o|prova|trabalho|compromisso|cedo)\b|\b(aula|reuni[ãa]o|prova) (?:de|às)\b/i],
   ['total', /j[áa] (?:mandou|bateu|comeu|somou|consumiu)[^.!?\n]{0,40}\d[\d.]*\s?kcal|\d[\d.]*\s?kcal (?:pra dentro|no dia|hoje)|\d{2,3}\s?g de \[\[?prote[íi]na\]?\]? hoje/i],
   ['passos', /\d[\d.]*\s?passos/i],
+  ['jargao', /\[\[[^\]]+\]\]|\b(hipertrofia|d[ée]ficit cal[óo]rico|super[áa]vit|perda de peso)\b/i],
 ];
 const norm = (t) => semAcentoC(t).replace(/\[\[|\]\]/g, '').replace(/[*_~`]/g, '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 const PALAVRAS_FRACAS = new Set(['a', 'o', 'e', 'de', 'da', 'do', 'que', 'pra', 'para', 'com', 'em', 'no', 'na', 'um', 'uma', 'se', 'sua', 'seu', 'voce', 'você', 'ja', 'mais', 'por', 'ou', 'os', 'as', 'dos', 'das', 'ao', 'tá', 'ta', 'é', 'eh', 'meu', 'minha', 'esse', 'essa', 'isso']);
@@ -210,7 +230,7 @@ export function temasJaDitos(historico, horaAgora, { janelaMin = 120 } = {}) {
     }
   }
   if (!vistos.size) return '';
-  const nome = { clima: 'clima/temperatura', sono: 'sono curto', agenda: 'agenda de amanhã/aula', total: 'total do dia (kcal/proteína)', passos: 'passos' };
+  const nome = { clima: 'clima/temperatura', sono: 'sono curto', agenda: 'agenda de amanhã/aula', total: 'total do dia (kcal/proteína)', passos: 'passos', jargao: 'objetivo/[[links]] (hipertrofia, proteína...) citados em' };
   return (
     `JÁ DITO POR VOCÊ NAS ÚLTIMAS 2 H (o grupo inteiro leu; NÃO repita nem reformule, nem pra outra pessoa; só volte ao tema se a mensagem atual pedir): ` +
     [...vistos.entries()].map(([c, v]) => `${nome[c]} (${v.n}x, última ${v.ultima})`).join(' · ')

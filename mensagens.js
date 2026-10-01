@@ -18,7 +18,7 @@ import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
 import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarras } from './off.js';
-import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao, temasJaDitos, removerRepeticoes, respostasRecentes } from './consciencia.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao, temasJaDitos, removerRepeticoes, respostasRecentes, papoCurto, enxugarPapo } from './consciencia.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
@@ -927,6 +927,14 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     }
   }
 
+  // Papo curto ("hehe", "ai demora um pouco"): resposta de uma ou duas frases, sem bloco, Dica nem [[links]]
+  if (papoCurto(texto, { temImagem, temAudio }) && !contestacao) {
+    const enxuta = enxugarPapo(resposta);
+    if (enxuta !== resposta.trim()) {
+      console.log(`[consciencia] papo curto de ${perfil.nome}: resposta enxugada de ${resposta.length} pra ${enxuta.length} chars`);
+      resposta = enxuta;
+    }
+  }
   // Repetição: frase (quase) igual a algo dito nas últimas 2 h, ou comentário de clima/sono/agenda que já saiu, não vai de novo
   {
     const rep = removerRepeticoes(resposta, respostasRecentes(historico, hora), { textoPessoa: texto });

@@ -87,7 +87,15 @@ app.post('/nota', express.json({ limit: '2mb' }), async (req, res) => {
     if (!perfil) return res.status(404).json({ ok: false, erro: 'pessoa não cadastrada' });
     if (!req.body?.texto || String(req.body.texto).length < 50) return res.status(400).json({ ok: false, erro: 'texto da nota vazio' });
     const grupo = estado.memoria.grupo;
-    const r = await receberNotaDoApp({ perfil, chave: req.body.chave || null, url: req.body.url || '', texto: req.body.texto, dia: agora().dia, avisarGrupo: grupo ? (t) => enviarZap(grupo, t) : null });
+    const avisarGrupo = grupo
+      ? async (t) => {
+          await enviarZap(grupo, t);
+          // a memória do dia precisa saber que o cupom entrou, senão o "só testando" seguinte vira cobrança de almoço
+          await lembrar({ hora: agora().hora, jid: perfil.jids?.[0], nome: perfil.nome, texto: '(leu o cupom do mercado pelo app Relógio)', tipo: 'texto' }).catch(() => {});
+          await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: t, tipo: 'bot' }).catch(() => {});
+        }
+      : null;
+    const r = await receberNotaDoApp({ perfil, chave: req.body.chave || null, url: req.body.url || '', texto: req.body.texto, dia: agora().dia, avisarGrupo });
     console.log(`[despensa] nota pelo app de ${perfil.nome}: ${r.ok ? `${r.itens} itens` : r.erro}`);
     res.status(r.ok ? 200 : 422).json(r);
   } catch (e) {

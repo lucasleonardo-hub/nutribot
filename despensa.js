@@ -8,6 +8,7 @@ import jsQR from 'jsqr';
 import { Jimp } from 'jimp';
 import { colecao, listarPerfis } from './mongo.js';
 import { buscarPorCodigo, buscarPorNome } from './off.js';
+import { ancorasDe } from './taco.js';
 import { enviar } from './whatsapp.js';
 import { estado } from './estado.js';
 import { agora, fusoDe, diasAnteriores } from './util.js';
@@ -152,6 +153,16 @@ export async function limparDespensa(perfil) {
   return (a.deletedCount || 0) + (b.deletedCount || 0);
 }
 
+/** Puro. O produto achado por nome no OFF bate com o item? Metade das palavras do item (3+ letras) precisa aparecer no nome do produto. */
+export function nomeBate(item, nomeProduto) {
+  const norm = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const palavras = norm(item).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+  if (!palavras.length) return false;
+  const nome = norm(nomeProduto);
+  const acertos = palavras.filter((w) => nome.includes(w)).length;
+  return acertos / palavras.length >= 0.5;
+}
+
 // ---------- padronização + nutrição ----------
 /**
  * Itens crus do cupom -> itens canônicos (IA leve) + tabela nutricional (Open Food Facts por código de barras ou nome).
@@ -181,14 +192,21 @@ export async function padronizarItens(cru, { perfil, dia } = {}) {
     if (!item.item) continue;
     if (item.alimento) {
       try {
-        let prod = item.ean ? await buscarPorCodigo(item.ean).catch(() => null) : null;
-        if (!prod && buscasNome < OFF_POR_NOTA) {
+        // in natura (fruta, verdura, legume, carne, frango, peixe, ovo): tabela TACO, não busca por nome no OFF
+        // (a busca por nome devolvia "Aceite girasol" pra refrigerante e "Refrigerante com Bergamota" pra bergamota)
+        const inNatura = ['fruta', 'verdura', 'legume', 'carne', 'frango', 'peixe', 'ovo'].includes(item.categoria);
+        const taco = ancorasDe(item.item)[0];
+        if (inNatura && taco && !taco.gramas) item.nutri = { kcal: taco.kcal, p: taco.p, c: taco.c, g: taco.g, fonte: `TACO: ${taco.nome}` };
+        let prod = !item.nutri && item.ean ? await buscarPorCodigo(item.ean).catch(() => null) : null;
+        if (!item.nutri && !prod && !inNatura && buscasNome < OFF_POR_NOTA) {
           buscasNome += 1;
-          prod = (await buscarPorNome(item.item, { limite: 1 }).catch(() => []))?.[0] || null;
+          const achado = (await buscarPorNome(item.item, { limite: 3 }).catch(() => []))?.find((p) => nomeBate(item.item, p.nome)) || null;
+          prod = achado;
         }
-        if (prod?.kcal != null) item.nutri = { kcal: Math.round(prod.kcal), p: Math.round(prod.proteina ?? prod.p ?? 0), c: Math.round(prod.carbo ?? prod.c ?? 0), g: Math.round(prod.gordura ?? prod.g ?? 0), fonte: prod.nome || 'Open Food Facts' };
+        if (!item.nutri && prod?.kcal != null) item.nutri = { kcal: Math.round(prod.kcal), p: Math.round(prod.proteina ?? prod.p ?? 0), c: Math.round(prod.carbo ?? prod.c ?? 0), g: Math.round(prod.gordura ?? prod.g ?? 0), fonte: prod.nome || 'Open Food Facts' };
+        if (!item.nutri && taco && !taco.gramas) item.nutri = { kcal: taco.kcal, p: taco.p, c: taco.c, g: taco.g, fonte: `TACO: ${taco.nome}` };
       } catch (e) {
-        console.warn('[despensa] OFF:', e.message);
+        console.warn('[despensa] nutrição:', e.message);
       }
     }
     saida.push(item);
