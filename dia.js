@@ -14,7 +14,7 @@ import { visaoDe } from './acompanhamento.js';
 import { linhaSemanaLugares } from './lugares.js';
 import { refletirTodos } from './reflexao.js';
 import { fecharPendentes } from './atividades.js';
-import { contextoDoDia, contextoDoDiaDeTodos, blocoForcaRecuperacao } from './contexto.js';
+import { contextoDoDia, contextoDoDiaDeTodos, analiseForca, gerarSugestoesCarga, textoSugestoesCarga } from './contexto.js';
 import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta, linhaDeTendencia } from './previsao.js';
 import { proporEtapa, metaBalancoPara, tendenciaGordura } from './resumo.js';
 import { indexarDia } from './memoria_semantica.js';
@@ -362,8 +362,28 @@ export async function fecharSemana({ dia, perfis, grupo }) {
             const faixa = metaBalancoPara({ objetivo: p.objetivo, peso: nova.pesoInicial, metaPeso: p.metaPeso, metaPrazo: p.metaPrazo, dia, ritmo: p.ritmo, metaModo: p.metaModo, gorduraTend: tendenciaGordura(pes30) });
             const tend = linhaDeTendencia({ pesagens: pes60, perfil: p, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
             if (tend) linhas.push(tend.texto);
-            const forca = await blocoForcaRecuperacao(p, dia, { magraSem: tend?.magraSem ?? null }).catch(() => '');
-            if (forca) linhas.push(forca);
+            const forca = await analiseForca(p, dia, { magraSem: tend?.magraSem ?? null }).catch(() => null);
+            if (forca?.texto) linhas.push(forca.texto);
+            // ciclo das sugestões de carga: fecha as da semana passada com resultado e, se a leitura permitir, propõe as novas
+            if (forca?.prog) {
+              const antigas = (forca.sugestoes || []).filter((s) => s.status !== 'encerrada');
+              if (antigas.length) {
+                const batidas = antigas.filter((s) => s.status === 'batida');
+                const naoFez = antigas.filter((s) => s.status === 'aberta');
+                const tentou = antigas.filter((s) => s.status === 'tentando');
+                linhas.push(`RESULTADO DAS SUGESTÕES DE CARGA DA SEMANA PASSADA: ${batidas.length} de ${antigas.length} batida(s)${batidas.length ? ` (${batidas.map((s) => `${s.exercicio} ${s.como}`).join('; ')})` : ''}${tentou.length ? `; tentou sem subir: ${tentou.map((s) => s.exercicio).join(', ')}` : ''}${naoFez.length ? `; não fez o exercício: ${naoFez.map((s) => s.exercicio).join(', ')}` : ''}. Comemore o que bateu; no que não subiu, leia o motivo pelo bloco FORÇA x RECUPERAÇÃO (sono, comida) em vez de cobrar.`);
+              }
+              let sugestoes = antigas.map((s) => ({ ...s, status: 'encerrada', encerradaEm: dia }));
+              if (forca.podePuxar) {
+                const novas = gerarSugestoesCarga(forca.prog.parados, { dia, max: 3 });
+                if (novas.length) {
+                  sugestoes = [...sugestoes.slice(-12), ...novas];
+                  linhas.push(`SUGESTÕES DE CARGA PARA ESTA SEMANA (a leitura permite: sono, comida e massa magra em dia; anuncie como meta da semana, uma mudança por exercício):\n${novas.map((s) => `- ${s.exercicio}: de ${String(s.deKg).replace('.', ',')} kg×${s.deReps} para ${String(s.paraKg).replace('.', ',')} kg (ou ${s.paraReps} repetições com ${String(s.deKg).replace('.', ',')} kg)`).join('\n')}`);
+                  console.log(`[carga] ${p.nome}: ${novas.length} sugestão(ões) de carga pra semana`);
+                }
+              } else if (forca.prog.parados.length) linhas.push('SEM SUGESTÃO DE CARGA ESTA SEMANA: há exercícios parados, mas a leitura pede recuperação ou comida antes de puxar; diga isso com os números.');
+              if (antigas.length || sugestoes.length !== (p.sugestoesCarga || []).length) await salvarPerfil({ jids: p.jids, sugestoesCarga: sugestoes }).catch(() => {});
+            }
           } catch (e) {
             console.warn('[tendencia]', e.message);
           }

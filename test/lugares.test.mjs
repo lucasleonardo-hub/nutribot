@@ -398,3 +398,46 @@ test('progressaoForca ignora exercício sem carga (peso do corpo) e mostra reps 
   assert.equal(pant.situacao, 'subindo');
   assert.equal(pant.reps, 18);
 });
+
+import { gerarSugestoesCarga, conferirSugestoes, textoSugestoesCarga, incrementoDeCarga } from '../contexto.js';
+test('sugestões de carga: incremento por tipo, geração a partir dos parados e conferência contra o Hevy', () => {
+  assert.equal(incrementoDeCarga('Supino Inclinado (Halter)', 24), 2);
+  assert.equal(incrementoDeCarga('Leg Press 45º (Máquina)', 190), 5);
+  assert.equal(incrementoDeCarga('Agachamento (Barra)', 30), 2.5);
+  assert.equal(incrementoDeCarga('Elevação Lateral (Halter)', 12), 1);
+  const parados = [
+    { title: 'Supino Inclinado (Halter)', melhor: 24, reps: 12, semanasParado: 3 },
+    { title: 'Agachamento (Barra)', melhor: 30, reps: 10, semanasParado: 3 },
+    { title: 'Prancha', melhor: 0, reps: 0, semanasParado: 6 },
+    { title: 'Leg Press 45º (Máquina)', melhor: 190, reps: 12, semanasParado: 2 },
+    { title: 'Tríceps na Polia', melhor: 28, reps: 15, semanasParado: 3 },
+  ];
+  const sug = gerarSugestoesCarga(parados, { dia: '2026-10-04', max: 3 });
+  assert.equal(sug.length, 3);
+  assert.equal(sug.some((s) => s.exercicio === 'Prancha'), false);
+  const inc = sug.find((s) => s.exercicio === 'Supino Inclinado (Halter)');
+  assert.equal(inc.paraKg, 26);
+  assert.equal(inc.paraReps, 14);
+  assert.equal(inc.status, 'aberta');
+  // conferência: subiu o inclinado pra 26 no dia 06/10; agachamento feito 2x sem subir; tríceps não feito
+  const sessoes = [
+    { inicio: '2026-10-06T10:00:00Z', exercicios: [{ title: 'Supino Inclinado (Halter)', sets: [{ type: 'normal', weight_kg: 26, reps: 9 }] }, { title: 'Agachamento (Barra)', sets: [{ type: 'normal', weight_kg: 30, reps: 10 }] }] },
+    { inicio: '2026-10-08T10:00:00Z', exercicios: [{ title: 'Agachamento (Barra)', sets: [{ type: 'normal', weight_kg: 30, reps: 11 }] }] },
+    { inicio: '2026-10-03T10:00:00Z', exercicios: [{ title: 'Tríceps na Polia', sets: [{ type: 'normal', weight_kg: 40, reps: 10 }] }] }, // antes da sugestão: não conta
+  ];
+  const c = conferirSugestoes(sug, sessoes);
+  const porEx = Object.fromEntries(c.map((s) => [s.exercicio, s]));
+  assert.equal(porEx['Supino Inclinado (Halter)'].status, 'batida');
+  assert.equal(porEx['Supino Inclinado (Halter)'].batidaEm, '2026-10-06');
+  assert.equal(porEx['Agachamento (Barra)'].status, 'tentando');
+  assert.equal(porEx['Agachamento (Barra)'].tentativas, 2);
+  assert.equal(porEx['Tríceps na Polia'].status, 'aberta');
+  const t = textoSugestoesCarga(c, { hoje: '2026-10-09' });
+  assert.match(t, /Supino Inclinado \(Halter\): de 24 kg×12 para 26 kg \(ou 14 repetições com 24 kg\) → BATEU em 06\/10 \(26 kg\) ✓/);
+  assert.match(t, /Agachamento \(Barra\).*fez o exercício 2x e ainda não subiu/);
+  assert.match(t, /Tríceps na Polia.*ainda não fez o exercício/);
+  // reps na carga de partida também batem
+  const c2 = conferirSugestoes(sug, [{ inicio: '2026-10-07T10:00:00Z', exercicios: [{ title: 'Tríceps na Polia', sets: [{ type: 'normal', weight_kg: 28, reps: 17 }] }] }]);
+  assert.equal(c2.find((s) => s.exercicio === 'Tríceps na Polia').status, 'batida');
+  assert.equal(textoSugestoesCarga([]), '');
+});
