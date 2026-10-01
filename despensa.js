@@ -74,6 +74,38 @@ const somaDias = (dia, n) => {
 };
 const fmtQtd = (q, u) => (q == null ? '' : `${Number.isInteger(q) ? q : String(Math.round(q * 100) / 100).replace('.', ',')} ${u || 'un'}`.trim());
 
+// ---------- consulta ao site da SEFAZ (teste e, se passar, caminho principal) ----------
+const UA_NAV = 'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36';
+const textoDeHtml = (html) =>
+  String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<\/(tr|p|div|li|h\d)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n')
+    .trim();
+/**
+ * Abre o link do QR como um navegador de celular faria (sem resolver desafio nenhum). Devolve
+ * { status: 'ok' | 'captcha' | 'erro', http, itensEstimados, amostra, texto } sem gravar nada.
+ */
+export async function testarConsultaSefaz(url) {
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': UA_NAV, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'pt-BR,pt;q=0.9' }, redirect: 'follow', signal: AbortSignal.timeout(25000) });
+    const html = await r.text();
+    const captcha = /SecurityVerify|turnstile|hcaptcha|recaptcha|CaptchaField/i.test(html);
+    const texto = textoDeHtml(html);
+    // linhas que parecem item de cupom: descrição + quantidade + "UN/KG" + valor
+    const itensEstimados = (texto.match(/(?:Qtde\.?|Qtd\.?|Quantidade)[^\n]{0,40}\d/gi) || []).length || (texto.match(/\b(UN|KG|PC|L|G|ML)\b[^\n]{0,30}\d+[.,]\d{2}/g) || []).length;
+    return { status: captcha ? 'captcha' : r.ok && itensEstimados ? 'ok' : r.ok ? 'sem_itens' : 'erro', http: r.status, urlFinal: r.url, itensEstimados, amostra: texto.slice(0, 700), texto };
+  } catch (e) {
+    return { status: 'erro', erro: e.message, itensEstimados: 0, amostra: '' };
+  }
+}
+
 // ---------- padronização + nutrição ----------
 /**
  * Itens crus do cupom -> itens canônicos (IA leve) + tabela nutricional (Open Food Facts por código de barras ou nome).

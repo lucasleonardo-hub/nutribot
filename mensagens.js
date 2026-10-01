@@ -23,7 +23,7 @@ import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
 import { responderPendente, registrarRelato } from './atividades.js';
-import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, aplicarLinhaDespensa, blocoDespensa } from './despensa.js';
+import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, aplicarLinhaDespensa, blocoDespensa, testarConsultaSefaz } from './despensa.js';
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 
@@ -413,11 +413,36 @@ async function tratarPrivado(msg) {
   if (!ADMIN_PRIVADO || msg.key.fromMe) return;
   const conteudo = extractMessageContent(msg.message);
   const texto = (conteudo?.conversation || conteudo?.extendedTextMessage?.text || conteudo?.imageMessage?.caption || '').trim();
-  if (!texto) return;
+  const temFoto = Boolean(conteudo?.imageMessage);
+  if (!texto && !temFoto) return;
   const jidsPriv = jidsDoPrivado(msg.key);
   const perfil = await buscarPerfil(jidsPriv).catch(() => null);
   const ehAdmin = jidsPriv.includes(ADMIN_PRIVADO) || Boolean(perfil?.jids?.includes(ADMIN_PRIVADO));
   if (!ehAdmin) return;
+  // ---------- modo de teste do cupom (só no privado do admin, nada é gravado): foto com QR ou link da SEFAZ ----------
+  if (temFoto || /^https?:\/\/\S+/i.test(texto)) {
+    const jidPriv = msg.key.remoteJid;
+    try {
+      let qrTexto = null;
+      if (temFoto) qrTexto = await lerQr(await baixarMidia(msg));
+      const q = interpretarQr(qrTexto || texto);
+      if (!q) {
+        await enviar(jidPriv, temFoto ? 'Não achei QR legível nessa foto (teste; nada gravado). Tenta com o QR maior e sem reflexo, ou cola o link que a câmera abre.' : 'Esse link não tem chave de NFC-e.', msg, { rapido: true });
+        return;
+      }
+      await enviar(jidPriv, `QR lido ✅ (teste, nada gravado)\nUF ${q.uf || '?'} · emitida em ${q.emitidaEm} · chave ${q.chave.slice(0, 6)}…\n${q.url ? `Link: ${q.url.slice(0, 80)}…\nAbrindo o site da SEFAZ a partir do servidor...` : 'Sem link no QR (só a chave).'}`, msg, { rapido: true });
+      if (!q.url) return;
+      const t = await testarConsultaSefaz(q.url);
+      const veredito = t.status === 'ok' ? `✅ O site abriu SEM desafio e mostrou a nota: ~${t.itensEstimados} item(ns) detectado(s).` : t.status === 'captcha' ? '⛔ O site redirecionou para a verificação anti-robô (Cloudflare Turnstile). Pelo servidor não passa.' : t.status === 'sem_itens' ? `⚠️ O site respondeu (HTTP ${t.http}) mas não reconheci itens no HTML.` : `⚠️ Erro ao abrir: ${t.erro || `HTTP ${t.http}`}`;
+      await enviar(jidPriv, `${veredito}\n\nAmostra do que veio:\n${(t.amostra || '(vazio)').slice(0, 600)}`, msg, { rapido: true });
+      console.log(`[despensa] teste SEFAZ ${q.uf}: ${t.status} (http ${t.http}, itens ~${t.itensEstimados})`);
+    } catch (e) {
+      console.error('[despensa] teste privado:', e.message);
+      await enviar(jidPriv, `Deu erro no teste: ${e.message}`, msg, { rapido: true });
+    }
+    return;
+  }
+  if (!texto) return;
   await garantirDiaAtual();
   const { dia } = agora();
   const jidPrivado = msg.key.remoteJid;
