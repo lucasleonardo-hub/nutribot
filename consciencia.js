@@ -166,6 +166,90 @@ export function blocoLicoes(regras) {
   return `MINHAS LIÇÕES (erros que eu já cometi com este grupo e regras que adotei; valem em TODA resposta, antes de qualquer número ou bronca):\n${lista.map((r) => `- ${r}`).join('\n')}`;
 }
 
+// ---------- Repetição entre mensagens seguidas (clima, sono, agenda, total do dia ditos duas vezes) ----------
+const CATEGORIAS_CONTEXTO = [
+  ['clima', /\b\d{1,2}\s?°\s?c\b|graus|garoa|chuva|chuvisc|friozinho|frio\b|calor[ãa]o|calor\b|tempinho|tempo (?:fechado|abafado|nublado)|nublado|ventando|vento\b|sol forte/i],
+  ['sono', /\bdormiu?\b|\bsono\b|noite mal dormida|\b\dh\d{2} (?:de sono|na última noite)|menos de \dh/i],
+  ['agenda', /\bamanh[ãa]\b[^.!?\n]{0,60}\b(aula|reuni[ãa]o|prova|trabalho|compromisso|cedo)\b|\b(aula|reuni[ãa]o|prova) (?:de|às)\b/i],
+  ['total', /j[áa] (?:mandou|bateu|comeu|somou|consumiu)[^.!?\n]{0,40}\d[\d.]*\s?kcal|\d[\d.]*\s?kcal (?:pra dentro|no dia|hoje)|\d{2,3}\s?g de \[\[?prote[íi]na\]?\]? hoje/i],
+  ['passos', /\d[\d.]*\s?passos/i],
+];
+const norm = (t) => semAcentoC(t).replace(/\[\[|\]\]/g, '').replace(/[*_~`]/g, '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+const PALAVRAS_FRACAS = new Set(['a', 'o', 'e', 'de', 'da', 'do', 'que', 'pra', 'para', 'com', 'em', 'no', 'na', 'um', 'uma', 'se', 'sua', 'seu', 'voce', 'você', 'ja', 'mais', 'por', 'ou', 'os', 'as', 'dos', 'das', 'ao', 'tá', 'ta', 'é', 'eh', 'meu', 'minha', 'esse', 'essa', 'isso']);
+const palavras = (t) => new Set(norm(t).split(' ').filter((w) => w.length > 2 && !PALAVRAS_FRACAS.has(w)));
+const jaccard = (a, b) => {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const w of a) if (b.has(w)) inter++;
+  return inter / (a.size + b.size - inter);
+};
+const LINHA_ESTRUTURADA = /^\s*(?:[🕐🍽️🔥⚖️💡📊🛒📍🪞🏐]|\*?(?:Calorias|Prote[íi]na|Carboidratos|Gorduras|Refei[çc][ãa]o|Estimativa|Veredito|Dica|Sugest[ãa]o)\b)/u;
+const frasesDe = (t) => String(t || '').split(/(?<=[.!?…])\s+(?=[A-ZÀ-Ú"“(*_\d])/u);
+
+/** Mensagens do bot nos últimos `janelaMin` minutos (hora "HH:MM" no mesmo dia). */
+export function respostasRecentes(historico, horaAgora, janelaMin = 120) {
+  const agoraMin = _min(horaAgora);
+  return (historico || []).filter((m) => m.tipo === 'bot' && m.texto && !/^\(/.test(m.texto) && agoraMin - _min(m.hora) >= 0 && agoraMin - _min(m.hora) <= janelaMin);
+}
+const _min = (h) => {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(h || ''));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : -1e9;
+};
+
+/** Resumo pro prompt: que comentários de contexto já saíram nas últimas 2 h e quantas vezes. '' se nada. */
+export function temasJaDitos(historico, horaAgora, { janelaMin = 120 } = {}) {
+  const recentes = respostasRecentes(historico, horaAgora, janelaMin);
+  const vistos = new Map();
+  for (const m of recentes) {
+    for (const [cat, re] of CATEGORIAS_CONTEXTO) {
+      if (!re.test(m.texto)) continue;
+      const v = vistos.get(cat) || { n: 0, ultima: m.hora, para: new Set() };
+      v.n += 1;
+      v.ultima = m.hora;
+      vistos.set(cat, v);
+    }
+  }
+  if (!vistos.size) return '';
+  const nome = { clima: 'clima/temperatura', sono: 'sono curto', agenda: 'agenda de amanhã/aula', total: 'total do dia (kcal/proteína)', passos: 'passos' };
+  return (
+    `JÁ DITO POR VOCÊ NAS ÚLTIMAS 2 H (o grupo inteiro leu; NÃO repita nem reformule, nem pra outra pessoa; só volte ao tema se a mensagem atual pedir): ` +
+    [...vistos.entries()].map(([c, v]) => `${nome[c]} (${v.n}x, última ${v.ultima})`).join(' · ')
+  );
+}
+
+/**
+ * Tira da resposta as frases que repetem (quase) literalmente algo dito nas últimas respostas, e os comentários de clima,
+ * sono e agenda que já saíram na janela (a menos que a pessoa tenha puxado o assunto). Linhas do bloco estruturado ficam.
+ */
+export function removerRepeticoes(resposta, anteriores, { textoPessoa = '', limiar = 0.6 } = {}) {
+  const prev = (anteriores || []).flatMap((m) => frasesDe(m.texto)).map((f) => ({ f, p: palavras(f) })).filter((x) => x.p.size >= 5);
+  const catsAnteriores = new Set();
+  for (const m of anteriores || []) for (const [cat, re] of CATEGORIAS_CONTEXTO) if (re.test(m.texto)) catsAnteriores.add(cat);
+  // com borda de palavra: "hipercalórico" não é falar de calor, "insônia" é falar de sono
+  const pessoaFalou = (cat) => (cat === 'clima' ? /\b(clima|tempo|frio|friozinho|calor|calor[ãa]o|chuva|garoa|graus)\b|°/i : cat === 'sono' ? /\b(dormi\w*|sono|ins[ôo]nia|cansad\w*|acordei)\b/i : cat === 'agenda' ? /\b(amanh[ãa]|aula|prova|reuni[ãa]o)\b/i : /./).test(textoPessoa);
+  const removidas = [];
+  const linhas = String(resposta || '').split('\n');
+  const saida = linhas.map((linha) => {
+    if (!linha.trim() || LINHA_ESTRUTURADA.test(linha)) return linha;
+    const frases = frasesDe(linha);
+    if (frases.length === 1 && palavras(linha).size < 5) return linha;
+    const mantidas = frases.filter((fr) => {
+      const p = palavras(fr);
+      if (p.size >= 5 && prev.some((x) => jaccard(p, x.p) >= limiar)) return removidas.push(fr), false;
+      for (const [cat, re] of CATEGORIAS_CONTEXTO) {
+        if (['clima', 'sono', 'agenda'].includes(cat) && catsAnteriores.has(cat) && re.test(fr) && !pessoaFalou(cat)) return removidas.push(fr), false;
+      }
+      return true;
+    });
+    return mantidas.join(' ');
+  });
+  let texto = saida.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  // conector órfão no começo de linha ("Aliás, falando em sono," sem o resto) sai junto
+  texto = texto.replace(/^(?:ali[áa]s|e|mas|por[ée]m|al[ée]m disso)[,:]?\s*$/gim, '').replace(/\n{3,}/g, '\n\n').trim();
+  if (!texto) return { texto: resposta, removidas: [] };
+  return { texto, removidas };
+}
+
 // ---------- Oferta de sexta do plano da semana: resposta de aceite ----------
 // aceite curto e inequívoco ("quero", "bora", "manda aí", "pode montar") ou frase que fala do plano/lista ("quero o plano, orçamento curto").
 // "eu almocei arroz" ou "pode me dizer as calorias?" não podem virar plano só porque a oferta está aberta.

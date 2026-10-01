@@ -178,3 +178,40 @@ test('atividades: kcal por MET, dias, presença pela localização, soma no gast
   assert.equal(lerSimNao('fui'), true);
   assert.equal(lerSimNao('comi arroz com frango e salada no almoço'), null);
 });
+
+import { temasJaDitos, removerRepeticoes, respostasRecentes } from '../consciencia.js';
+test('temasJaDitos e removerRepeticoes: clima e sono ditos duas vezes seguidas (30/09) caem na segunda', () => {
+  const historico = [
+    { hora: '21:06', nome: 'Dona Benta', tipo: 'bot', texto: 'Eita que a quarta-feira tá agitada! Com esse friozinho de 16°C e garoa em Floripa, nada melhor do que uma janta quentinha pra fechar o dia. Manda a foto!' },
+    { hora: '21:14', nome: 'Dona Benta', tipo: 'bot', texto: 'Papo reto: não toma agora! Você já mandou 3.633 kcal pra dentro hoje em 6 refeições. E o seu relógio já vem acusando que você dorme menos de 6h por noite, né?' },
+    { hora: '19:00', nome: 'Dona Benta', tipo: 'bot', texto: 'Mensagem velha com chuva e frio que já saiu da janela.' },
+    { hora: '21:10', nome: 'Lucas', tipo: 'pessoa', texto: 'acabei de comer' },
+  ];
+  const tema = temasJaDitos(historico, '21:16');
+  assert.match(tema, /clima\/temperatura \(1x, última 21:06\)/);
+  assert.match(tema, /sono curto \(1x, última 21:14\)/);
+  assert.match(tema, /total do dia/);
+  assert.equal(respostasRecentes(historico, '21:16').length, 2);
+  const resposta =
+    'Aí sim, meu engenheiro! Orgulho da nutricionista aqui! 👏✨\n\n' +
+    'Como você já bateu 3.633 kcal e impressionantes 239 g de [[Proteína]] hoje, o seu superávit tá garantido.\n\n' +
+    'Aliás, falando em sono, o relógio me contou que você dormiu só 5h42 na última noite. Com esse friozinho de 16°C em Floripa, aproveita que tá em casa cedo pra deitar mais cedo. Amanhã 08h20 já tem aula de Cálculo Numérico, então o descanso vai ser o seu maior suplemento.\n\n' +
+    '🔥 *Estimativa:*\nCalorias: *950 kcal*\n💡 *Dica:* Agora é só tomar água e dormir.';
+  const r = removerRepeticoes(resposta, respostasRecentes(historico, '21:16'), { textoPessoa: 'Vou confiar em vc então e n tomar o hipercalorico' });
+  assert.doesNotMatch(r.texto, /16°C|garoa/);
+  assert.doesNotMatch(r.texto, /dormiu só 5h42/);
+  assert.match(r.texto, /aula de Cálculo/); // agenda ainda não tinha sido citada: primeira menção fica
+  assert.match(r.texto, /Orgulho da nutricionista/);
+  assert.match(r.texto, /Calorias: \*950 kcal\*/);
+  assert.match(r.texto, /💡 \*Dica:\* Agora é só tomar água e dormir\./);
+  assert.ok(r.removidas.length >= 2, `removidas: ${r.removidas.length}`);
+  // se a pessoa puxou o assunto do sono, o comentário fica
+  const r2 = removerRepeticoes('Você dormiu só 5h42 na última noite, por isso a fome.', respostasRecentes(historico, '21:16'), { textoPessoa: 'dormi mal hoje, isso explica a fome?' });
+  assert.match(r2.texto, /dormiu só 5h42/);
+  // frase quase igual a uma anterior cai
+  const r3 = removerRepeticoes('Você já mandou 3.633 kcal pra dentro hoje em 6 refeições, criatura. Bora dormir.', respostasRecentes(historico, '21:16'));
+  assert.doesNotMatch(r3.texto, /3\.633/);
+  assert.match(r3.texto, /Bora dormir/);
+  // sem nada repetido, não mexe
+  assert.equal(removerRepeticoes('Boa noite, gente!', []).texto, 'Boa noite, gente!');
+});
