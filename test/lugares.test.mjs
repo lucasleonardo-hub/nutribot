@@ -209,3 +209,14 @@ test('roteiroDoDia cruza padrão de lugares, agenda e treino e aponta janela ape
   assert.match(r, /JANELAS APERTADAS[^\n]*12:36→14:00 \(84 min entre faculdade UFSC e aula: Aula de Madeira\)/);
   assert.equal(roteiroDoDia({ lugares, agenda: [], treinos: [], dow: 0 }), '');
 });
+
+import { rotuloLugar } from '../lugares.js';
+test('rotuloLugar: tipo "trabalho" do mapa não vira o trabalho da pessoa; residência alheia e casa de alguém têm rótulo claro', () => {
+  assert.equal(rotuloLugar({ papel: 'casa', tipo: 'residência', bairro: 'Costeira' }), 'casa (Costeira)');
+  assert.equal(rotuloLugar({ papel: 'trabalho', tipo: 'trabalho', nome: 'CELTA', bairro: 'Itacorubi' }), 'trabalho CELTA (Itacorubi)');
+  assert.equal(rotuloLugar({ tipo: 'trabalho', nome: 'Arena Beach', bairro: 'Itacorubi' }), 'prédio comercial Arena Beach (Itacorubi)');
+  assert.equal(rotuloLugar({ tipo: 'residência', bairro: 'Centro' }), 'casa de alguém (Centro)');
+  assert.equal(rotuloLugar({ tipo: 'casa', nome: 'da mãe do Heitor', bairro: 'Coloninha' }), 'casa da mãe do Heitor (Coloninha)');
+  assert.equal(rotuloLugar({ tipo: 'quadra de vôlei de areia', nome: 'Arena Beach', bairro: 'Itacorubi' }), 'quadra de vôlei de areia Arena Beach (Itacorubi)');
+  assert.equal(rotuloLugar({ tipo: 'academia', nome: 'Garra', bairro: 'Córrego Grande' }, { comNome: false }), 'academia (Córrego Grande)');
+});

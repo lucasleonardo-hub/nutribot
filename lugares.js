@@ -482,12 +482,34 @@ export async function situacaoAtual(perfil, pontosCarregados = null) {
   return { estado: 'fora', desde, minutos, movendo: i === pontos.length - 1 };
 }
 
+/** Quem do grupo (com localização ligada) está a até 150 m da pessoa agora: ["Ale"]. Só primeiros nomes; só pra conversa com ela. */
+export async function companhiaAtual(perfil) {
+  const jid = jidDe(perfil);
+  if (!jid || !perfil.lugaresAtivo) return [];
+  const desde = new Date(Date.now() - ATUAL_MIN * 60000);
+  const [meu, outros] = await Promise.all([
+    colecao('locais_brutos').find({ jid, ts: { $gte: desde } }).sort({ ts: -1 }).limit(1).next(),
+    colecao('locais_brutos').aggregate([{ $match: { jid: { $ne: jid }, ts: { $gte: desde } } }, { $sort: { ts: -1 } }, { $group: { _id: '$jid', lat: { $first: '$lat' }, lon: { $first: '$lon' }, ts: { $first: '$ts' } } }]).toArray(),
+  ]).catch(() => [null, []]);
+  if (!meu || !outros.length) return [];
+  const perto = outros.filter((o) => distanciaM(meu, o) <= RAIO_LUGAR_M);
+  if (!perto.length) return [];
+  const perfis = await colecao('perfis').find({ jids: { $in: perto.map((o) => o._id) } }, { projection: { nome: 1 } }).toArray().catch(() => []);
+  return perfis.map((p) => p.nome.split(' ')[0]);
+}
+
 // ---------- textos ----------
-const rotuloLugar = (l, { comNome = true } = {}) => {
+export const rotuloLugar = (l, { comNome = true } = {}) => {
   if (l.papel === 'casa') return `casa${l.bairro ? ` (${l.bairro})` : ''}`;
-  const tipo = l.papel === 'trabalho' && (!l.tipo || ['trabalho', 'outro', 'residência'].includes(l.tipo)) ? 'trabalho' : l.tipo || 'lugar';
+  const bairro = l.bairro ? ` (${l.bairro})` : '';
+  // "casa da mãe do Heitor", "casa da Ale": tipo "casa" + complemento marcado à mão
+  if (l.tipo === 'casa' && l.nome) return `casa ${l.nome}${bairro}`;
+  let tipo = l.tipo || 'lugar';
+  if (l.papel === 'trabalho') tipo = !l.tipo || ['trabalho', 'outro', 'residência', 'loja', 'café'].includes(l.tipo) ? 'trabalho' : l.tipo;
+  else if (l.tipo === 'trabalho') tipo = 'prédio comercial'; // tipo do mapa (escritório/comercial) sem ser o trabalho dela(e)
+  else if (l.tipo === 'residência') tipo = 'casa de alguém'; // mora em outro lugar; aqui é visita
   const nome = comNome && l.nome && l.nome.toLowerCase() !== tipo ? ` ${l.nome}` : '';
-  return `${tipo}${nome}${l.bairro ? ` (${l.bairro})` : ''}`;
+  return `${tipo}${nome}${bairro}`;
 };
 export const descreverSituacao = (s) => {
   if (!s || s.estado === 'sem_sinal') return s?.ultimo ? `sem sinal do celular desde ${s.ultimo}` : 'sem sinal do celular hoje';
@@ -516,7 +538,7 @@ const ultimos7 = (visitas, lugares) => {
 export async function contextoLugares(perfil) {
   if (!perfil?.lugaresAtivo) return null;
   const jid = jidDe(perfil);
-  const [situacao, visitas] = await Promise.all([situacaoAtual(perfil).catch(() => null), visitasRecentes(jid, 28).catch(() => [])]);
+  const [situacao, visitas, companhia] = await Promise.all([situacaoAtual(perfil).catch(() => null), visitasRecentes(jid, 28).catch(() => []), companhiaAtual(perfil).catch(() => [])]);
   const lugares = perfil.lugares || [];
   const linhas = lugares
     .filter((l) => l.visitas >= 2 || l.papel || l.manual)
@@ -525,7 +547,7 @@ export async function contextoLugares(perfil) {
   const semana = ultimos7(visitas, lugares);
   const bloco =
     `LUGARES DE ${perfil.nome.split(' ')[0]} (localização aproximada do celular DELA(E); só existe pra falar COM ELA(E)):\n` +
-    `- Agora: ${descreverSituacao(situacao)}\n` +
+    `- Agora: ${descreverSituacao(situacao)}${companhia.length ? `, junto de ${companhia.join(' e ')} (do grupo; pode comentar com naturalidade, sem virar vigilância)` : ''}\n` +
     (linhas.length ? `Lugares que frequenta:\n${linhas.join('\n')}\n` : 'Ainda não há lugares com padrão (poucos dias de dados).\n') +
     (semana.length ? `Últimos 7 dias fora de casa: ${semana.join(' · ')}` : '');
   return { bloco, situacao, semana };
@@ -542,12 +564,12 @@ export async function linhaSemanaLugares(perfil) {
 /** Texto do !lugares (pra própria pessoa). */
 export async function lugaresZap(perfil) {
   if (!perfil?.lugaresAtivo) return 'Você ainda não ligou a localização no app Relógio (botão 4). Quando ligar, em uns dias eu aprendo teus lugares: casa, trabalho, academia, onde almoça fora.';
-  const ctx = await contextoLugares(perfil);
+  const [ctx, companhia] = await Promise.all([contextoLugares(perfil), companhiaAtual(perfil).catch(() => [])]);
   const lugares = (perfil.lugares || []).filter((l) => l.visitas >= 2 || l.papel || l.manual).slice(0, 12);
   const linhas = lugares.map((l) => `- *${rotuloLugar(l)}*\n${l.padrao || 'sem padrão ainda'}\n${l.visitas} visita(s) em ${l.dias} dia(s)${l.ultimaVez ? ` · última ${l.ultimaVez.slice(8, 10)}/${l.ultimaVez.slice(5, 7)}` : ''}`);
   return (
     `📍 *Teus lugares*\n\n` +
-    `*Agora*\n${descreverSituacao(ctx?.situacao)}\n\n` +
+    `*Agora*\n${descreverSituacao(ctx?.situacao)}${companhia.length ? `, junto de ${companhia.join(' e ')}` : ''}\n\n` +
     (linhas.length ? `*Lugares que aprendi*\n${linhas.join('\n\n')}\n\n` : 'Ainda não tenho lugares com padrão. Em alguns dias de uso aparece.\n\n') +
     (ctx?.semana?.length ? `*Últimos 7 dias fora de casa*\n${ctx.semana.map((s) => `- ${s}`).join('\n')}\n\n` : '') +
     `_Só eu vejo isso, e só falo disso com você. "!lugares aqui é academia X" corrige o lugar onde você está; "!lugares casa" marca onde você está como casa; "!lugares esquecer" apaga tudo._`
