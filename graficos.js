@@ -28,6 +28,8 @@ export function configGrafico({ nome, refeicoes = [], pesagens = [], gastos, alv
     protPorDia.set(r.dia, (protPorDia.get(r.dia) || 0) + (r.estimativa.p || 0));
   }
   const pesoPorDia = new Map(pesagens.filter((p) => p.peso && eixo.includes(p.dia)).map((p) => [p.dia, p.peso]));
+  // massa magra (peso x (1 - gordura)) quando a bioimpedância do relógio trouxe gordura: a linha que diz se o ganho é limpo
+  const magraPorDia = new Map(pesagens.filter((p) => p.peso && p.gordura != null && eixo.includes(p.dia)).map((p) => [p.dia, Math.round(p.peso * (1 - Number(p.gordura) / 100) * 10) / 10]));
   const temPeso = pesoPorDia.size > 0;
   const temGasto = gastos && eixo.some((d) => gastos[d]);
   const datasets = [
@@ -38,10 +40,11 @@ export function configGrafico({ nome, refeicoes = [], pesagens = [], gastos, alv
     datasets.push({ type: 'line', label: 'Meta (mín)', yAxisID: 'kcal', borderColor: 'rgba(39, 174, 96, 0.8)', backgroundColor: 'transparent', borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5, data: eixo.map(() => alvo.min) });
     datasets.push({ type: 'line', label: 'Meta (máx)', yAxisID: 'kcal', borderColor: 'rgba(39, 174, 96, 0.8)', backgroundColor: 'rgba(39, 174, 96, 0.10)', fill: '-1', borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5, data: eixo.map(() => alvo.max) });
   }
+  if (magraPorDia.size >= 3) datasets.push({ type: 'line', label: 'Massa magra (kg)', yAxisID: 'peso', borderColor: 'rgba(230, 126, 34, 0.9)', backgroundColor: 'transparent', borderDash: [4, 3], pointRadius: 2, fill: false, spanGaps: true, data: eixo.map((d) => magraPorDia.get(d) ?? null) });
   if (temPeso) datasets.push({ type: 'line', label: 'Peso (kg)', yAxisID: 'peso', borderColor: 'rgba(142, 68, 173, 1)', backgroundColor: 'transparent', pointRadius: 3, borderWidth: 2, spanGaps: true, data: eixo.map((d) => pesoPorDia.get(d) ?? null) });
   const pesos = [...pesoPorDia.values()];
   const eixos = [{ id: 'kcal', position: 'left', ticks: { beginAtZero: true }, scaleLabel: { display: true, labelString: 'kcal / dia' } }];
-  if (temPeso) eixos.push({ id: 'peso', position: 'right', gridLines: { drawOnChartArea: false }, ticks: { suggestedMin: Math.floor(Math.min(...pesos) - 1.5), suggestedMax: Math.ceil(Math.max(...pesos) + 1.5) }, scaleLabel: { display: true, labelString: 'kg' } });
+  if (temPeso) eixos.push({ id: 'peso', position: 'right', gridLines: { drawOnChartArea: false }, ticks: { suggestedMin: Math.floor(Math.min(...pesos, ...(magraPorDia.size ? [...magraPorDia.values()] : [])) - 1.5), suggestedMax: Math.ceil(Math.max(...pesos) + 1.5) }, scaleLabel: { display: true, labelString: 'kg' } });
   const diasComRegistro = kcalPorDia.size;
   const mediaProt = diasComRegistro ? Math.round([...protPorDia.values()].reduce((a, b) => a + b, 0) / diasComRegistro) : 0;
   return {

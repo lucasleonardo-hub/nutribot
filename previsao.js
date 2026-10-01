@@ -186,6 +186,82 @@ export function conferirPrevisao({ previsao, pesagens = [], dia }) {
 //   ganho: 0,25 a 0,5% do peso/semana (Iraki 2019) - mais que isso vira gordura
 //   perda: 0,5 a 1% do peso/semana (Helms 2014) - mais que isso derruba músculo e treino
 // ============================================================
+/**
+ * Linha de tendência PESSOAL, pela bioimpedância: média semanal de peso, gordura % e massa magra nas últimas semanas,
+ * inclinação (kg/semana) de peso, massa magra e gordura, comparadas com o ritmo alvo (metaBalancoPara) e a faixa saudável.
+ * Devolve { semanas: [...], pesoSem, magraSem, gorduraSem, gorduraPpSem, veredito, texto, zap } ou null sem dados.
+ */
+export function linhaDeTendencia({ pesagens = [], perfil = {}, dia, alvoKgSemana = null, semanas = 6 } = {}) {
+  const pts = pesagens.filter((p) => p.peso && p.dia && p.dia <= dia).sort((a, b) => a.dia.localeCompare(b.dia));
+  if (pts.length < 4) return null;
+  const inicio = somarDias(dia, -(semanas * 7 - 1));
+  const recentes = pts.filter((p) => p.dia >= inicio);
+  if (recentes.length < 4 || distanciaDias(recentes[0].dia, recentes[recentes.length - 1].dia) < 10) return null;
+  // agrupa por semana (7 dias contados de trás pra frente a partir de hoje)
+  const porSemana = new Map();
+  for (const p of recentes) {
+    const idx = Math.floor(distanciaDias(p.dia, dia) / 7); // 0 = semana atual
+    const s = porSemana.get(idx) || { peso: [], gordura: [], magra: [] };
+    s.peso.push(p.peso);
+    if (p.gordura != null) {
+      s.gordura.push(Number(p.gordura));
+      s.magra.push(p.peso * (1 - Number(p.gordura) / 100));
+    }
+    porSemana.set(idx, s);
+  }
+  const linhas = [...porSemana.entries()].sort((a, b) => b[0] - a[0]).map(([idx, s]) => ({ idx, fim: somarDias(dia, -idx * 7), peso: media(s.peso), gordura: s.gordura.length ? media(s.gordura) : null, magra: s.magra.length ? media(s.magra) : null, n: s.peso.length }));
+  // inclinações por regressão nos pontos diários (kg/semana; gordura em pontos percentuais/semana)
+  const reg = (xs, ys) => {
+    if (xs.length < 3) return null;
+    const mx = media(xs);
+    const my = media(ys);
+    const den = xs.reduce((a, x) => a + (x - mx) ** 2, 0) || 1;
+    return (xs.reduce((a, x, i) => a + (x - mx) * (ys[i] - my), 0) / den) * 7;
+  };
+  const x0 = new Date(`${recentes[0].dia}T12:00:00Z`).getTime();
+  const xs = recentes.map((p) => (new Date(`${p.dia}T12:00:00Z`).getTime() - x0) / 86400000);
+  const pesoSem = reg(xs, recentes.map((p) => p.peso));
+  const comG = recentes.filter((p) => p.gordura != null);
+  const xg = comG.map((p) => (new Date(`${p.dia}T12:00:00Z`).getTime() - x0) / 86400000);
+  const magraSem = comG.length >= 4 ? reg(xg, comG.map((p) => p.peso * (1 - Number(p.gordura) / 100))) : null;
+  const gorduraSem = comG.length >= 4 ? reg(xg, comG.map((p) => p.peso * (Number(p.gordura) / 100))) : null;
+  const gorduraPpSem = comG.length >= 4 ? reg(xg, comG.map((p) => Number(p.gordura))) : null;
+  const pesoAtual = recentes[recentes.length - 1].peso;
+  const querGanhar = /hipertrof|ganh|massa|bulk|for[çc]a/i.test(String(perfil.objetivo || ''));
+  const querPerder = /emagre|perd|reduz|defin|secar|gordura/i.test(String(perfil.objetivo || '')) && !querGanhar;
+  const faixa = faixaSaudavel({ peso: pesoAtual, ganho: querGanhar });
+  // veredito contra o alvo (quando há) e a faixa saudável
+  let veredito = 'sem direção clara';
+  let status = 'neutro';
+  if (pesoSem != null) {
+    if (querGanhar) {
+      if (pesoSem < 0.05) { veredito = 'estagnado: peso não sobe'; status = 'abaixo'; }
+      else if (faixa && pesoSem > faixa.max * 1.15) { veredito = `subindo mais rápido que o saudável (${sinalKg(pesoSem)}/semana)${gorduraSem != null && gorduraSem > 0.1 ? ', e a gordura está subindo junto' : gorduraSem != null && gorduraSem <= 0.05 ? ', mas a gordura não subiu: ganho limpo até agora' : ''}`; status = gorduraSem != null && gorduraSem > 0.1 ? 'acima_gordura' : 'acima'; }
+      else if (alvoKgSemana != null && pesoSem < alvoKgSemana - 0.12) { veredito = `abaixo do ritmo alvo (${sinalKg(pesoSem)} contra ${sinalKg(alvoKgSemana)}/semana)`; status = 'abaixo'; }
+      else { veredito = `no caminho (${sinalKg(pesoSem)}/semana${alvoKgSemana != null ? `, alvo ${sinalKg(alvoKgSemana)}` : ''}${magraSem != null ? `; massa magra ${sinalKg(magraSem)}/semana` : ''})`; status = 'ok'; }
+    } else if (querPerder) {
+      if (pesoSem > -0.05) { veredito = 'estagnado: peso não cai'; status = 'abaixo'; }
+      else if (faixa && pesoSem < faixa.min * 1.15) { veredito = `caindo mais rápido que o saudável (${sinalKg(pesoSem)}/semana)${magraSem != null && magraSem < -0.15 ? ', e está perdendo massa magra' : ''}`; status = 'acima'; }
+      else if (alvoKgSemana != null && pesoSem > alvoKgSemana + 0.12) { veredito = `mais devagar que o alvo (${sinalKg(pesoSem)} contra ${sinalKg(alvoKgSemana)}/semana)`; status = 'abaixo'; }
+      else { veredito = `no caminho (${sinalKg(pesoSem)}/semana${magraSem != null ? `; massa magra ${sinalKg(magraSem)}/semana` : ''})`; status = 'ok'; }
+    } else veredito = `peso ${Math.abs(pesoSem) < 0.1 ? 'estável' : `${sinalKg(pesoSem)}/semana`}`;
+  }
+  const fmtSem = (l) => `${dm(l.fim)}: ${kg1(l.peso)}${l.gordura != null ? ` · ${l.gordura.toFixed(1).replace('.', ',')}% gordura · ${kg1(l.magra)} magra` : ''} (${l.n} pesagem(ns))`;
+  const texto =
+    `LINHA DE TENDÊNCIA PESSOAL (bioimpedância do relógio, médias por semana, mais antiga -> mais nova):\n${linhas.map((l) => `- ${fmtSem(l)}`).join('\n')}\n` +
+    `Inclinação: peso ${pesoSem != null ? `${sinalKg(pesoSem)}/semana` : '?'}${magraSem != null ? `, massa magra ${sinalKg(magraSem)}/semana, gordura ${sinalKg(gorduraSem)}/semana (${gorduraPpSem > 0 ? '+' : ''}${gorduraPpSem.toFixed(2).replace('.', ',')} pontos/semana)` : ''}.` +
+    (alvoKgSemana != null ? ` Ritmo alvo: ${sinalKg(alvoKgSemana)}/semana.` : '') +
+    ` VEREDITO: ${veredito}. (Bioimpedância oscila de um dia pro outro; a tendência de semanas é o que vale.)`;
+  const zap =
+    `📈 *Tendência das últimas ${linhas.length} semanas*\n` +
+    linhas.map((l) => `- ${dm(l.fim)}: *${kg1(l.peso)}*${l.gordura != null ? ` · ${l.gordura.toFixed(1).replace('.', ',')}% gordura · ${kg1(l.magra)} de massa magra` : ''}`).join('\n') +
+    `\n\n*Ritmo*\n- Peso: ${pesoSem != null ? `${sinalKg(pesoSem)}/semana` : '?'}` +
+    (magraSem != null ? `\n- Massa magra: ${sinalKg(magraSem)}/semana\n- Gordura: ${sinalKg(gorduraSem)}/semana` : '') +
+    (alvoKgSemana != null ? `\n- Alvo: ${sinalKg(alvoKgSemana)}/semana` : '') +
+    `\n\n*Veredito*\n${status === 'ok' ? '✅' : status === 'abaixo' ? '⚠️' : status === 'acima_gordura' ? '🛑' : status === 'acima' ? '⚠️' : '•'} ${veredito[0].toUpperCase()}${veredito.slice(1)}`;
+  return { semanas: linhas, pesoSem, magraSem, gorduraSem, gorduraPpSem, alvoKgSemana, veredito, status, texto, zap };
+}
+
 export function faixaSaudavel({ peso, ganho }) {
   if (!peso) return null;
   return ganho ? { min: peso * 0.0025, max: peso * 0.005 } : { min: -peso * 0.01, max: -peso * 0.005 };

@@ -15,8 +15,8 @@ import { linhaSemanaLugares } from './lugares.js';
 import { refletirTodos } from './reflexao.js';
 import { fecharPendentes } from './atividades.js';
 import { contextoDoDia, contextoDoDiaDeTodos } from './contexto.js';
-import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta } from './previsao.js';
-import { proporEtapa } from './resumo.js';
+import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta, linhaDeTendencia } from './previsao.js';
+import { proporEtapa, metaBalancoPara, tendenciaGordura } from './resumo.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
 import { configGrafico, renderizar } from './graficos.js';
@@ -356,6 +356,15 @@ export async function fecharSemana({ dia, perfis, grupo }) {
           if (ritmo) linhas.push(ritmo);
           const projecao = projetarMeta({ perfil: p, deltaKgSemana: nova.deltaKg, pesoAtual: nova.pesoInicial, dia });
           if (projecao) linhas.push(projecao);
+          // linha de tendência pessoal (bioimpedância) contra o ritmo alvo: a resposta de "está no caminho?" vem pronta
+          try {
+            const pes60 = await pesagensDesde(jids, diasAnteriores(dia, 60)[0]).catch(() => pes30);
+            const faixa = metaBalancoPara({ objetivo: p.objetivo, peso: nova.pesoInicial, metaPeso: p.metaPeso, metaPrazo: p.metaPrazo, dia, ritmo: p.ritmo, metaModo: p.metaModo, gorduraTend: tendenciaGordura(pes30) });
+            const tend = linhaDeTendencia({ pesagens: pes60, perfil: p, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
+            if (tend) linhas.push(tend.texto);
+          } catch (e) {
+            console.warn('[tendencia]', e.message);
+          }
           // meta-etapa batida (sem teto): sobe o degrau e avisa; o ganho continua no ritmo saudável
           if (p.metaModo === 'etapa' && p.metaPeso && nova.pesoInicial) {
             const ganho = /hipertrof|ganh|massa|bulk|for[çc]a/i.test(String(p.objetivo || ''));

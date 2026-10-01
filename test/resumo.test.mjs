@@ -127,3 +127,32 @@ test('metas-etapa, ritmo máximo e freio pela gordura', () => {
   assert.ok(px.semanas >= 11 && px.semanas <= 13, `semanas ${px.semanas}`);
   assert.match(px.metaPrazo, /^2027-03-/);
 });
+
+import { linhaDeTendencia } from '../previsao.js';
+test('linhaDeTendencia: médias semanais, inclinação de peso/magra/gordura e veredito contra o alvo', () => {
+  // 6 semanas, pesagem a cada 2 dias: peso sobe 0,35 kg/semana, gordura estável em 17,5% (ganho limpo)
+  const pes = [];
+  for (let d = 0; d < 42; d += 2) {
+    const dia = new Date(Date.UTC(2026, 7, 21 + d, 12)).toISOString().slice(0, 10); // 21/08 -> 01/10
+    pes.push({ dia, peso: Math.round((73.8 + (0.35 * d) / 7) * 10) / 10, gordura: 17.5 + (d % 4 === 0 ? 0.4 : -0.4) });
+  }
+  const t = linhaDeTendencia({ pesagens: pes, perfil: { objetivo: 'Hipertrofia' }, dia: '2026-10-01', alvoKgSemana: 0.38 });
+  assert.ok(t, 'tendência existe');
+  assert.ok(t.semanas.length >= 5 && t.semanas.length <= 6, `semanas ${t.semanas.length}`);
+  assert.ok(Math.abs(t.pesoSem - 0.35) < 0.05, `peso/sem ${t.pesoSem}`);
+  assert.ok(Math.abs(t.gorduraPpSem) < 0.1, `gordura pp/sem ${t.gorduraPpSem}`);
+  assert.ok(t.magraSem > 0.2, `magra/sem ${t.magraSem}`);
+  assert.equal(t.status, 'ok');
+  assert.match(t.texto, /VEREDITO: no caminho \(\+0,3\d kg\/semana, alvo \+0,38 kg/);
+  assert.match(t.zap, /✅ No caminho/);
+  // ganhando rápido demais com gordura subindo: 🛑
+  const rapido = pes.map((p, i) => ({ ...p, peso: Math.round((73.8 + (0.9 * i * 2) / 7) * 10) / 10, gordura: 17 + (i * 2) / 14 }));
+  const r = linhaDeTendencia({ pesagens: rapido, perfil: { objetivo: 'Hipertrofia' }, dia: '2026-10-01', alvoKgSemana: 0.38 });
+  assert.equal(r.status, 'acima_gordura');
+  assert.match(r.zap, /🛑/);
+  // estagnado
+  const parado = pes.map((p) => ({ ...p, peso: 75 }));
+  assert.equal(linhaDeTendencia({ pesagens: parado, perfil: { objetivo: 'Hipertrofia' }, dia: '2026-10-01' }).status, 'abaixo');
+  // poucos dados
+  assert.equal(linhaDeTendencia({ pesagens: pes.slice(-2), perfil: { objetivo: 'Hipertrofia' }, dia: '2026-10-01' }), null);
+});
