@@ -23,11 +23,12 @@ import { pareceAceitePlano } from './consciencia.js';
 import { lugaresZap, marcarLugarAtual, esquecerLugares, mercadosProximos } from './lugares.js';
 import { refletirSobre, reflexaoZap } from './reflexao.js';
 import { atividadesZap, criarAtividade, removerAtividade, responderPendente } from './atividades.js';
+import { despensaZap, ajustarItem, extrairChave, interpretarQr, blocoDespensa } from './despensa.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !atividade (esporte fixo sem relógio, ex.: vôlei seg e qua 20h–22h: eu confiro pela localização se você foi e somo o gasto estimado; !atividade nova Vôlei; seg,qua; 20:00-22:00; met 6; aqui | lugar UFSC; !atividade sim/não responde quando eu perguntar; !atividade remover 1), !reflexao (como eu te entendo hoje: a síntese da minha reflexão livre sobre você, reescrita aos domingos em Nutri-Reflexoes.md na sua pasta; !reflexao nova reescreve agora), !lugares (se você ligou a localização no app: onde está agora e os lugares que frequenta, com o padrão da semana; !lugares casa, !lugares aqui é academia X, !lugares esquecer), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras e dicas de compra barata, só com as refeições que você costuma registrar e com a meta de cada dia da semana; de sexta a domingo é o plano da semana que vem; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar; toda sexta ao meio-dia eu pergunto quem quer e basta responder "quero"), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !despensa (o que você tem em casa, pelas fotos dos cupons do mercado que você me manda: itens padronizados, validade e tabela nutricional; !despensa add 2 kg arroz; !despensa tirar iogurte; !despensa acabando leite; ou é só me dizer "acabou o iogurte"), !nota (explica como entra a compra: foto do cupom), !atividade (esporte fixo sem relógio, ex.: vôlei seg e qua 20h–22h: eu confiro pela localização se você foi e somo o gasto estimado; !atividade nova Vôlei; seg,qua; 20:00-22:00; met 6; aqui | lugar UFSC; !atividade sim/não responde quando eu perguntar; !atividade remover 1), !reflexao (como eu te entendo hoje: a síntese da minha reflexão livre sobre você, reescrita aos domingos em Nutri-Reflexoes.md na sua pasta; !reflexao nova reescreve agora), !lugares (se você ligou a localização no app: onde está agora e os lugares que frequenta, com o padrão da semana; !lugares casa, !lugares aqui é academia X, !lugares esquecer), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras e dicas de compra barata, só com as refeições que você costuma registrar e com a meta de cada dia da semana; de sexta a domingo é o plano da semana que vem; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar; toda sexta ao meio-dia eu pergunto quem quer e basta responder "quero"), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -74,6 +75,7 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
     const grupo = repertorioDoGrupo(doGrupo.filter((r) => !minhas.includes(r)));
     // meta por dia da semana pra quem tem relógio (gasto do mesmo dia da semana nas últimas semanas)
     const mercados = await mercadosProximos(perfil).catch(() => null);
+    const despensa = await blocoDespensa(perfil).catch(() => '');
     const gastos = comAgenda?.relogio?.gastos || perfil.relogio?.gastos;
     let metaSemana = null;
     if (gastos) {
@@ -81,7 +83,7 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
       metaSemana = previsaoSemana({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta, semana })?.texto || null;
     }
     const plano = ia.separarAtualizacao(
-      await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '' })
+      await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '', despensa })
     ).texto;
     if (!plano) throw new Error('plano vazio');
     await enviar(jidGrupo, plano, msg, { rapido: true });
@@ -422,6 +424,40 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       const png = await renderizar(configGrafico({ nome: p.nome, refeicoes: refs, pesagens: pes, gastos: p.relogio?.gastos, alvo: alvoKcal, dia }));
       if (png) await enviarImagem(jidGrupo, png, `📈 *${p.apelido || p.nome.split(' ')[0]}* · últimos 30 dias${alvoKcal ? ` · meta ${alvoKcal.min} a ${alvoKcal.max} kcal/dia` : ''}`, msg);
       else await enviar(jidGrupo, 'O desenhista do gráfico não respondeu agora 🫠 Tenta de novo daqui a pouco.', msg, { rapido: true });
+    }
+    return true;
+  }
+
+  if (cmd === '!despensa' || cmd === '!nota') {
+    const perfil = await buscarPerfil(jids);
+    if (!perfil?.onboarded) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    const arg = texto.slice(cmd.length).trim();
+    try {
+      let resposta;
+      if (cmd === '!nota') {
+        const q = interpretarQr(arg) || (extrairChave(arg) ? { chave: extrairChave(arg) } : null);
+        // a consulta por chave na SEFAZ exige captcha (Cloudflare Turnstile em SC): o caminho que funciona sempre é a foto do cupom
+        resposta = q
+          ? `Chave anotada (${q.uf || 'UF ?'}, ${q.chave.slice(0, 4)}…). A SEFAZ só mostra os itens depois de um captcha, então o que funciona sempre é a FOTO do cupom: manda a foto com a lista de itens (e o QR, se der) que eu leio tudo e monto a despensa.`
+          : 'Manda a foto do cupom do mercado (com a lista de itens) que eu leio e monto a tua despensa. A chave de 44 dígitos sozinha não traz os itens sem captcha.';
+      } else if (/^add\s+/i.test(arg)) {
+        const m = /^add\s+(?:(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|un|unid|unidades?|pct|pacotes?|cx|caixas?)?\s+)?(.+)$/i.exec(arg);
+        const r = m ? await ajustarItem(perfil, { item: m[3], acao: 'comprei', qtd: m[1] ? Number(m[1].replace(',', '.')) : 1, unidade: (m[2] || 'un').toLowerCase() }, { dia }) : null;
+        resposta = r ? `Anotado na despensa: ${r.item} (${r.quantidade} ${r.unidade}).` : 'Formato: !despensa add 2 kg arroz';
+      } else if (/^(tirar|acabou|remover)\s+/i.test(arg)) {
+        const r = await ajustarItem(perfil, { item: arg.replace(/^(tirar|acabou|remover)\s+/i, ''), acao: 'acabou' }, { dia });
+        resposta = r ? `Baixa feita: ${r.item} acabou.` : 'Não achei esse item na tua despensa. Veja !despensa.';
+      } else if (/^acabando\s+/i.test(arg)) {
+        const r = await ajustarItem(perfil, { item: arg.replace(/^acabando\s+/i, ''), acao: 'acabando' }, { dia });
+        resposta = r ? `Anotado: ${r.item} está acabando.` : 'Não achei esse item na tua despensa.';
+      } else resposta = await despensaZap(perfil);
+      await enviar(jidGrupo, resposta, msg, { rapido: true });
+    } catch (e) {
+      console.error('[despensa]', e.message);
+      await enviar(jidGrupo, 'Não consegui mexer na despensa agora.', msg, { rapido: true });
     }
     return true;
   }

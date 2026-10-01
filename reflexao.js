@@ -14,6 +14,7 @@ import { padraoAlimentar, compilarSemana } from './resumo.js';
 import { textoRelogio } from './relogio.js';
 import { diasAnteriores } from './util.js';
 import * as ia from './gemini.js';
+import { resumoDespensaPeriodo } from './despensa.js';
 
 export const ARQ_REFLEXOES = 'Nutri-Reflexoes.md';
 const MAX_SINTESE = 600;
@@ -98,6 +99,7 @@ export async function refletirSobre(perfil, { dia, persona, motivo = 'domingo' }
     colecao('reflexoes').find({ jid: perfil.jids?.[0] }).sort({ dia: -1 }).limit(1).next().catch(() => null),
     dadosDaSemana(perfil, dia).catch(() => ''),
   ]);
+  const despensa = await resumoDespensaPeriodo(perfil, dia).catch(() => '');
   const padrao = padraoAlimentar(refs, { periodoDias: 28 });
   const fontes = {
     visao,
@@ -134,6 +136,7 @@ export async function refletirSobre(perfil, { dia, persona, motivo = 'domingo' }
     documentos: String(docs || '').slice(0, 4000),
     anterior: anterior?.texto || '',
     hipoteses: blocoHipoteses(abertas, fechadas),
+    despensa,
     persona,
     dia,
   });

@@ -114,6 +114,8 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - GÊNERO E CONCORDÂNCIA: cada perfil traz o gênero da pessoa. Adjetivos, apelidos e gírias concordam com ele: pra homem "divo", "meu rei", "menino", "passado", "amigo"; pra mulher "diva", "rainha", "menina", "passada", "amiga"; "outro" ou desconhecido = forma neutra ("criatura", "gente", o nome). Apelido que você criou segue a mesma regra: nada de "diva" pra homem. Se o gênero não estiver no perfil, deduza pelo nome só pra concordância e pergunte quando couber (via ATUALIZAR genero).
 - ATIVIDADES FIXAS: o bloco "ATIVIDADES FIXAS" lista esporte sem relógio (vôlei, futebol) com dia, horário e gasto estimado por MET. O sistema confere pela localização e SOMA o gasto no dia sozinho quando confirma; você não soma por conta própria nem assume que houve. Se estiver "em dúvida", a pessoa responde "teve"/"não teve" e o sistema anota. Use pra contexto: dia de vôlei à noite pede lanche antes e proteína depois; se não houve, o gasto do dia é menor.
 - LINHA OCULTA ATIVIDADE: quando a pessoa contar que FEZ uma atividade fixa fora do horário cadastrado, ou que NÃO teve ("adiantei o vôlei pras 18h", "hoje não rolou vôlei", "joguei areia ontem das 17h às 19h"), acrescente no fim a linha ATIVIDADE: {"nome": "vôlei de quadra", "feita": true, "inicio": "18:00", "fim": "20:00", "dia": "AAAA-MM-DD"} (inicio/fim/dia só se ela disse; feita false quando não houve). O sistema ajusta o gasto do dia; você não soma calorias por conta própria. Não use pra treino de academia (esse vem do relógio/Hevy).
+- DESPENSA (o que tem em casa): o bloco "DESPENSA" lista o que a pessoa tem em casa pelas notas de mercado. Use pra sugerir refeição com o que HÁ ("você tem frango e brócolis vencendo, hoje é dia disso"), pra lembrar o que vence, e como âncora quando ela comer um item dali (a tabela nutricional por 100 g está entre colchetes). Não invente item que não está no bloco. Baixas pela linha oculta no FIM da resposta: DESPENSA: [{"item": "iogurte grego", "acao": "acabou"}] com acao em usei (com "qtd" quando souber: ovos, iogurtes, frutas), acabou, acabando, comprei (com qtd/unidade) ou tem (ela confirmou que ainda tem). Emita quando: a refeição registrada usou itens da despensa (usei), ela disser que algo acabou/está acabando/comprou, ou responder a uma pergunta sua de validade. Granel (arroz, azeite) só muda de estado, nunca por grama.
+- CUPOM DE MERCADO: se a foto for um cupom fiscal / nota de compras (lista de itens com preços, não comida), NÃO analise como refeição. Responda curto no personagem ("peguei tua compra") e acrescente no FIM a linha NOTA: {"loja": "nome", "data": "AAAA-MM-DD", "itens": [{"descricao": "como impresso", "qtd": 1, "unidade": "un", "valorTotal": 12.9, "codigo": "ean se houver"}]} com TODOS os itens legíveis. Sem bloco de estimativa, sem linha REFEICAO.
 - CRUZE AS FONTES: agenda, lugares, roteiro do dia, treino, relógio e acompanhamento são pedaços da MESMA pessoa. Antes de dar dica, junte: academia às 7h + aula às 10h = café que caiba na mochila e proteína logo depois do treino; faculdade até 22h = jantar precisa estar pronto ou ser simples; gasto alto no relógio hoje + almoço leve = a fome da noite vai vir, antecipe; janela apertada entre dois compromissos = comida pronta, não receita. Uma dica que ignora o roteiro do dia dela é dica genérica; evite.
 - CLIMA E ESTAÇÃO: quando o contexto de hora trouxer a estação do ano e o tempo na cidade da pessoa, use como quem olha pela janela: sopa em noite fria "cai bem", dia de calorão pede água e comida leve, chuva combina com treino em casa, amanhã quente pede hidratar mais. Só quando encaixar, não em toda mensagem. Cada um pode estar numa cidade e estação diferentes (quem mora no outro hemisfério tem a estação oposta): use a da pessoa com quem fala. Se NÃO houver linha de tempo no contexto, você não sabe como está o dia: não invente "dia lindo" nem "friozinho".
 - DADOS DO RELÓGIO: quando o perfil trouxer a linha "Relógio" ou o dossiê trouxer "DADOS DO RELÓGIO" (peso, gordura, sono, passos, treinos do Galaxy Watch), você SABE disso sem perguntar: não peça peso nem pergunte como dormiu se está ali. Use como quem conhece a rotina da pessoa: café chegando às 8h de quem levantou 05:56 ("já tá há 2 horas em pé sem comer?"), levantou às 9h quem costuma levantar às 6h ("dormiu até tarde hoje, hein"), dia com 3 mil passos, semana sem treino, noite de 5h e pedindo doce ("faz sentido"). Comente quando couber, não em toda mensagem. Compare com a média da pessoa, não com regra de livro. Bioimpedância de relógio oscila: fale de tendência, não de décimos.
@@ -620,7 +622,7 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, roteiro, atividades, jaDito, rotulos, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, roteiro, atividades, jaDito, despensa, rotulos, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -652,6 +654,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (roteiro ? `${roteiro}\n\n` : '') +
     (atividades ? `${atividades}\n\n` : '') +
     (jaDito ? `${jaDito}\n\n` : '') +
+    (despensa ? `${despensa}\n\n` : '') +
     (perfil.reflexao?.sintese ? `COMO VOCÊ ENTENDE ${perfil.nome.split(' ')[0]} (sua reflexão de ${perfil.reflexao.dia}; pano de fundo pra escolher tom e dica, use só quando encaixar e sem dizer que "refletiu"): ${perfil.reflexao.sintese}\n\n` : '') +
     (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
@@ -782,7 +785,31 @@ export function separarAtualizacao(resposta) {
     }
     texto = `${texto.slice(0, at.index)}\n${texto.slice(at.index + at[0].length)}`.trim();
   }
-  return { texto, atualizacao, habito, audio, registro, refeicao, produto, reacao, atividade };
+  // linha oculta NOTA: {"loja":..., "data":..., "itens":[...]} -> foto era cupom de mercado (itens pra despensa)
+  let nota = null;
+  const nt = texto.match(/\n?\s*NOTA:\s*(\{[^\n]*\})\s*/i);
+  if (nt) {
+    try {
+      const j = JSON.parse(nt[1]);
+      if (j && Array.isArray(j.itens) && j.itens.length) nota = j;
+    } catch {
+      nota = null;
+    }
+    texto = `${texto.slice(0, nt.index)}\n${texto.slice(nt.index + nt[0].length)}`.trim();
+  }
+  // linha oculta DESPENSA: [{"item":"iogurte","acao":"acabou"}] -> baixa/entrada na despensa
+  let despensa = null;
+  const dp = texto.match(/\n?\s*DESPENSA:\s*(\[[^\n]*\])\s*/i);
+  if (dp) {
+    try {
+      const j = JSON.parse(dp[1]);
+      if (Array.isArray(j) && j.length) despensa = j;
+    } catch {
+      despensa = null;
+    }
+    texto = `${texto.slice(0, dp.index)}\n${texto.slice(dp.index + dp[0].length)}`.trim();
+  }
+  return { texto, atualizacao, habito, audio, registro, refeicao, produto, reacao, atividade, nota, despensa };
 }
 
 // ============================================================
@@ -1424,6 +1451,55 @@ export async function descreverImagemDocumento(buffer, mimeType) {
   });
 }
 
+/** Itens de um cupom fiscal de mercado pela foto (uma ou mais fotos do mesmo cupom). Devolve { loja, data, itens: [...] }. */
+export async function extrairItensCupom({ imagens }) {
+  const parts = [
+    {
+      text:
+        'Esta(s) foto(s) é(são) de um cupom fiscal de compras (NFC-e/cupom de mercado, padaria, açougue, farmácia). Transcreva TODOS os itens comprados, um por linha do cupom, na ordem: descrição exatamente como impressa (abreviações incluídas), quantidade, unidade (UN, KG, G, L, ML, PC...), valor unitário e valor total do item, e o código do produto/código de barras se estiver impresso ao lado. Ignore cabeçalho, impostos, formas de pagamento, CPF e totais. Não invente item que não está legível: se um item estiver cortado, marque ilegivel=true. Também devolva o nome da loja e a data da compra (AAAA-MM-DD) se aparecerem.',
+    },
+  ];
+  for (const f of imagens || []) parts.push({ inlineData: { mimeType: f.mimeType || 'image/jpeg', data: f.data.toString('base64') } });
+  const json = await gerar({
+    contents: [{ role: 'user', parts }],
+    config: {
+      temperature: 0.1,
+      pensar: false,
+      maxOutputTokens: 4000,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          loja: { type: 'string', nullable: true },
+          data: { type: 'string', nullable: true },
+          itens: { type: 'array', items: { type: 'object', properties: { descricao: { type: 'string' }, qtd: { type: 'number', nullable: true }, unidade: { type: 'string', nullable: true }, valorUnit: { type: 'number', nullable: true }, valorTotal: { type: 'number', nullable: true }, codigo: { type: 'string', nullable: true }, ilegivel: { type: 'boolean', nullable: true } }, required: ['descricao'] } },
+        },
+        required: ['itens'],
+      },
+    },
+  });
+  const r = JSON.parse(json);
+  return { loja: r.loja || null, data: r.data || null, itens: (r.itens || []).filter((i) => i.descricao && !i.ilegivel) };
+}
+
+/** Descrições cruas do cupom -> itens canônicos: nome, categoria, quantidade/unidade, granel, perecível, validade típica, se é alimento. */
+export async function normalizarItensNota({ itens, nome }) {
+  const json = await gerar({
+    contents:
+      `Itens de um cupom de mercado${nome ? ` de ${nome}` : ''}, como impressos (abreviados). Para cada um, devolva o nome canônico em português do jeito que uma pessoa fala em casa (\"iogurte grego\", \"filé mignon suíno\", \"arroz branco\", \"pão de forma integral\"; marca só quando identifica o produto, ex. \"whey Growth\"), a categoria (carne, frango, peixe, ovo, laticínio, fruta, verdura, legume, pão, mercearia, congelado, bebida, suplemento, limpeza, higiene, outro), a quantidade comprada na unidade de uso (g, ml, un, kg, l; converta \"0,840 KG\" em 840 g; \"2 UN\" em 2 un; um pacote de 1 kg de arroz em 1 kg), granel=true quando não dá pra controlar por unidade (arroz, azeite, sal, café em pó, farinha), perecivel=true quando estraga em dias (carne, verdura, fruta, laticínio aberto, pão), validade_dias típica em casa (carne fresca 3, frango 3, peixe 2, verdura 5, fruta 6, laticínio 10, ovo 21, pão 4, congelado 90, mercearia 180, bebida 120), alimento=false pra limpeza/higiene/outros não comestíveis, e ean se a descrição trouxer código de barras. Mantenha o campo indice igual à posição do item na lista de entrada.\n\nITENS:\n${itens.map((i, k) => `${k}. ${i.descricao}${i.qtd != null ? ` | qtd ${i.qtd} ${i.unidade || ''}` : ''}${i.codigo ? ` | cod ${i.codigo}` : ''}`).join('\n')}`,
+    config: {
+      temperature: 0.1,
+      pensar: false,
+      leve: true,
+      maxOutputTokens: 3500,
+      responseMimeType: 'application/json',
+      responseSchema: { type: 'array', items: { type: 'object', properties: { indice: { type: 'integer' }, nome: { type: 'string' }, categoria: { type: 'string' }, quantidade: { type: 'number', nullable: true }, unidade: { type: 'string', nullable: true }, granel: { type: 'boolean' }, perecivel: { type: 'boolean' }, validade_dias: { type: 'integer', nullable: true }, alimento: { type: 'boolean' }, ean: { type: 'string', nullable: true } }, required: ['indice', 'nome', 'categoria', 'granel', 'perecivel', 'alimento'] } },
+    },
+  });
+  const r = JSON.parse(json);
+  return Array.isArray(r) ? r : [];
+}
+
 /** Confere cada hipótese aberta nos dados da semana. Devolve [{ id, veredito: confirmada|refutada|aberta, evidencia }]. */
 export async function verificarHipoteses({ perfil, hipoteses, fontes, dia }) {
   const json = await gerar({
@@ -1474,7 +1550,7 @@ export async function extrairHipoteses({ perfil, texto, abertas = [], dia }) {
  * Reflexão livre sobre uma pessoa: sem formato fixo, primeira pessoa, pensando em voz alta sobre tudo que ela sabe.
  * O último parágrafo ("Em uma frase") vira a síntese que entra nas conversas com a pessoa.
  */
-export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, hipoteses, persona, dia }) {
+export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, hipoteses, despensa, persona, dia }) {
   const primeiro = perfil.nome.split(' ')[0];
   return gerar({
     contents:
@@ -1488,6 +1564,7 @@ export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugare
       (lugares ? `${lugares}\n\n` : '') +
       (documentos ? `DOCUMENTOS DA PASTA (bioimpedância, exames):\n${documentos}\n\n` : '') +
       (hipoteses ? `${hipoteses}\n\n` : '') +
+      (despensa ? `${despensa}\n\n` : '') +
       `Escreva, em primeira pessoa e no seu jeito, O QUE VOCÊ PENSA sobre ${primeiro}: como essa pessoa funciona (rotina real, onde passa o dia, quanto gasta e quanto come, como dorme, quando treina, quando desanda), o que os dados dizem que ela talvez não perceba, o que você suspeita mas ainda não tem certeza e quer observar (escreva essas suspeitas de forma explícita, começando por "Suspeito que" ou "Quero observar se": elas serão conferidas nos dados da semana que vem), o que te preocupa e o que te impressiona, e como isso muda o jeito de você falar com ela. Ligue os pontos entre fontes diferentes (ex.: dia de faculdade à noite x jantar tarde; gasto do relógio x apetite; lugar x escolha de comida). Pode ser em parágrafos corridos, pode ter uma lista se ajudar, sem títulos obrigatórios e sem tom de relatório: é reflexão, não ficha. Sem endereço, rua ou coordenada (bairro pode). Nada sobre outras pessoas do grupo. Até 700 palavras.\n` +
       `Termine com um parágrafo separado começando exatamente com "Em uma frase:" resumindo como você entende ${primeiro} hoje, em no máximo 60 palavras, do jeito que você usaria na cabeça antes de responder uma mensagem dela(e). Sem linha ATUALIZAR. Sem [[links]].`,
     config: { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.8, maxOutputTokens: 2200 },
@@ -1587,7 +1664,7 @@ export async function embutir(texto, taskType = 'RETRIEVAL_DOCUMENT') {
 }
 
 /** Plano da semana + lista de compras, a partir do que a pessoa já come, do objetivo e da meta calculada. Uma chamada Flash. */
-export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares }) {
+export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares, despensa }) {
   const primeiro = perfil.nome.split(' ')[0];
   const cidade = perfil.cidade || 'a cidade dela(e)';
   const slots = padrao?.slots ? Object.keys(padrao.slots) : [];
@@ -1605,6 +1682,7 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       (metaSemana ? `${metaSemana}\n\n` : '') +
       (lugares ? `${lugares}\n(use a rotina de lugares pra encaixar: dia de academia, dia de faculdade à noite, almoço fora no trabalho; nunca cite endereço)\n\n` : '') +
       (mercados ? `${mercados}\n\n` : '') +
+      (despensa ? `${despensa}\n(o plano começa pelo que JÁ TEM em casa, usando primeiro o que vence; a lista de compras NÃO repete o que está na despensa, salvo se estiver acabando)\n\n` : '') +
       (perfil.reflexao?.sintese ? `COMO VOCÊ ENTENDE ESSA PESSOA (sua reflexão): ${perfil.reflexao.sintese}\n\n` : '') +
       (agenda ? `AGENDA DELA(E) NOS PRÓXIMOS DIAS (encaixe as refeições nas janelas livres e respeite aula/trabalho/reunião):\n${agenda}\n\n` : '') +
       (pedido ? `PEDIDO DA PESSOA PRA ESTE PLANO (orçamento, o que tem no mercado perto, o que quer ou não quer; manda nisso): ${pedido}\n\n` : '') +

@@ -23,6 +23,7 @@ import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
 import { responderPendente, registrarRelato } from './atividades.js';
+import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, aplicarLinhaDespensa, blocoDespensa } from './despensa.js';
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 
@@ -605,6 +606,31 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       }
     }
     if (imagens.length > 1) console.log(`[bot] ${imagens.length} fotos de ${nomeContato} analisadas juntas`);
+    // cupom de mercado com QR da NFC-e: lê o QR no servidor, extrai os itens pela visão e monta a despensa (não é refeição)
+    try {
+      let qr = null;
+      for (const f of imagens) {
+        qr = interpretarQr(await lerQr(f.data));
+        if (qr) break;
+      }
+      if (!qr && /\b(cupom|nota fiscal|nfc-?e|compras do mercado|minha compra)\b/i.test(texto)) qr = { chave: null, url: null, uf: null };
+      if (qr) {
+        console.log(`[despensa] cupom de ${perfil.nome}${qr.chave ? ` (chave ${qr.chave.slice(0, 8)}…, ${qr.uf || 'UF ?'})` : ' (sem QR legível)'}: lendo itens pela foto`);
+        const lido = await ia.extrairItensCupom({ imagens });
+        if (!lido.itens.length) throw new Error('nenhum item legível');
+        const itens = await padronizarItens(lido.itens, { perfil, dia });
+        const r = await registrarNota({ perfil, chave: qr.chave, loja: lido.loja, data: lido.data, itens, origem: qr.chave ? 'qr+foto' : 'foto' });
+        const resposta = resumoNota({ loja: lido.loja, dia: r.dia, itens, repetida: r.repetida });
+        await enviar(jidGrupo, resposta, msg, { rapido: true });
+        await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: `📷 [cupom de mercado${lido.loja ? `: ${lido.loja}` : ''}] ${texto}`.trim(), tipo: 'texto' });
+        await lembrar({ hora, jid: null, nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
+        return;
+      }
+    } catch (e) {
+      console.error('[despensa] cupom:', e.message);
+      await enviar(jidGrupo, 'Vi que é um cupom, mas não consegui ler os itens direito. Tenta uma foto mais de perto, com a lista inteira e sem reflexo.', msg, { rapido: true });
+      return;
+    }
   }
 
   let audio = null;
@@ -716,7 +742,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', jaDito: temasJaDitos(historico, hora), rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', jaDito: temasJaDitos(historico, hora), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -726,9 +752,11 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   let produto = null; // "PRODUTO: x": ela quer o rótulo do Open Food Facts antes de responder
   let reacao = null; // linha REAGIR: ⭐ -> reação com emoji na mensagem da pessoa
   let atividadeRelato = null; // linha ATIVIDADE: relato de atividade fixa feita/não feita fora do horário
+  let notaLida = null; // linha NOTA: a foto era um cupom de mercado (itens pra despensa)
+  let despensaLinha = null; // linha DESPENSA: baixas/entradas na despensa
   try {
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
-    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto, reacao, atividade: atividadeRelato } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
+    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto, reacao, atividade: atividadeRelato, nota: notaLida, despensa: despensaLinha } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
   } catch (e) {
     // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -901,6 +929,16 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     if (atividadeRelato) {
       const nota = await registrarRelato(eu, atividadeRelato, dia).catch((e) => (console.error('[atividades] relato:', e.message), null));
       if (nota) console.log(`[atividades] relato de ${perfil.nome}: ${nota}`);
+    }
+    if (despensaLinha) {
+      const feitos = await aplicarLinhaDespensa(eu, despensaLinha, { dia }).catch((e) => (console.error('[despensa] linha:', e.message), []));
+      if (feitos.length) console.log(`[despensa] ${perfil.nome}: ${feitos.join(' | ')}`);
+    }
+    if (notaLida?.itens?.length) {
+      // a IA reconheceu um cupom sem QR legível: padroniza e entra na despensa; avisa em mensagem separada
+      padronizarItens(notaLida.itens, { perfil: eu, dia })
+        .then((itens) => registrarNota({ perfil: eu, loja: notaLida.loja, data: notaLida.data, itens, origem: 'foto' }).then((r) => enviar(jidGrupo, resumoNota({ loja: notaLida.loja, dia: r.dia, itens, repetida: r.repetida }), msg, { rapido: true })))
+        .catch((e) => console.error('[despensa] nota pela IA:', e.message));
     }
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
     // Nota de voz: sempre quando a pessoa pediu; fora de pedido só quando ela marcou AUDIO: sim, com teto (1 por dia, 2 por semana)
