@@ -166,6 +166,7 @@ const TIPO_POR_TAG = [
   [/^amenity=(university|college)$/, 'faculdade'],
   [/^amenity=(school|kindergarten|language_school|music_school|driving_school)$/, 'escola'],
   [/^amenity=library$/, 'faculdade'],
+  [/^landuse=university$/, 'faculdade'],
   [/^amenity=(restaurant|fast_food|food_court)$/, 'restaurante'],
   [/^amenity=(cafe|ice_cream)$/, 'café'],
   [/^amenity=(bar|pub|nightclub|biergarten)$/, 'bar'],
@@ -214,6 +215,101 @@ export function escolherElemento(elementos, centro) {
 }
 // o servidor público principal vive sobrecarregado (504): tenta os espelhos em sequência
 const OVERPASS_URLS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
+/** Todos os candidatos razoáveis em volta do ponto: POIs a 120 m e lugares grandes no alcance deles, com distância. */
+export function listarCandidatos(elementos, centro, max = 8) {
+  const lista = [];
+  for (const e of elementos || []) {
+    const lat = e.lat ?? e.center?.lat;
+    const lon = e.lon ?? e.center?.lon;
+    if (lat == null) continue;
+    const tags = e.tags || {};
+    const d = Math.round(distanciaM(centro, { lat, lon }));
+    const grande = Object.entries(tags).some(([k, v]) => GRANDES.some(([re, alc]) => re.test(`${k}=${v}`) && d <= alc));
+    const tipo = tipoDeTags(tags);
+    if (!tipo || (!grande && d > 120)) continue;
+    const nome = tags.name || tags.brand || null;
+    if (!nome && ['residência', 'trabalho', 'outro'].includes(tipo)) continue;
+    lista.push({ tipo, nome, d, grande });
+  }
+  // sem duplicar tipo+nome; mais perto primeiro
+  const vistos = new Set();
+  return lista
+    .sort((a, b) => a.d - b.d)
+    .filter((c) => {
+      const k = `${c.tipo}|${c.nome || ''}`;
+      if (vistos.has(k)) return false;
+      vistos.add(k);
+      return true;
+    })
+    .slice(0, max);
+}
+
+/**
+ * Quão plausível é um tipo de lugar dado COMO a pessoa o usa (hora típica, duração média, dias)? 0..1.
+ * Restaurante às 8h de terça e quinta por 1h40 não é restaurante; é aula no prédio ao lado.
+ */
+export function plausibilidade(tipo, st = {}) {
+  const h = st.horaTipica ?? 12;
+  const dur = st.visitas ? (st.minutos || 0) / st.visitas : st.duracaoMedia || 60;
+  const dias = st.diasIdx || [];
+  const uteis = dias.length ? dias.filter((d) => d >= 1 && d <= 5).length / dias.length : 0.7;
+  const entre = (a, b) => (a <= b ? h >= a && h <= b : h >= a || h <= b);
+  const dentro = (a, b) => dur >= a && dur <= b;
+  switch (tipo) {
+    case 'restaurante':
+      return (entre(11, 15) || entre(18.5, 23.5) ? 1 : 0.15) * (dentro(20, 150) ? 1 : 0.5);
+    case 'café':
+      return (entre(7, 11.5) || entre(14.5, 18.5) ? 0.9 : 0.2) * (dentro(10, 120) ? 1 : 0.5);
+    case 'padaria':
+      return (entre(6.5, 10.5) || entre(15, 19.5) ? 0.9 : 0.2) * (dentro(5, 60) ? 1 : 0.4);
+    case 'bar':
+      return (entre(17, 3) ? 0.9 : 0.1) * (dentro(30, 300) ? 1 : 0.5);
+    case 'faculdade':
+    case 'escola':
+      return (uteis >= 0.6 && entre(7, 23) ? 1 : 0.2) * (dur >= 50 ? 1 : 0.4);
+    case 'academia':
+      return dentro(35, 160) ? 1 : dur > 240 ? 0.3 : 0.6;
+    case 'trabalho':
+      return (uteis >= 0.6 ? 1 : 0.3) * (dur >= 180 ? 1 : dur >= 90 ? 0.6 : 0.3);
+    case 'mercado':
+    case 'loja':
+    case 'shopping':
+      return dentro(8, 120) ? 0.8 : dur > 240 ? 0.2 : 0.4;
+    case 'igreja':
+      return (entre(18, 23) || uteis < 0.5 ? 0.8 : 0.3) * (dentro(40, 240) ? 1 : 0.5);
+    case 'parque':
+    case 'praia':
+    case 'quadra de vôlei de areia':
+      return (entre(6, 22) ? 0.8 : 0.3) * (dentro(25, 300) ? 1 : 0.5);
+    case 'saúde':
+      return (entre(7, 19) ? 0.7 : 0.2) * (dentro(15, 240) ? 1 : 0.4);
+    case 'residência':
+      return entre(18, 9) || uteis < 0.5 || dur >= 240 ? 0.7 : 0.35;
+    case 'hotel':
+      return dur >= 360 ? 0.8 : 0.2;
+    case 'transporte':
+      return dentro(5, 60) ? 0.6 : 0.2;
+    default:
+      return 0.3;
+  }
+}
+/**
+ * Entre os candidatos do mapa (com distância), escolhe o tipo que combina com o uso: score = plausibilidade × proximidade.
+ * Devolve { tipo, nome, motivo } ou null se não há candidato melhor que o atual.
+ */
+export function escolherTipoPlausivel(lugar) {
+  const cands = [...(lugar.candidatos || [])];
+  if (lugar.tipo && !cands.some((c) => c.tipo === lugar.tipo && (c.nome || null) === (lugar.nome || null))) cands.push({ tipo: lugar.tipo, nome: lugar.nome || null, d: 0 });
+  if (cands.length < 2) return null;
+  // distância pesa pouco num lugar grande: a 640 m do centro de um campus de 700 m de alcance a pessoa ainda está no campus
+  const alcance = (c) => (c.grande ? 700 : 300);
+  const score = (c) => plausibilidade(c.tipo, lugar) * (1 - Math.min(c.d || 0, alcance(c)) / (alcance(c) * (c.grande ? 4 : 1.4)));
+  const ordenados = cands.map((c) => ({ ...c, s: score(c) })).sort((a, b) => b.s - a.s);
+  const melhor = ordenados[0];
+  if (melhor.tipo === lugar.tipo && (melhor.nome || null) === (lugar.nome || null)) return null;
+  return { tipo: melhor.tipo, nome: melhor.nome || null, motivo: `uso (${lugar.padrao || 'sem padrão'}) combina mais com ${melhor.tipo}${melhor.nome ? ` ${melhor.nome}` : ''} (score ${melhor.s.toFixed(2)}) do que com ${lugar.tipo}` };
+}
+
 const FILTROS_GRANDES = ['[amenity~"^(university|college|hospital)$"]', '[shop=mall]', '[leisure~"^(stadium|sports_centre)$"]', '[aeroway=aerodrome]'];
 /** filtros = ['[amenity]', ...] no raio dado; extras = [{ raio, filtros }] pra somar outra busca na mesma consulta. */
 async function overpass(lat, lon, raio, filtros, extras = []) {
@@ -240,6 +336,7 @@ async function overpass(lat, lon, raio, filtros, extras = []) {
 // O alcance depende do tamanho típico: um campus universitário tem centenas de metros, um shopping uns 300 m.
 const GRANDES = [
   [/^amenity=(university|college)$/, 700],
+  [/^landuse=university$/, 700],
   [/^amenity=hospital$/, 400],
   [/^shop=mall$/, 300],
   [/^leisure=(stadium|sports_centre)$/, 300],
@@ -275,6 +372,32 @@ async function photon(lat, lon) {
     .filter((f) => f.geometry?.coordinates && f.properties?.osm_key)
     .map((f) => ({ type: f.properties.osm_type, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], tags: { [f.properties.osm_key]: f.properties.osm_value, ...(f.properties.name ? { name: f.properties.name } : {}) } }));
 }
+/**
+ * Lugares grandes por NOME em volta do ponto (campus, shopping, hospital): a busca por proximidade devolve só os 40 POIs
+ * mais próximos e, numa rua cheia de lojas, o campus de 700 m ao lado nem aparece. Devolve elementos no formato do Overpass.
+ */
+async function grandesPerto(lat, lon) {
+  const termos = ['universidade', 'shopping', 'hospital'];
+  const saida = [];
+  for (const q of termos) {
+    try {
+      const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&lat=${lat}&lon=${lon}&limit=6&lang=default`, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
+      if (!r.ok) continue;
+      const j = await r.json();
+      for (const f of j.features || []) {
+        const p = f.properties || {};
+        if (!f.geometry?.coordinates || !p.osm_key) continue;
+        const tags = { [p.osm_key]: p.osm_value, ...(p.name ? { name: p.name } : {}) };
+        const par = `${p.osm_key}=${p.osm_value}`;
+        if (!GRANDES.some(([re]) => re.test(par))) continue;
+        saida.push({ type: p.osm_type, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], tags });
+      }
+    } catch (e) {
+      console.warn('[lugares] photon busca:', e.message);
+    }
+  }
+  return saida;
+}
 async function nominatim(lat, lon) {
   // zoom 18 = o objeto mais próximo (prédio da universidade, loja, restaurante) além do endereço: serve de tipo quando o Overpass falha
   const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&extratags=1`, {
@@ -298,9 +421,10 @@ export async function classificarOSM({ lat, lon }) {
   const cache = colecao('osm_cache');
   const c = await cache.findOne({ _id: chave }).catch(() => null);
   const idade = c ? Date.now() - new Date(c.em).getTime() : Infinity;
-  // resposta completa vale 30 dias; se o Overpass falhou, o bairro fica guardado e o tipo é tentado de novo em 1 h
-  if (c && idade < (c.completo ? 30 * 86400_000 : 3600_000)) return c.dado;
-  const dado = { tipo: null, nome: null, bairro: c?.dado?.bairro || null, cidade: c?.dado?.cidade || null };
+  // resposta completa vale 30 dias; se o Overpass falhou, o bairro fica guardado e o tipo é tentado de novo em 1 h.
+  // Entrada antiga sem a lista de candidatos é refeita (a escolha por plausibilidade precisa dela).
+  if (c && c.dado?.candidatos && idade < (c.completo ? 30 * 86400_000 : 3600_000)) return c.dado;
+  const dado = { tipo: null, nome: null, bairro: c?.dado?.bairro || null, cidade: c?.dado?.cidade || null, candidatos: [] };
   let completo = true;
   // 1) Nominatim (rápido e estável): bairro, cidade e o objeto mais próximo como tipo provisório
   let nom = null;
@@ -316,8 +440,10 @@ export async function classificarOSM({ lat, lon }) {
   const centro = { lat, lon };
   let e = null;
   try {
-    const el = await photon(lat, lon);
-    e = escolherGrande(el, centro) || escolherElemento(el, centro);
+    const [el, grandes] = await Promise.all([photon(lat, lon), grandesPerto(lat, lon)]);
+    const todos = [...el, ...grandes];
+    e = escolherGrande(todos, centro) || escolherElemento(el, centro);
+    dado.candidatos = listarCandidatos(todos, centro);
   } catch (err) {
     console.warn('[lugares] photon:', err.message);
   }
@@ -325,12 +451,14 @@ export async function classificarOSM({ lat, lon }) {
     try {
       const el = await overpass(lat, lon, 120, ['[amenity]', '[leisure]', '[shop]', '[office]', '[club]', '[tourism]', '[natural=beach]', '[building]'], [{ raio: 300, filtros: FILTROS_GRANDES }]);
       e = escolherGrande(el, centro) || escolherElemento(el, centro);
+      if (!dado.candidatos.length) dado.candidatos = listarCandidatos(el, centro);
     } catch (err) {
       console.warn('[lugares] overpass:', err.message);
       // sem Overpass, o tipo do Nominatim resolve; se nem ele soube, fica pendente e tenta de novo em 1 h
       if (!nom?.tipo) completo = false;
     }
   }
+  if (nom?.tipo && !dado.candidatos.some((c) => c.tipo === nom.tipo && c.nome === nom.nome)) dado.candidatos.push({ tipo: nom.tipo, nome: nom.nome, d: 0, origem: 'nominatim' });
   if (e) {
     dado.tipo = e.tipo;
     dado.nome = e.generico || ['residência'].includes(e.tipo) ? null : e.nome;
@@ -383,7 +511,8 @@ export async function classificarPendentes(perfil) {
   classificando = true;
   try {
     const atual = (await colecao('perfis').findOne({ jids: { $in: perfil.jids || [] } }, { projection: { lugares: 1 } }))?.lugares || [];
-    const pendentes = atual.filter((l) => !l.tipo && !l.manual).slice(0, CLASSIFICAR_POR_VEZ);
+    // sem tipo, ou classificado antes da lista de candidatos existir (a reescolha por uso precisa dela)
+    const pendentes = atual.filter((l) => !l.manual && (!l.tipo || !l.candidatos)).slice(0, CLASSIFICAR_POR_VEZ);
     if (!pendentes.length) return;
     const patch = new Map();
     for (const l of pendentes) {
@@ -396,7 +525,14 @@ export async function classificarPendentes(perfil) {
     const lugares = fresco.map((l) => {
       const c = patch.get(l.id);
       if (!c || l.manual) return l;
-      return { ...l, tipo: c.tipo || l.tipo || null, nome: l.papel === 'casa' ? null : c.nome || l.nome || null, bairro: c.bairro || l.bairro || null, cidade: c.cidade || l.cidade || null };
+      const base = { ...l, tipo: c.tipo || l.tipo || null, nome: l.papel === 'casa' ? null : c.nome || l.nome || null, bairro: c.bairro || l.bairro || null, cidade: c.cidade || l.cidade || null, candidatos: c.candidatos || [] };
+      // o mapa diz o que há em volta; o jeito de usar (hora, duração, dias) diz o que o lugar É pra ela
+      const melhor = escolherTipoPlausivel(base);
+      if (melhor) {
+        console.log(`[lugares] ${perfil.nome.split(' ')[0]}: ${base.tipo}${base.nome ? ` ${base.nome}` : ''} -> ${melhor.tipo}${melhor.nome ? ` ${melhor.nome}` : ''} (${melhor.motivo})`);
+        return { ...base, tipo: melhor.tipo, nome: l.papel === 'casa' ? null : melhor.nome };
+      }
+      return base;
     });
     await salvarPerfil({ jids: perfil.jids, lugares });
     console.log(`[lugares] ${perfil.nome}: ${patch.size} lugar(es) classificado(s) pelo OSM`);
@@ -439,6 +575,16 @@ export async function atualizarLugares(perfil, { classificar = true } = {}) {
   stats = stats.filter((l) => l.manual || l.visitas >= 2 || l.minutos >= 60).filter((l) => l.manual || !l.ultimaVez || l.ultimaVez >= corte || l.visitas >= 3);
   stats.sort((a, b) => (b.papel === 'casa') - (a.papel === 'casa') || b.minutos - a.minutos);
   stats = stats.slice(0, MAX_LUGARES);
+  // o padrão de uso muda com o tempo: reescolhe o tipo entre os candidatos do mapa (nunca mexe no que foi marcado à mão)
+  for (const l of stats) {
+    if (l.manual || l.papel === 'casa' || !l.candidatos?.length) continue;
+    const melhor = escolherTipoPlausivel(l);
+    if (melhor) {
+      console.log(`[lugares] ${perfil.nome.split(' ')[0]}: ${l.tipo}${l.nome ? ` ${l.nome}` : ''} -> ${melhor.tipo}${melhor.nome ? ` ${melhor.nome}` : ''} (${melhor.motivo})`);
+      l.tipo = melhor.tipo;
+      l.nome = melhor.nome;
+    }
+  }
   if (classificar) {
     let feitos = 0;
     for (const l of stats) {

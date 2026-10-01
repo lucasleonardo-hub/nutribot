@@ -220,3 +220,31 @@ test('rotuloLugar: tipo "trabalho" do mapa não vira o trabalho da pessoa; resid
   assert.equal(rotuloLugar({ tipo: 'quadra de vôlei de areia', nome: 'Arena Beach', bairro: 'Itacorubi' }), 'quadra de vôlei de areia Arena Beach (Itacorubi)');
   assert.equal(rotuloLugar({ tipo: 'academia', nome: 'Garra', bairro: 'Córrego Grande' }, { comNome: false }), 'academia (Córrego Grande)');
 });
+
+import { plausibilidade, escolherTipoPlausivel, listarCandidatos } from '../lugares.js';
+test('plausibilidade e escolherTipoPlausivel: restaurante às 8h de ter/qui por 1h40 ao lado do campus vira faculdade', () => {
+  const uso = { horaTipica: 8.2, horaFim: 9.8, diasIdx: [2, 4], visitas: 13, minutos: 13 * 96, padrao: 'ter, qui · 8h12 às 9h48' };
+  assert.ok(plausibilidade('restaurante', uso) < 0.3);
+  assert.ok(plausibilidade('faculdade', uso) >= 0.9);
+  const lugar = { ...uso, tipo: 'restaurante', nome: 'Seu Caetano', candidatos: [{ tipo: 'restaurante', nome: 'Seu Caetano', d: 25 }, { tipo: 'faculdade', nome: 'UFSC', d: 420, grande: true }] };
+  const m = escolherTipoPlausivel(lugar);
+  assert.equal(m.tipo, 'faculdade');
+  assert.equal(m.nome, 'UFSC');
+  // almoço de verdade no mesmo restaurante: fica restaurante
+  const almoco = { ...lugar, horaTipica: 12.3, horaFim: 13.2, diasIdx: [1, 2, 3, 4, 5], visitas: 10, minutos: 10 * 55 };
+  assert.equal(escolherTipoPlausivel(almoco), null);
+  // um candidato só: nada a reescolher
+  assert.equal(escolherTipoPlausivel({ ...uso, tipo: 'restaurante', nome: 'X', candidatos: [{ tipo: 'restaurante', nome: 'X', d: 10 }] }), null);
+  // academia 1h de manhã continua academia mesmo com mercado do lado
+  const acad = { horaTipica: 7.1, horaFim: 8, diasIdx: [1, 2, 3, 4, 5], visitas: 60, minutos: 60 * 55, tipo: 'academia', nome: 'Garra', candidatos: [{ tipo: 'academia', nome: 'Garra', d: 30 }, { tipo: 'mercado', nome: 'Mercadinho', d: 40 }] };
+  assert.equal(escolherTipoPlausivel(acad), null);
+  const el = [
+    { lat: -27.6, lon: -48.52, tags: { amenity: 'restaurant', name: 'Seu Caetano' } },
+    { lat: -27.6035, lon: -48.52, tags: { landuse: 'university', name: 'UFSC' } }, // ~390 m, grande
+    { lat: -27.6, lon: -48.5215, tags: { building: 'yes' } }, // sem tipo
+    { lat: -27.6008, lon: -48.52, tags: { shop: 'bakery', name: 'Pão Quente' } }, // ~90 m
+  ];
+  const c = listarCandidatos(el, { lat: -27.6, lon: -48.52 });
+  assert.deepEqual(c.map((x) => x.tipo), ['restaurante', 'padaria', 'faculdade']);
+  assert.equal(c[2].grande, true);
+});
