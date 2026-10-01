@@ -226,6 +226,8 @@ export function progressaoForca(sessoes = [], { dia, semanas = 8 } = {}) {
   const exercicios = [];
   for (const [title, lista] of porEx) {
     if (lista.length < 3) continue;
+    // exercício sem carga (prancha, abdominal, panturrilha em pé com o peso do corpo) não entra na leitura de progressão de carga
+    if (!lista.some((x) => x.melhor > 0)) continue;
     const ultimo = lista[lista.length - 1];
     // última sessão em que a carga (ou as reps na mesma carga) subiram em relação à anterior
     let ultimaSubida = null;
@@ -310,7 +312,7 @@ export async function blocoForcaRecuperacao(perfil, dia, { magraSem = null, faix
     `FORÇA x RECUPERAÇÃO (8 semanas de Hevy; calculado pelo sistema):\n` +
     `- Progressão: ${prog.subindo.length} subindo, ${prog.parados.length} parado(s) há 2+ semanas, ${prog.caindo.length} caindo` +
     (prog.parados.length ? `. Parados: ${prog.parados.slice(0, 5).map((e) => `${e.title} ${fmtKg(e.melhor)} kg×${e.reps} desde ${e.ultimaSubida ? e.ultimaSubida.slice(8, 10) + '/' + e.ultimaSubida.slice(5, 7) : 'o início'}`).join('; ')}` : '') +
-    (prog.subindo.length ? `. Subindo: ${prog.subindo.slice(0, 4).map((e) => `${e.title} ${fmtKg(e.desde)}→${fmtKg(e.melhor)} kg`).join('; ')}` : '') + '\n' +
+    (prog.subindo.length ? `. Subindo: ${prog.subindo.slice(0, 4).map((e) => (e.melhor > e.desde ? `${e.title} ${fmtKg(e.desde)}→${fmtKg(e.melhor)} kg` : `${e.title} ${fmtKg(e.melhor)} kg com mais repetições (${e.reps})`)).join('; ')}` : '') + '\n' +
     `- Recuperação (7 dias): sono médio ${sonoMedioMin != null ? hs(sonoMedioMin) : '?'}${rel?.fcRepouso ? `, repouso ${rel.fcRepouso} bpm${rel.fcMedia ? ` (média ${Math.round(rel.fcMedia)})` : ''}` : ''}${rel?.recuperacao ? `, sinal: ${rel.recuperacao}` : ''}\n` +
     `- Comida (7 dias): ${kcalMedia != null ? `${kcalMedia} kcal/dia` : 'sem dias completos'}${faixa ? ` (faixa ${faixa.min}–${faixa.max})` : ''}${pMedia != null ? `, proteína ${pMedia} g/dia${pAlvo ? ` (mínimo ${pAlvo} g)` : ''}` : ''}${magraSem != null ? `, massa magra ${magraSem >= 0 ? '+' : '−'}${Math.abs(magraSem).toFixed(2).replace('.', ',')} kg/semana` : ''}\n` +
     `- Suplementos pelos registros (14 dias): creatina em ${sup.diasCreatina} de ${sup.diasComRegistro} dias${sup.diasCreatina >= 10 ? ' (constante: saturado, efeito pleno)' : sup.diasCreatina ? ' (irregular: estoque não satura)' : ''}; whey ~${sup.wheyMedio} g/dia em ${sup.diasWhey} dias; hipercalórico ${sup.hipercalorico}x\n` +

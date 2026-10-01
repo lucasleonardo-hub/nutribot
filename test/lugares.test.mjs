@@ -386,3 +386,15 @@ test('progressaoForca: parado há 2+ semanas, subindo e caindo por exercício; s
   assert.equal(sup.hipercalorico, 1);
   assert.equal(sup.wheyMedio, 20);
 });
+
+test('progressaoForca ignora exercício sem carga (peso do corpo) e mostra reps quando a carga não mudou', () => {
+  const s = (dia, kg, reps) => ({ inicio: `${dia}T10:00:00Z`, exercicios: [
+    { title: 'Prancha', sets: [{ type: 'normal', weight_kg: 0, duration_seconds: 60 }] },
+    { title: 'Panturrilha sentado', sets: [{ type: 'normal', weight_kg: kg, reps }] },
+  ] });
+  const p = progressaoForca([s('2026-09-10', 40, 12), s('2026-09-17', 40, 14), s('2026-09-24', 40, 16), s('2026-10-01', 40, 18)], { dia: '2026-10-01' });
+  assert.equal(p.exercicios.some((e) => e.title === 'Prancha'), false);
+  const pant = p.exercicios.find((e) => e.title === 'Panturrilha sentado');
+  assert.equal(pant.situacao, 'subindo');
+  assert.equal(pant.reps, 18);
+});
