@@ -15,6 +15,7 @@ import { textoRelogio } from './relogio.js';
 import { diasAnteriores } from './util.js';
 import * as ia from './gemini.js';
 import { resumoDespensaPeriodo } from './despensa.js';
+import { pensamentosDaSemana } from './pensamentos.js';
 
 export const ARQ_REFLEXOES = 'Nutri-Reflexoes.md';
 const MAX_SINTESE = 600;
@@ -100,6 +101,7 @@ export async function refletirSobre(perfil, { dia, persona, motivo = 'domingo' }
     dadosDaSemana(perfil, dia).catch(() => ''),
   ]);
   const despensa = await resumoDespensaPeriodo(perfil, dia).catch(() => '');
+  const pensamentos = await pensamentosDaSemana(perfil, dia).catch(() => '');
   const padrao = padraoAlimentar(refs, { periodoDias: 28 });
   const fontes = {
     visao,
@@ -137,6 +139,7 @@ export async function refletirSobre(perfil, { dia, persona, motivo = 'domingo' }
     anterior: anterior?.texto || '',
     hipoteses: blocoHipoteses(abertas, fechadas),
     despensa,
+    pensamentos,
     persona,
     dia,
   });

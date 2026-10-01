@@ -658,6 +658,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (jaDito ? `${jaDito}\n\n` : '') +
     (despensa ? `${despensa}\n\n` : '') +
     (perfil.reflexao?.sintese ? `COMO VOCÊ ENTENDE ${perfil.nome.split(' ')[0]} (sua reflexão de ${perfil.reflexao.dia}; pano de fundo pra escolher tom e dica, use só quando encaixar e sem dizer que "refletiu"): ${perfil.reflexao.sintese}\n\n` : '') +
+    (perfil.pensamento?.texto && perfil.pensamento.dia === dia ? `SEU PENSAMENTO MAIS RECENTE SOBRE ${perfil.nome.split(' ')[0].toUpperCase()} (hoje às ${perfil.pensamento.hora}; particular: não leia em voz alta nem cite que "pensou"; use pra escolher o que vale dizer agora): ${perfil.pensamento.texto}${perfil.pensamento.notar?.length ? ` Anotou: ${perfil.pensamento.notar.join('; ')}.` : ''}\n\n` : '') +
     (rotulos ? `RÓTULOS (Open Food Facts, tabela nutricional oficial do produto; valores POR 100 g/ml: multiplique pela quantidade que a pessoa disse e diga "pelo rótulo"; se a porção do rótulo vier, use-a quando a pessoa falar em "1 pote", "1 unidade"):\n${rotulos}\n\n` : '') +
     (ancoras ? `ÂNCORAS DA TABELA TACO para o que foi declarado na mensagem (valores oficiais; USE-OS nos itens com porção declarada e estime só o resto; se a foto mostrar porção claramente diferente da declarada, diga e ajuste):\n${ancoras}\n\n` : '') +
     (citacao ? `A MENSAGEM ATUAL RESPONDE (cita) ESTA MENSAGEM DE ${citacao.autor}: «${citacao.texto}»\nInterprete a mensagem atual em função do trecho citado ("isso", "esse", "aí" se referem a ele).\n\n` : '') +
@@ -1532,12 +1533,48 @@ export async function normalizarItensNota({ itens, nome }) {
   return Array.isArray(r) ? r : [];
 }
 
+/**
+ * Pensamento particular sobre uma pessoa a partir do retrato do dia: curto, em primeira pessoa, sem destinatário.
+ * Devolve { pensamento, notar: [...], sinais: [{ id, direcao, evidencia }], vale_falar }.
+ */
+export async function pensarSobrePessoa({ perfil, retrato, anterior, hipoteses, sintese, persona, dia }) {
+  const primeiro = perfil.nome.split(' ')[0];
+  const json = await gerar({
+    contents:
+      `Hoje é ${dataExtenso(dia)}. Este é um PENSAMENTO SEU, particular, sobre ${primeiro} (${perfil.peso || '?'} kg, objetivo: ${perfil.objetivo || '?'}). Ninguém vai ler no grupo; é você juntando os pontos do dia até agora, como quem pensa enquanto lava a louça.\n\n` +
+      (sintese ? `COMO VOCÊ ENTENDE ${primeiro.toUpperCase()} (sua reflexão de domingo): ${sintese}\n\n` : '') +
+      (anterior ? `SEU PENSAMENTO ANTERIOR: ${anterior}\n\n` : '') +
+      (hipoteses?.length ? `SUAS HIPÓTESES ABERTAS (diga se o dia de hoje traz sinal a favor, contra ou nenhum):\n${hipoteses.map((h) => `- id ${h.id}: ${h.texto}`).join('\n')}\n\n` : '') +
+      `${retrato}\n` +
+      `Escreva o pensamento em até 110 palavras, primeira pessoa, no seu jeito: o que está notando HOJE cruzando as fontes (comida x padrão, lugar x horário, gasto x apetite, compra x prato, atividade x cansaço), o que te preocupa ou te agrada, e o que quer observar até a noite. Nada de repetir o pensamento anterior; se nada mudou de verdade, diga em uma frase o que confirma. Sem endereço. Sem conselho dirigido a ela(e): é pensamento, não mensagem.\n` +
+      `Também devolva: notar = até 3 fatos curtos que valem guardar (\"almoçou às 15h de novo\", \"passou no mercado e não mandou nota\"); sinais = para cada hipótese aberta que o dia tocou, { id, direcao: a_favor | contra | neutro, evidencia (até 20 palavras) }; vale_falar = true só se houver algo que mereceria uma mensagem espontânea (não vai ser enviada; é só o seu julgamento).`,
+    config: {
+      systemInstruction: montarSystem(persona, { documento: true }),
+      temperature: 0.6,
+      pensar: false,
+      maxOutputTokens: 900,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          pensamento: { type: 'string' },
+          notar: { type: 'array', items: { type: 'string' } },
+          sinais: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, direcao: { type: 'string', enum: ['a_favor', 'contra', 'neutro'] }, evidencia: { type: 'string' } }, required: ['id', 'direcao', 'evidencia'] } },
+          vale_falar: { type: 'boolean' },
+        },
+        required: ['pensamento', 'notar', 'sinais', 'vale_falar'],
+      },
+    },
+  });
+  return JSON.parse(json);
+}
+
 /** Confere cada hipótese aberta nos dados da semana. Devolve [{ id, veredito: confirmada|refutada|aberta, evidencia }]. */
 export async function verificarHipoteses({ perfil, hipoteses, fontes, dia }) {
   const json = await gerar({
     contents:
       `Hoje é ${dataExtenso(dia)}. Você levantou estas hipóteses sobre ${perfil.nome} nas últimas semanas. Confira cada uma SÓ com os dados abaixo, como uma cientista: confirmada quando os dados desta semana mostram claramente; refutada quando mostram o contrário; aberta quando não dá pra decidir (diga o que faltou). Não invente número.\n\n` +
-      `HIPÓTESES:\n${hipoteses.map((h) => `- id ${h.id}: ${h.texto}${h.comoVerificar ? ` (como conferir: ${h.comoVerificar})` : ''}`).join('\n')}\n\n` +
+      `HIPÓTESES:\n${hipoteses.map((h) => `- id ${h.id}: ${h.texto}${h.comoVerificar ? ` (como conferir: ${h.comoVerificar})` : ''}${h.sinais?.length ? `\n  sinais que você anotou ao longo da semana: ${h.sinais.map((s) => `${s.dia.slice(8, 10)}/${s.dia.slice(5, 7)} ${s.direcao === 'a_favor' ? '+' : '−'} ${s.evidencia}`).join('; ')}` : ''}`).join('\n')}\n\n` +
       (fontes.semana ? `SEMANA (registros compilados pelo sistema):\n${fontes.semana}\n\n` : '') +
       (fontes.visao ? `NÚMEROS:\n${fontes.visao}\n\n` : '') +
       (fontes.padrao ? `${fontes.padrao}\n\n` : '') +
@@ -1582,7 +1619,7 @@ export async function extrairHipoteses({ perfil, texto, abertas = [], dia }) {
  * Reflexão livre sobre uma pessoa: sem formato fixo, primeira pessoa, pensando em voz alta sobre tudo que ela sabe.
  * O último parágrafo ("Em uma frase") vira a síntese que entra nas conversas com a pessoa.
  */
-export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, hipoteses, despensa, persona, dia }) {
+export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, hipoteses, despensa, pensamentos, persona, dia }) {
   const primeiro = perfil.nome.split(' ')[0];
   return gerar({
     contents:
@@ -1597,6 +1634,7 @@ export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugare
       (documentos ? `DOCUMENTOS DA PASTA (bioimpedância, exames):\n${documentos}\n\n` : '') +
       (hipoteses ? `${hipoteses}\n\n` : '') +
       (despensa ? `${despensa}\n\n` : '') +
+      (pensamentos ? `${pensamentos}\n\n` : '') +
       `Escreva, em primeira pessoa e no seu jeito, O QUE VOCÊ PENSA sobre ${primeiro}: como essa pessoa funciona (rotina real, onde passa o dia, quanto gasta e quanto come, como dorme, quando treina, quando desanda), o que os dados dizem que ela talvez não perceba, o que você suspeita mas ainda não tem certeza e quer observar (escreva essas suspeitas de forma explícita, começando por "Suspeito que" ou "Quero observar se": elas serão conferidas nos dados da semana que vem), o que te preocupa e o que te impressiona, e como isso muda o jeito de você falar com ela. Ligue os pontos entre fontes diferentes (ex.: dia de faculdade à noite x jantar tarde; gasto do relógio x apetite; lugar x escolha de comida). Pode ser em parágrafos corridos, pode ter uma lista se ajudar, sem títulos obrigatórios e sem tom de relatório: é reflexão, não ficha. Sem endereço, rua ou coordenada (bairro pode). Nada sobre outras pessoas do grupo. Até 700 palavras.\n` +
       `Termine com um parágrafo separado começando exatamente com "Em uma frase:" resumindo como você entende ${primeiro} hoje, em no máximo 60 palavras, do jeito que você usaria na cabeça antes de responder uma mensagem dela(e). Sem linha ATUALIZAR. Sem [[links]].`,
     config: { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.8, maxOutputTokens: 2200 },

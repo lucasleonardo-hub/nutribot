@@ -37,6 +37,7 @@ import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, sa
 import { oferecerPlano } from './comandos.js';
 import { verificarAtividades } from './atividades.js';
 import { perguntarValidades, receberNotaDoApp } from './despensa.js';
+import { pensarTodos } from './pensamentos.js';
 import { tokensRelogio } from './relogio.js';
 import { enviar as enviarZap } from './whatsapp.js';
 import { lembrar } from './dia.js';
@@ -251,6 +252,9 @@ async function checarDrive() {
     cron.schedule('*/10 * * * *', () => naFila('cobranca', verificarCobrancas), { timezone: TZ });
     cron.schedule('7,22,37,52 * * * *', () => naFila('atividades', () => verificarAtividades({ lembrar })), { timezone: TZ });
     cron.schedule('30 18 * * *', () => naFila('despensa', () => perguntarValidades({ lembrar })), { timezone: TZ });
+    // pensamentos particulares: fim da manhã, fim da tarde e noite, só quando há dado novo (nada vai pro grupo)
+    cron.schedule('30 11,17,21 * * *', () => naFila('pensamentos', () => pensarTodos()), { timezone: TZ });
+    console.log('[cron] pensamentos particulares às 11:30, 17:30 e 21:30 (só com dado novo)');
     // Conferência por amostragem das respostas que saíram por reserva externa (poucas por semana, em hora aleatória)
     cron.schedule('37 * * * *', () => naFila('revisao', revisarPendentes), { timezone: TZ });
     console.log('[cron] conferência por amostragem das respostas de reserva (de hora em hora, no máximo 2 por semana)');

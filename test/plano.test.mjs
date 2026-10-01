@@ -234,3 +234,15 @@ test('papoCurto e enxugarPapo: "hehe"/"ai demora um pouco" viram resposta curta 
   assert.match(curta, /Hipertrofia/); // link vira palavra, sem colchetes
   assert.equal(curta.split(/\n\s*\n/).length, 2);
 });
+
+import { assinaturaNovidade } from '../pensamentos.js';
+test('assinaturaNovidade: muda com refeição/visita/nota/atividade e bloco de 6 h; passos só a cada 2.000', () => {
+  const base = { refeicoes: 2, visitas: 1, notas: 0, atividades: 0, passos: 4100, hora: '11:30' };
+  const a = assinaturaNovidade(base);
+  assert.equal(assinaturaNovidade({ ...base, passos: 4900 }), a, 'passos dentro do mesmo bloco não contam');
+  assert.notEqual(assinaturaNovidade({ ...base, passos: 6100 }), a);
+  assert.notEqual(assinaturaNovidade({ ...base, refeicoes: 3 }), a);
+  assert.notEqual(assinaturaNovidade({ ...base, visitas: 2 }), a);
+  assert.notEqual(assinaturaNovidade({ ...base, hora: '17:30' }), a);
+  assert.equal(assinaturaNovidade({ ...base, hora: '09:50' }), a, 'mesmo bloco de 6 h (6h-12h)');
+});
