@@ -36,7 +36,9 @@ import { garantirIndiceVetorial } from './memoria_semantica.js';
 import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
 import { oferecerPlano } from './comandos.js';
 import { verificarAtividades } from './atividades.js';
-import { perguntarValidades } from './despensa.js';
+import { perguntarValidades, receberNotaDoApp } from './despensa.js';
+import { tokensRelogio } from './relogio.js';
+import { enviar as enviarZap } from './whatsapp.js';
 import { lembrar } from './dia.js';
 
 // ============================================================
@@ -74,6 +76,25 @@ app.post('/relogio', express.json({ limit: '4mb' }), async (req, res) => {
   }
 });
 app.get('/relogio', (_req, res) => res.type('text').send('POST JSON aqui com o cabeçalho x-relogio-token (app Relógio do NutriBot).'));
+// Cupom do mercado lido pelo app (1.4): o celular abre a página da NFC-e e manda o texto; mesmo token do relógio.
+app.post('/nota', express.json({ limit: '2mb' }), async (req, res) => {
+  try {
+    const tokens = tokensRelogio();
+    const pessoa = String(req.body?.pessoa || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+    const token = req.get('x-relogio-token');
+    if (!pessoa || !token || tokens[pessoa] !== String(token)) return res.status(401).json({ ok: false, erro: 'token ou pessoa inválidos' });
+    const perfil = (await listarPerfis()).find((p) => p.nome.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().split(/\s+/)[0] === pessoa);
+    if (!perfil) return res.status(404).json({ ok: false, erro: 'pessoa não cadastrada' });
+    if (!req.body?.texto || String(req.body.texto).length < 50) return res.status(400).json({ ok: false, erro: 'texto da nota vazio' });
+    const grupo = estado.memoria.grupo;
+    const r = await receberNotaDoApp({ perfil, chave: req.body.chave || null, url: req.body.url || '', texto: req.body.texto, dia: agora().dia, avisarGrupo: grupo ? (t) => enviarZap(grupo, t) : null });
+    console.log(`[despensa] nota pelo app de ${perfil.nome}: ${r.ok ? `${r.itens} itens` : r.erro}`);
+    res.status(r.ok ? 200 : 422).json(r);
+  } catch (e) {
+    console.error('[despensa] /nota:', e.message);
+    res.status(500).json({ ok: false, erro: e.message });
+  }
+});
 app.get('/qr', async (_req, res) => {
   const pagina = (corpo, recarregarEm) =>
     res.send(

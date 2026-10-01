@@ -11,8 +11,8 @@ android {
         applicationId = "br.nutribot.relogio"
         minSdk = 28
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.3" // 1.2: localização opcional · 1.3: alta precisão (GNSS L1+L5) com velocidade, nova tentativa em 2 min, 30 s de conexão, sem envio duplicado
+        versionCode = 5
+        versionName = "1.4" // 1.3: alta precisão (GNSS) e envio mais robusto · 1.4: leitor de cupom (QR da NFC-e aberto no celular e texto da nota enviado ao bot)
     }
 
     // Assinatura estável (mesma chave em todo build, senão o Android recusa atualizar por cima):
@@ -56,5 +56,6 @@ dependencies {
     implementation("androidx.health.connect:connect-client:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0") // leitor de QR do Google (sem permissão de câmera)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

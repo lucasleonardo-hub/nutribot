@@ -30,10 +30,29 @@
 
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTop"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Cupom: "Compartilhar" o link do QR (de qualquer leitor) com este app -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <!-- Cupom: "Abrir com" nos links de consulta de NFC-e das SEFAZ -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="sat.sef.sc.gov.br" />
+                <data android:scheme="https" android:host="www.nfce.fazenda.sp.gov.br" />
+                <data android:scheme="https" android:host="www.sefaz.rs.gov.br" />
+                <data android:scheme="https" android:host="www.fazenda.pr.gov.br" />
+                <data android:scheme="https" android:host="nfce.fazenda.mg.gov.br" />
+                <data android:scheme="https" android:host="www.nfce.fazenda.gov.br" />
             </intent-filter>
             <!-- O Health Connect abre esta tela quando a pessoa toca em "por que este app quer os dados" -->
             <intent-filter>

@@ -1482,6 +1482,31 @@ export async function extrairItensCupom({ imagens }) {
   return { loja: r.loja || null, data: r.data || null, itens: (r.itens || []).filter((i) => i.descricao && !i.ilegivel) };
 }
 
+/** Itens a partir do TEXTO de uma página de nota (modelo desconhecido): mesmo formato do cupom por foto. */
+export async function extrairItensTexto({ texto }) {
+  const json = await gerar({
+    contents: `Texto extraído da página de consulta de uma nota fiscal de consumidor (NFC-e). Liste TODOS os itens comprados: descrição como impressa, quantidade, unidade, valor unitário, valor total e código do produto se houver. Ignore impostos, pagamento, CPF e totais. Devolva também loja e data (AAAA-MM-DD) se aparecerem.\n\nTEXTO:\n${String(texto || '').slice(0, 20000)}`,
+    config: {
+      temperature: 0.1,
+      pensar: false,
+      leve: true,
+      maxOutputTokens: 4000,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          loja: { type: 'string', nullable: true },
+          data: { type: 'string', nullable: true },
+          itens: { type: 'array', items: { type: 'object', properties: { descricao: { type: 'string' }, qtd: { type: 'number', nullable: true }, unidade: { type: 'string', nullable: true }, valorUnit: { type: 'number', nullable: true }, valorTotal: { type: 'number', nullable: true }, codigo: { type: 'string', nullable: true } }, required: ['descricao'] } },
+        },
+        required: ['itens'],
+      },
+    },
+  });
+  const r = JSON.parse(json);
+  return { loja: r.loja || null, data: r.data || null, itens: r.itens || [] };
+}
+
 /** Descrições cruas do cupom -> itens canônicos: nome, categoria, quantidade/unidade, granel, perecível, validade típica, se é alimento. */
 export async function normalizarItensNota({ itens, nome }) {
   const json = await gerar({

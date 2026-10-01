@@ -106,6 +106,52 @@ export async function testarConsultaSefaz(url) {
   }
 }
 
+/**
+ * Puro. Itens a partir do TEXTO da página da NFC-e (innerText), no modelo usado por SC/SP/RS/PR/MG:
+ * "DESCRIÇÃO (Código: 123) Qtde.: 0,84 UN: KG Vl. Unit.: 39,90 Vl. Total 33,52". Devolve { loja, data, itens }.
+ */
+export function parsearTextoNfce(texto) {
+  const t = String(texto || '').replace(/\r/g, '').replace(/[ \t]+/g, ' ');
+  const num = (s) => (s == null ? null : Number(String(s).replace(/\./g, '').replace(',', '.')) || null);
+  const itens = [];
+  const re = /([^\n]+?)\s*\(\s*C[óo]d(?:igo)?\.?:?\s*([^)]*?)\s*\)\s*Qtde\.?:?\s*([\d.,]+)\s*UN:?\s*([A-Za-z]{1,4})\s*Vl\.?\s*Unit\.?:?\s*([\d.,]+)\s*(?:Vl\.?\s*Total:?\s*)?([\d.,]+)/g;
+  let m;
+  while ((m = re.exec(t))) {
+    const descricao = m[1].replace(/^\d+\s*[-–.]?\s*/, '').trim();
+    if (!descricao) continue;
+    itens.push({ descricao, codigo: m[2].trim() || null, qtd: num(m[3]), unidade: m[4].toUpperCase(), valorUnit: num(m[5]), valorTotal: num(m[6]) });
+  }
+  const loja = (t.match(/^\s*([^\n]{3,80})\n[^\n]*CNPJ/m) || [])[1]?.trim() || null;
+  const d = t.match(/Emiss[ãa]o:?\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+  const data = d ? `${d[3]}-${d[2]}-${d[1]}` : null;
+  return { loja, data, itens };
+}
+/**
+ * Rota /nota: o app abriu a página da nota no celular (onde a verificação do site passa) e mandou o texto.
+ * Extrai os itens (parser; se não bater, IA), padroniza, grava e avisa no grupo. Devolve { ok, itens, resumo }.
+ */
+export async function receberNotaDoApp({ perfil, chave, url, texto, dia, avisarGrupo }) {
+  let lido = parsearTextoNfce(texto);
+  if (!lido.itens.length) {
+    // página num modelo diferente: a IA extrai do texto
+    const r = await ia.extrairItensTexto({ texto: String(texto || '').slice(0, 20000) }).catch(() => null);
+    if (r?.itens?.length) lido = { loja: r.loja || lido.loja, data: r.data || lido.data, itens: r.itens };
+  }
+  if (!lido.itens.length) return { ok: false, erro: 'não reconheci itens no texto da nota', itens: 0 };
+  const itens = await padronizarItens(lido.itens, { perfil, dia });
+  const r = await registrarNota({ perfil, chave: chave || extrairChave(url) || null, loja: lido.loja, data: lido.data, itens, origem: 'app' });
+  const resumo = resumoNota({ loja: lido.loja, dia: r.dia, itens, repetida: r.repetida });
+  if (avisarGrupo && r.nova) await avisarGrupo(resumo).catch(() => {});
+  return { ok: true, itens: itens.length, repetida: Boolean(r.repetida), loja: lido.loja, resumo: r.repetida ? 'nota já lida antes' : `${itens.length} itens na despensa${lido.loja ? ` (${lido.loja})` : ''}` };
+}
+/** !despensa limpar: zera despensa e notas da pessoa (começar do zero depois de um teste). */
+export async function limparDespensa(perfil) {
+  const jid = jidDe(perfil);
+  if (!jid) return 0;
+  const [a, b] = await Promise.all([colecao('despensa').deleteMany({ jid }), colecao('notas').deleteMany({ jid })]);
+  return (a.deletedCount || 0) + (b.deletedCount || 0);
+}
+
 // ---------- padronização + nutrição ----------
 /**
  * Itens crus do cupom -> itens canônicos (IA leve) + tabela nutricional (Open Food Facts por código de barras ou nome).

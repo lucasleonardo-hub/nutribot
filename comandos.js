@@ -23,7 +23,7 @@ import { pareceAceitePlano } from './consciencia.js';
 import { lugaresZap, marcarLugarAtual, esquecerLugares, mercadosProximos } from './lugares.js';
 import { refletirSobre, reflexaoZap } from './reflexao.js';
 import { atividadesZap, criarAtividade, removerAtividade, responderPendente } from './atividades.js';
-import { despensaZap, ajustarItem, extrairChave, interpretarQr, blocoDespensa } from './despensa.js';
+import { despensaZap, ajustarItem, extrairChave, interpretarQr, blocoDespensa, limparDespensa } from './despensa.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
@@ -441,8 +441,11 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
         const q = interpretarQr(arg) || (extrairChave(arg) ? { chave: extrairChave(arg) } : null);
         // a consulta por chave na SEFAZ exige captcha (Cloudflare Turnstile em SC): o caminho que funciona sempre é a foto do cupom
         resposta = q
-          ? `Chave anotada (${q.uf || 'UF ?'}, ${q.chave.slice(0, 4)}…). A SEFAZ só mostra os itens depois de um captcha, então o que funciona sempre é a FOTO do cupom: manda a foto com a lista de itens (e o QR, se der) que eu leio tudo e monto a despensa.`
-          : 'Manda a foto do cupom do mercado (com a lista de itens) que eu leio e monto a tua despensa. A chave de 44 dígitos sozinha não traz os itens sem captcha.';
+          ? `Chave anotada (${q.uf || 'UF ?'}, ${q.chave.slice(0, 4)}…). Pelo servidor a SEFAZ pede verificação; use o botão "Ler cupom" do app Relógio (ele abre a nota no teu celular e me manda os itens exatos) ou manda a FOTO do cupom aqui.`
+          : 'Dois jeitos de entrar a compra: botão "Ler cupom" no app Relógio (QR da nota; itens e preços exatos) ou a foto do cupom aqui no grupo.';
+      } else if (/^(limpar|zerar)$/i.test(arg)) {
+        const n = await limparDespensa(perfil);
+        resposta = `Despensa zerada (${n} registro(s) apagados). Manda um cupom novo quando quiser recomeçar.`;
       } else if (/^add\s+/i.test(arg)) {
         const m = /^add\s+(?:(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml|un|unid|unidades?|pct|pacotes?|cx|caixas?)?\s+)?(.+)$/i.exec(arg);
         const r = m ? await ajustarItem(perfil, { item: m[3], acao: 'comprei', qtd: m[1] ? Number(m[1].replace(',', '.')) : 1, unidade: (m[2] || 'un').toLowerCase() }, { dia }) : null;

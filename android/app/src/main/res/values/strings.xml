@@ -12,4 +12,5 @@
     <string name="botao_sincronizar">2. Sincronizar agora</string>
     <string name="botao_bateria">3. Liberar da economia de bateria</string>
     <string name="botao_localizacao">4. Localização (opcional): ligar/desligar</string>
+    <string name="botao_cupom">🧾 Ler cupom do mercado (QR da nota)</string>
 </resources>

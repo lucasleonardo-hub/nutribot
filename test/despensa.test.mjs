@@ -42,3 +42,30 @@ test('resumoNota: texto curto e repetida', () => {
   assert.match(t, /- frango · 800 g/);
   assert.match(resumoNota({ itens: [], repetida: true }), /já tinha lido/);
 });
+
+import { parsearTextoNfce } from '../despensa.js';
+test('parsearTextoNfce lê o texto da página da SEFAZ (modelo SC/SP): itens, loja e data', () => {
+  const texto = [
+    'SUPERMERCADO BISTEK LTDA',
+    'CNPJ: 12.345.678/0001-99 Rua Lauro Linhares, 100',
+    'Documento Auxiliar da Nota Fiscal de Consumidor Eletrônica',
+    'FILE MIGNON SUINO KG (Código: 2000123 )',
+    'Qtde.:0,84 UN: KG Vl. Unit.: 39,90 Vl. Total 33,52',
+    'IOG VIGOR GREGO 100G (Código: 7891234567890 )',
+    'Qtde.:4 UN: UN Vl. Unit.: 3,49 Vl. Total 13,96',
+    'ARROZ TIO JOAO 1KG (Código: 7896006711155)',
+    'Qtde.:1 UN: UN Vl. Unit.: 6,99 Vl. Total 6,99',
+    'Qtd. total de itens: 3',
+    'Valor total R$ 54,47',
+    'Emissão: 01/10/2026 09:41:12',
+  ].join('\n');
+  const r = parsearTextoNfce(texto);
+  assert.equal(r.loja, 'SUPERMERCADO BISTEK LTDA');
+  assert.equal(r.data, '2026-10-01');
+  assert.equal(r.itens.length, 3);
+  assert.deepEqual(r.itens[0], { descricao: 'FILE MIGNON SUINO KG', codigo: '2000123', qtd: 0.84, unidade: 'KG', valorUnit: 39.9, valorTotal: 33.52 });
+  assert.equal(r.itens[1].codigo, '7891234567890');
+  assert.equal(r.itens[1].qtd, 4);
+  assert.equal(r.itens[2].valorTotal, 6.99);
+  assert.equal(parsearTextoNfce('SecurityVerify Verificando seu navegador').itens.length, 0);
+});
