@@ -51,6 +51,9 @@ export function duracaoDe(texto) {
  * Plano da semana de uma pessoa: padrão real (28 dias), repertório do grupo, meta por dia da semana (relógio), agenda e o pedido
  * dela (orçamento, mercado perto). pedidoArg vem do "!plano <texto>" ou da resposta à oferta de sexta; fica guardado no perfil.
  */
+const TENTATIVAS_PLANO = 5; // ~17 min no pior caso: 5 x (até 2,5 min de cadeia Flash + 1 min de espera)
+const PRAZO_TENTATIVA_PLANO_MS = 150_000;
+const ESPERA_PLANO_MS = 60_000;
 export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' }) {
   // "!plano orçamento apertado, mercado perto só tem o básico": o pedido vale pra este plano e fica guardado pros próximos.
   // "!plano limpar" esquece o pedido guardado.
@@ -64,7 +67,7 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
   }
   const semana = semanaDoPlano(dia);
   const rotuloSemana = `${semana.dias[0].rotulo.split(' ')[1]} a ${semana.dias[6].rotulo.split(' ')[1]}`;
-  await enviar(jidGrupo, `Montando teu plano de ${rotuloSemana} com as refeições que você costuma registrar e a tua meta${pedido ? `, levando em conta: "${pedido}"` : ''}. Um minutinho. 📝`, msg, { rapido: true });
+  await enviar(jidGrupo, `Montando teu plano de ${rotuloSemana} com as refeições que você costuma registrar e a tua meta${pedido ? `, levando em conta: "${pedido}"` : ''}. Pode levar alguns minutos: plano eu só entrego do modelo principal. 📝`, msg, { rapido: true });
   try {
     const visao = await visaoDe(perfil, dia);
     const [comAgenda] = await enriquecerPerfis([perfil], dia);
@@ -91,9 +94,29 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
       const meta = gastoAdaptativo({ refeicoes: minhas, pesagens, perfil, dia, gastos });
       metaSemana = previsaoSemana({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta, semana, perfil })?.texto || null;
     }
-    const plano = ia.separarAtualizacao(
-      await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '', despensa, semanaTipica: tipica })
-    ).texto.replace(/[~≈]\s?(?=\d)/g, ''); // "~480 kcal" vira "480 kcal" mesmo que o modelo insista
+    // Plano é documento, não resposta na hora: só o modelo principal (Flash). Em "alta demanda" avisa, espera e tenta de
+    // novo (até ~17 min) em vez de entregar plano do Lite; a cadeia completa (Lite, reservas) só como último recurso.
+    const args = { perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '', despensa, semanaTipica: tipica };
+    let bruto = null;
+    let avisouEspera = false;
+    for (let tentativa = 1; tentativa <= TENTATIVAS_PLANO && !bruto; tentativa++) {
+      try {
+        bruto = await ia.planoSemanal({ ...args, soPrincipal: true, prazoMs: PRAZO_TENTATIVA_PLANO_MS });
+      } catch (e) {
+        console.warn(`[plano] tentativa ${tentativa}/${TENTATIVAS_PLANO} no modelo principal falhou: ${String(e.message).slice(0, 120)}`);
+        if (tentativa === TENTATIVAS_PLANO) break;
+        if (!avisouEspera) {
+          avisouEspera = true;
+          await enviar(jidGrupo, 'A IA principal tá em alta demanda agora. Plano eu não entrego de modelo reserva: vou esperar e tentar de novo em alguns minutos, segura aí. ⏳', msg, { rapido: true });
+        }
+        await new Promise((r) => setTimeout(r, ESPERA_PLANO_MS));
+      }
+    }
+    if (!bruto) {
+      console.warn('[plano] modelo principal não respondeu em nenhuma tentativa; último recurso: cadeia completa');
+      bruto = await ia.planoSemanal(args);
+    }
+    const plano = ia.separarAtualizacao(bruto).texto.replace(/[~≈]\s?(?=\d)/g, ''); // "~480 kcal" vira "480 kcal" mesmo que o modelo insista
     if (!plano) throw new Error('plano vazio');
     await enviar(jidGrupo, plano, msg, { rapido: true });
     await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(plano da semana de ${perfil.nome} enviado)`, tipo: 'bot' });

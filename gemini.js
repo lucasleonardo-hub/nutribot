@@ -462,7 +462,8 @@ function rebaixarPensar(model, e) {
  * de conversa, 5 min em documentos longos). Sem isso, num dia de "alta demanda" geral uma mensagem levava 5 minutos.
  */
 async function gerar({ contents, config = {}, tentativas = 2 }) {
-  const { pensar, estrito, leve, prazoMs, semReserva, validar, ...configApi } = config;
+  // soPrincipal: só a família principal (Flash), sem Lite nem reserva externa; falhou, lança. Pra documento que pode esperar (plano da semana).
+  const { pensar, estrito, leve, prazoMs, semReserva, validar, soPrincipal = false, ...configApi } = config;
   let erro;
   const falhas = []; // { modelo, chave, motivo } desta chamada, pro aviso do admin
   const inicio = Date.now();
@@ -475,8 +476,8 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
   // responder quando os Flash não respondem, e antes eles nem chegavam a ser tentados.
   const primeira = leve ? [...MODELOS_LEVES] : [MODELO, ...MODELOS_RESERVA];
   const segunda = leve ? [MODELO, ...MODELOS_RESERVA] : [...MODELOS_LEVES];
-  const modelos = [...primeira, ...segunda];
-  const prazoFase1 = inicio + Math.round(prazoTotal * 0.55);
+  const modelos = soPrincipal ? [...primeira] : [...primeira, ...segunda];
+  const prazoFase1 = soPrincipal ? inicio + prazoTotal : inicio + Math.round(prazoTotal * 0.55);
   const prazo = inicio + prazoTotal;
   let esgotouPrazo = false;
   for (let mi = 0; mi < modelos.length && !esgotouPrazo; mi++) {
@@ -578,6 +579,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
   }
 
   if (!erro) erro = new Error('todos os modelos Gemini estão temporariamente indisponíveis');
+  if (soPrincipal) throw erro; // quem pediu só o principal prefere esperar e tentar de novo a aceitar Lite ou reserva
   // Todos os Gemini falharam. Reservas (Cohere / OpenRouter / Groq / Hugging Face): texto e foto sim; áudio e PDF não.
   const partes = partesDe(contents);
   const imagens = partes.filter((p) => p?.inlineData?.mimeType?.startsWith('image/')).map((p) => p.inlineData);
@@ -1746,7 +1748,7 @@ export async function embutir(texto, taskType = 'RETRIEVAL_DOCUMENT') {
 }
 
 /** Plano da semana + lista de compras, a partir do que a pessoa já come, do objetivo e da meta calculada. Uma chamada Flash. */
-export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares, despensa, semanaTipica }) {
+export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares, despensa, semanaTipica, soPrincipal = false, prazoMs = 540_000 }) {
   const primeiro = perfil.nome.split(' ')[0];
   const cidade = perfil.cidade || 'a cidade dela(e)';
   const slots = padrao?.slots ? Object.keys(padrao.slots) : [];
@@ -1785,7 +1787,7 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       `3) *💡 Compra esperta* (2 ou 3 dicas, como descrito acima) e depois *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas e pensada pra caber no orçamento (itens que se repetem na semana), incluindo o que as dicas pedem.\n` +
       `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.`,
     // 9 min: o plano roda solto da fila e qualidade vale mais que pressa (num pico de "alta demanda" os Flash voltam em minutos)
-    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 3000, temperature: 0.7, prazoMs: 540_000 },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 3000, temperature: 0.7, prazoMs, ...(soPrincipal ? { soPrincipal: true, semReserva: true } : {}) },
   });
 }
 const NOME_SLOT_PLANO = { cafe: 'Café', lanche_manha: 'Lanche da manhã', almoco: 'Almoço', lanche: 'Lanche', jantar: 'Jantar', ceia: 'Ceia' };
