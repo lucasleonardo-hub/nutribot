@@ -435,13 +435,15 @@ export const creditosEsgotados = () => Date.now() - ultimoAvisoCreditos < 60 * 6
 // Nem todo modelo aceita MINIMAL (o 3.8 Flash responde 400): quando isso acontece, o modelo entra em `semMinimal`
 // e passa a receber LOW; se nem LOW servir, vai sem thinkingConfig (padrão do modelo).
 const nivelPensar = new Map(); // model -> 'MINIMAL' | 'LOW' | 'PADRAO'
+// pensar: false = mínimo (conversa); 'baixo' = pensa pouco (documento longo: raciocínio conta no maxOutputTokens e um plano
+// de 7 dias saiu cortado no primeiro item porque o modelo gastou 5.700 tokens pensando); undefined = padrão do modelo.
 function configPensar(model, pensar) {
-  if (pensar !== false) return {};
+  if (pensar !== false && pensar !== 'baixo') return {};
   if (/gemini-3/i.test(model)) {
-    const nivel = nivelPensar.get(model) || (/flash|lite/i.test(model) ? 'MINIMAL' : 'LOW');
+    const nivel = nivelPensar.get(model) || (pensar === 'baixo' ? 'LOW' : /flash|lite/i.test(model) ? 'MINIMAL' : 'LOW');
     return nivel === 'PADRAO' ? {} : { thinkingConfig: { thinkingLevel: nivel } };
   }
-  return { thinkingConfig: { thinkingBudget: 0 } };
+  return { thinkingConfig: { thinkingBudget: pensar === 'baixo' ? 1024 : 0 } };
 }
 /** Erro 400 de thinking level: rebaixa o nível desse modelo e devolve true pra tentar de novo na hora. */
 function rebaixarPensar(model, e) {
@@ -548,7 +550,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
           break; // próxima chave/modelo, sem repetir este
         }
         const status = e?.status || e?.code;
-        if (status === 400 && pensar === false && rebaixarPensar(model, e)) {
+        if (status === 400 && (pensar === false || pensar === 'baixo') && rebaixarPensar(model, e)) {
           i--; // mesma rodada, agora com o nível que o modelo aceita
           continue;
         }
@@ -1787,7 +1789,8 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       `3) *💡 Compra esperta* (2 ou 3 dicas, como descrito acima) e depois *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas e pensada pra caber no orçamento (itens que se repetem na semana), incluindo o que as dicas pedem.\n` +
       `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.`,
     // 9 min: o plano roda solto da fila e qualidade vale mais que pressa (num pico de "alta demanda" os Flash voltam em minutos)
-    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 3000, temperature: 0.7, prazoMs, ...(soPrincipal ? { soPrincipal: true, semReserva: true } : {}) },
+    // estrito: plano cortado por limite de saída vira erro (o laço de tentativas refaz) em vez de ir pela metade pro grupo
+    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 6000, temperature: 0.7, pensar: 'baixo', estrito: true, prazoMs, ...(soPrincipal ? { soPrincipal: true, semReserva: true } : {}) },
   });
 }
 const NOME_SLOT_PLANO = { cafe: 'Café', lanche_manha: 'Lanche da manhã', almoco: 'Almoço', lanche: 'Lanche', jantar: 'Jantar', ceia: 'Ceia' };
