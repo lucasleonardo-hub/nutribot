@@ -24,7 +24,7 @@ import { carregarConhecimento } from './conhecimento.js';
 import { dossieDe, pastaDe } from './pessoas.js';
 import { receberEnvio } from './relogio.js';
 import { reservasDisponiveis } from './reservas.js';
-import { TZ, agora } from './util.js';
+import { TZ, agora, comTempo } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca } from './whatsapp.js';
 import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes, falaProgramada } from './dia.js';
@@ -79,15 +79,31 @@ app.post('/relogio', express.json({ limit: '4mb' }), async (req, res) => {
 app.get('/relogio', (_req, res) => res.type('text').send('POST JSON aqui com o cabeçalho x-relogio-token (app Relógio do NutriBot).'));
 // Cupom do mercado lido pelo app (1.4): o celular abre a página da NFC-e e manda o texto; mesmo token do relógio.
 app.post('/nota', express.json({ limit: '2mb' }), async (req, res) => {
+  // Responde na hora e processa em segundo plano: o app espera a resposta por no máximo 90 s, e ler a nota (Gemini +
+  // Open Food Facts item a item) pode passar disso. O resultado vai pro grupo (confirmação curta ou motivo da falha).
+  const tamanho = String(req.body?.texto || '').length;
   try {
     const tokens = tokensRelogio();
     const pessoa = String(req.body?.pessoa || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
     const token = req.get('x-relogio-token');
-    if (!pessoa || !token || tokens[pessoa] !== String(token)) return res.status(401).json({ ok: false, erro: 'token ou pessoa inválidos' });
+    if (!pessoa || !token || tokens[pessoa] !== String(token)) {
+      console.warn(`[despensa] /nota recusada: token ou pessoa inválidos (pessoa="${pessoa.slice(0, 20)}", ${tamanho} chars, app ${req.body?.app || '?'})`);
+      return res.status(401).json({ ok: false, erro: 'token ou pessoa inválidos' });
+    }
     const perfil = (await listarPerfis()).find((p) => p.nome.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().split(/\s+/)[0] === pessoa);
-    if (!perfil) return res.status(404).json({ ok: false, erro: 'pessoa não cadastrada' });
-    if (!req.body?.texto || String(req.body.texto).length < 50) return res.status(400).json({ ok: false, erro: 'texto da nota vazio' });
+    if (!perfil) {
+      console.warn(`[despensa] /nota recusada: pessoa "${pessoa}" não cadastrada`);
+      return res.status(404).json({ ok: false, erro: 'pessoa não cadastrada' });
+    }
+    if (tamanho < 50) {
+      console.warn(`[despensa] /nota recusada: texto vazio (${tamanho} chars) de ${perfil.nome}`);
+      return res.status(400).json({ ok: false, erro: 'texto da nota vazio' });
+    }
+    const chave = req.body.chave || null;
+    console.log(`[despensa] nota pelo app de ${perfil.nome} chegou: ${tamanho} chars${chave ? `, chave ${String(chave).slice(0, 8)}…` : ''} (app ${req.body?.app || '?'}); lendo em segundo plano`);
+    res.status(200).json({ ok: true, recebido: true, resumo: 'cupom recebido, estou lendo; aviso no grupo quando entrar na despensa' });
     const grupo = estado.memoria.grupo;
+    const primeiro = perfil.nome.split(' ')[0];
     const avisarGrupo = grupo
       ? async (t) => {
           await enviarZap(grupo, t);
@@ -96,12 +112,20 @@ app.post('/nota', express.json({ limit: '2mb' }), async (req, res) => {
           await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: t, tipo: 'bot' }).catch(() => {});
         }
       : null;
-    const r = await receberNotaDoApp({ perfil, chave: req.body.chave || null, url: req.body.url || '', texto: req.body.texto, dia: agora().dia, avisarGrupo });
-    console.log(`[despensa] nota pelo app de ${perfil.nome}: ${r.ok ? `${r.itens} itens` : r.erro}`);
-    res.status(r.ok ? 200 : 422).json(r);
+    const inicio = Date.now();
+    comTempo(receberNotaDoApp({ perfil, chave, url: req.body.url || '', texto: req.body.texto, dia: agora().dia, avisarGrupo }), 5 * 60_000, 'leitura da nota do app')
+      .then(async (r) => {
+        console.log(`[despensa] nota pelo app de ${perfil.nome}: ${r.ok ? `${r.itens} itens${r.repetida ? ' (repetida)' : ''}` : r.erro} em ${Math.round((Date.now() - inicio) / 1000)} s`);
+        // nota nova com itens já avisou o grupo dentro de receberNotaDoApp; os outros casos avisam aqui
+        if (grupo && (!r.ok || r.repetida || !r.itens)) await enviarZap(grupo, r.ok ? r.confirmacao || r.resumo : `${primeiro}, o cupom chegou pelo app mas não consegui separar os itens (${r.erro}). Manda a foto do cupom aqui que eu leio pela imagem. 🧾`).catch(() => {});
+      })
+      .catch(async (e) => {
+        console.error('[despensa] nota pelo app falhou:', e.message);
+        if (grupo) await enviarZap(grupo, `${primeiro}, o cupom chegou pelo app mas eu travei lendo (${String(e.message).slice(0, 80)}). Manda a foto do cupom aqui que eu leio pela imagem. 🧾`).catch(() => {});
+      });
   } catch (e) {
     console.error('[despensa] /nota:', e.message);
-    res.status(500).json({ ok: false, erro: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, erro: e.message });
   }
 });
 app.get('/qr', async (_req, res) => {
