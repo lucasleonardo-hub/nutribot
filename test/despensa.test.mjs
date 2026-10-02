@@ -96,3 +96,15 @@ test('pareceNaoAlimento: higiene, limpeza, pet e remédio ficam de fora; comida,
   assert.equal(pareceNaoAlimento({ item: 'sabão de coco em barra', categoria: 'limpeza', alimento: false }), true);
   assert.equal(pareceNaoAlimento({ item: 'coco ralado', categoria: 'mercearia', alimento: true }), false);
 });
+
+import { confirmacaoNota } from '../despensa.js';
+test('confirmacaoNota: curta, sem a lista de itens; repetida e sem alimento', () => {
+  const itens = [{ item: 'arroz branco', quantidade: 1, unidade: 'kg', perecivel: false }, { item: 'frango', quantidade: 1.2, unidade: 'kg', perecivel: true }];
+  const txt = confirmacaoNota({ loja: 'Bistek', dia: '2026-10-02', itens });
+  assert.match(txt, /Cupom recebido\* · Bistek · 02\/10/);
+  assert.match(txt, /2 alimentos entraram/);
+  assert.match(txt, /1 perecível/);
+  assert.doesNotMatch(txt, /arroz|frango/);
+  assert.match(confirmacaoNota({ itens: [], repetida: true }), /já tinha lido/);
+  assert.match(confirmacaoNota({ loja: 'X', itens: Object.assign([], { ignorados: 2 }) }), /Nenhum alimento nessa compra \(2 item/);
+});

@@ -23,7 +23,7 @@ import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
 import { responderPendente, registrarRelato } from './atividades.js';
-import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, aplicarLinhaDespensa, blocoDespensa, testarConsultaSefaz, parsearTextoNfce, receberNotaDoApp } from './despensa.js';
+import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, confirmacaoNota, aplicarLinhaDespensa, blocoDespensa, testarConsultaSefaz, parsearTextoNfce, receberNotaDoApp } from './despensa.js';
 import { blocoForcaRecuperacao } from './contexto.js';
 import { metaBalancoPara, tendenciaGordura } from './resumo.js';
 import { linhaDeTendencia } from './previsao.js';
@@ -631,7 +631,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
         textoNota = await ia.transcreverPdf(pdf);
       }
       const r = await receberNotaDoApp({ perfil, chave: null, url: '', texto: textoNota, dia });
-      const resposta = r.ok ? r.resumoCompleto || r.resumo : 'Vi que é uma nota, mas não consegui separar os itens. Se for a página da SEFAZ, cola o texto inteiro (Selecionar tudo, Copiar) ou manda a captura de tela com rolagem.';
+      const resposta = r.ok ? r.confirmacao || r.resumo : 'Vi que é uma nota, mas não consegui separar os itens. Se for a página da SEFAZ, cola o texto inteiro (Selecionar tudo, Copiar) ou manda a captura de tela com rolagem.';
       await enviar(jidGrupo, resposta, msg, { rapido: true });
       await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: temPdf ? '📄 [PDF de nota de compra]' : '📋 [texto da nota de compra colado]', tipo: 'texto' });
       await lembrar({ hora, jid: null, nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
@@ -696,7 +696,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
         if (!lido.itens.length) throw new Error('nenhum item legível');
         const itens = await padronizarItens(lido.itens, { perfil, dia });
         const r = await registrarNota({ perfil, chave: qr.chave, loja: lido.loja, data: lido.data, itens, origem: qr.chave ? 'qr+foto' : 'foto' });
-        const resposta = resumoNota({ loja: lido.loja, dia: r.dia, itens, repetida: r.repetida });
+        const resposta = confirmacaoNota({ loja: lido.loja, dia: r.dia, itens, repetida: r.repetida }); // no grupo só a confirmação; a lista fica no !despensa
         await enviar(jidGrupo, resposta, msg, { rapido: true });
         await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto: `📷 [cupom de mercado${lido.loja ? `: ${lido.loja}` : ''}] ${texto}`.trim(), tipo: 'texto' });
         await lembrar({ hora, jid: null, nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });
@@ -1045,7 +1045,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     if (notaLida?.itens?.length) {
       // a IA reconheceu um cupom sem QR legível: padroniza e entra na despensa; avisa em mensagem separada
       padronizarItens(notaLida.itens, { perfil: eu, dia })
-        .then((itens) => registrarNota({ perfil: eu, loja: notaLida.loja, data: notaLida.data, itens, origem: 'foto' }).then((r) => enviar(jidGrupo, resumoNota({ loja: notaLida.loja, dia: r.dia, itens, repetida: r.repetida }), msg, { rapido: true })))
+        .then((itens) => registrarNota({ perfil: eu, loja: notaLida.loja, data: notaLida.data, itens, origem: 'foto' }).then((r) => enviar(jidGrupo, confirmacaoNota({ loja: notaLida.loja, dia: r.dia, itens, repetida: r.repetida }), msg, { rapido: true })))
         .catch((e) => console.error('[despensa] nota pela IA:', e.message));
     }
     await lembrar({ hora, jid: jids[0], nome: ia.nomeDaBot(), texto: resposta, tipo: 'bot' });

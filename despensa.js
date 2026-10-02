@@ -140,11 +140,12 @@ export async function receberNotaDoApp({ perfil, chave, url, texto, dia, avisarG
   }
   if (!lido.itens.length) return { ok: false, erro: 'não reconheci itens no texto da nota', itens: 0 };
   const itens = await padronizarItens(lido.itens, { perfil, dia });
-  if (!itens.length) return { ok: true, itens: 0, loja: lido.loja, resumoCompleto: resumoNota({ loja: lido.loja, itens, ignorados: itens.ignorados }), resumo: `nenhum alimento nessa compra (${lido.itens.length} itens não alimentares)` };
+  if (!itens.length) return { ok: true, itens: 0, loja: lido.loja, resumoCompleto: resumoNota({ loja: lido.loja, itens, ignorados: itens.ignorados }), confirmacao: confirmacaoNota({ loja: lido.loja, itens, ignorados: itens.ignorados }), resumo: `nenhum alimento nessa compra (${lido.itens.length} itens não alimentares)` };
   const r = await registrarNota({ perfil, chave: chave || extrairChave(url) || null, loja: lido.loja, data: lido.data, itens, origem: 'app' });
   const resumo = resumoNota({ loja: lido.loja, dia: r.dia, itens, repetida: r.repetida });
-  if (avisarGrupo && r.nova) await avisarGrupo(resumo).catch(() => {});
-  return { ok: true, itens: itens.length, repetida: Boolean(r.repetida), loja: lido.loja, resumoCompleto: resumo, resumo: r.repetida ? 'nota já lida antes' : `${itens.length} itens na despensa${lido.loja ? ` (${lido.loja})` : ''}` };
+  const confirmacao = confirmacaoNota({ loja: lido.loja, dia: r.dia, itens, repetida: r.repetida });
+  if (avisarGrupo && r.nova) await avisarGrupo(confirmacao).catch(() => {}); // o grupo só vê que entrou; a lista fica com a pessoa
+  return { ok: true, itens: itens.length, repetida: Boolean(r.repetida), loja: lido.loja, resumoCompleto: resumo, confirmacao, resumo: r.repetida ? 'nota já lida antes' : `${itens.length} itens na despensa${lido.loja ? ` (${lido.loja})` : ''}` };
 }
 /** !despensa limpar: zera despensa e notas da pessoa (começar do zero depois de um teste). */
 export async function limparDespensa(perfil) {
@@ -354,6 +355,15 @@ export async function despensaZap(perfil) {
   return `🧺 *Tua despensa* (${lista.length} itens)\n\n${blocos.join('\n\n')}\n\n_Baixa: "acabou o iogurte", "usei 2 ovos", ou !despensa tirar iogurte · !despensa add 1 kg frango · foto do cupom pra entrar compra nova._`;
 }
 /** Texto curto depois de ler um cupom. */
+/** Confirmação curta pro GRUPO: a lista do que comprou é da pessoa (fica no !despensa e na resposta privada), o grupo só vê que entrou. */
+export function confirmacaoNota({ loja, dia, itens, repetida, ignorados = itens?.ignorados || 0 }) {
+  if (repetida) return 'Esse cupom eu já tinha lido. Nada mudou na despensa. 🧾';
+  const onde = `${loja ? ` · ${loja}` : ''}${dia ? ` · ${dia.slice(8, 10)}/${dia.slice(5, 7)}` : ''}`;
+  if (!itens?.length) return `🧾 *Cupom recebido*${onde}. Nenhum alimento nessa compra${ignorados ? ` (${ignorados} item(ns) de higiene/limpeza/outros, que eu não guardo)` : ''}.`;
+  const perec = itens.filter((i) => i.perecivel).length;
+  return `🧾 *Cupom recebido*${onde}. ${itens.length} ${itens.length === 1 ? 'alimento entrou' : 'alimentos entraram'} na tua despensa${perec ? ` (${perec} perecíve${perec === 1 ? 'l' : 'is'})` : ''}. A lista fica só contigo: *!despensa*.`;
+}
+
 export function resumoNota({ loja, dia, itens, repetida, ignorados = itens?.ignorados || 0 }) {
   if (repetida) return 'Essa nota eu já tinha lido. Nada mudou na despensa.';
   if (!itens?.length) return `🧾 *Cupom lido*${loja ? ` · ${loja}` : ''}\n\nNenhum alimento nessa compra${ignorados ? ` (${ignorados} item(ns) de higiene/limpeza/outros, que eu não guardo)` : ''}.`;
