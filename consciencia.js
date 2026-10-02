@@ -204,7 +204,8 @@ const jaccard = (a, b) => {
   return inter / (a.size + b.size - inter);
 };
 const LINHA_ESTRUTURADA = /^\s*(?:[🕐🍽️🔥⚖️💡📊🛒📍🪞🏐]|\*?(?:Calorias|Prote[íi]na|Carboidratos|Gorduras|Refei[çc][ãa]o|Estimativa|Veredito|Dica|Sugest[ãa]o)\b)/u;
-const frasesDe = (t) => String(t || '').split(/(?<=[.!?…])\s+(?=[A-ZÀ-Ú"“(*_\d])/u);
+// emoji no começo da frase seguinte também separa ("...de respeito! 🌼 Menina, ..." são duas frases)
+const frasesDe = (t) => String(t || '').split(/(?<=[.!?…])\s+(?=[A-ZÀ-Ú"“(*_\d]|\p{Extended_Pictographic})/u);
 
 /** Mensagens do bot nos últimos `janelaMin` minutos (hora "HH:MM" no mesmo dia). */
 export function respostasRecentes(historico, horaAgora, janelaMin = 120) {
@@ -290,4 +291,130 @@ export function pareceAceitePlano(texto) {
   for (let i = 0; i < 6 && RE_SOBRA.test(pedido); i++) pedido = pedido.replace(RE_SOBRA, '');
   pedido = pedido.trim();
   return { aceite: true, pedido: pedido.length >= 6 ? pedido : '' };
+}
+
+// ---------- Bordões, apelidos e vocativos ----------
+// A memória de personalidade cria bordões ("Apareceu a Margarida") e o modelo tende a usá-los como saudação padrão:
+// saiu numa cobrança (a pessoa NÃO tinha aparecido) e de novo uma hora depois. Regra: um bordão por dia, nunca em cobrança.
+// Também corrige gíria com grafia inventada ("arraseu") e vocativo no gênero errado ("amada!" pro Heitor).
+
+/** Bordões da memória de personalidade: frases em negrito entre aspas (**"Apareceu a Margarida":**) com 3+ palavras. */
+export function bordoesDaPersona(persona) {
+  const vistos = new Set();
+  for (const m of String(persona || '').matchAll(/\*\*\s*["“]([^"”\n]{4,60})["”]\s*:?\s*\*\*/g)) {
+    const b = m[1].trim().replace(/[.!?…]+$/, '');
+    if (b.split(/\s+/).length >= 3) vistos.add(b);
+  }
+  return [...vistos];
+}
+
+/** Quantas vezes cada bordão já saiu nas mensagens do bot hoje: [{ bordao, n, ultima }]. */
+export function bordoesUsados(historico, persona) {
+  const saida = [];
+  for (const b of bordoesDaPersona(persona)) {
+    const nb = norm(b);
+    let n = 0;
+    let ultima = '';
+    for (const m of historico || []) {
+      if (m.tipo !== 'bot' || !m.texto || !norm(m.texto).includes(nb)) continue;
+      n += 1;
+      ultima = m.hora || ultima;
+    }
+    if (n) saida.push({ bordao: b, n, ultima });
+  }
+  return saida;
+}
+
+/** Linha pro prompt: bordões já usados hoje (o limite é um por dia cada). '' se nenhum. */
+export function bordoesJaDitos(historico, persona) {
+  const usados = bordoesUsados(historico, persona);
+  if (!usados.length) return '';
+  return (
+    'BORDÕES SEUS JÁ USADOS HOJE (limite: UMA vez por dia cada; não repita nem copie a estrutura pra outra pessoa ou outro assunto; apelido não vai em toda mensagem, alterne com o nome): ' +
+    usados.map((u) => `"${u.bordao}" (${u.n}x, última ${u.ultima})`).join(' · ')
+  );
+}
+
+/**
+ * Tira da resposta a frase que ABRE com um bordão já usado hoje. Numa cobrança (`cobranca: true`) sai qualquer frase que
+ * abre com bordão da persona ou com "Apareceu": a pessoa não apareceu. Bloco estruturado não é tocado.
+ */
+export function removerBordoesRepetidos(resposta, { historico, persona, cobranca = false } = {}) {
+  const alvo = (cobranca ? bordoesDaPersona(persona) : bordoesUsados(historico, persona).map((u) => u.bordao)).map(norm).filter(Boolean);
+  if (!alvo.length && !cobranca) return { texto: resposta, removidas: [] };
+  const removidas = [];
+  const saida = String(resposta || '')
+    .split('\n')
+    .map((linha) => {
+      if (!linha.trim() || LINHA_ESTRUTURADA.test(linha)) return linha;
+      return frasesDe(linha)
+        .filter((fr) => {
+          const n = norm(fr);
+          if (alvo.some((b) => n.startsWith(b)) || (cobranca && /^apareceu\b/.test(n))) return removidas.push(fr), false;
+          return true;
+        })
+        .join(' ');
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return saida ? { texto: saida, removidas } : { texto: resposta, removidas: [] };
+}
+
+const GIRIAS_ERRADAS = [
+  [/\barrase[uw]\b/gi, 'arrasou'],
+  [/\barrazou\b/gi, 'arrasou'],
+  [/\blacro[uw]{2,}\b/gi, 'lacrou'],
+];
+/** Gíria com grafia inventada pelo modelo ("Arraseu") vira a certa, mantendo a caixa da inicial. */
+export function corrigirGirias(texto) {
+  let t = String(texto || '');
+  for (const [re, certo] of GIRIAS_ERRADAS) t = t.replace(re, (m) => (m[0] === m[0].toUpperCase() ? certo[0].toUpperCase() + certo.slice(1) : certo));
+  return t;
+}
+
+// vocativos que o modelo troca de gênero (a persona é mulher e puxa pro feminino): forma feminina -> masculina
+const VOCATIVOS = [
+  ['amada', 'amado'], ['querida', 'querido'], ['linda', 'lindo'], ['bonita', 'bonito'], ['diva', 'divo'], ['rainha', 'rei'],
+  ['menina', 'menino'], ['guerreira', 'guerreiro'], ['amiga', 'amigo'], ['miga', 'migo'], ['gata', 'gato'],
+  ['maravilhosa', 'maravilhoso'], ['danada', 'danado'], ['poderosa', 'poderoso'], ['princesa', 'príncipe'],
+];
+/**
+ * Concorda o VOCATIVO com o gênero de quem recebe a resposta: ", amada!" pra homem vira ", amado!"; "minha guerreira" vira
+ * "meu guerreiro" (e o inverso pra mulher). Só mexe na palavra em posição de vocativo (depois de vírgula/pontuação ou de
+ * "minha"/"meu", seguida de pontuação) e pula frases que citam outra pessoa do grupo ("a Ale, minha guerreira, ...").
+ */
+export function concordarVocativos(texto, { genero, outrosNomes = [] } = {}) {
+  const g = String(genero || '').toLowerCase();
+  if (g !== 'masculino' && g !== 'feminino') return String(texto || '');
+  const pares = g === 'masculino' ? VOCATIVOS : VOCATIVOS.map(([f, m]) => [m, f]);
+  const mapa = new Map(pares);
+  const alvo = pares.map(([de]) => de).join('|');
+  const rePoss = new RegExp(`\\b(minha|meu)\\s+(${alvo})\\b(?=\\s*(?:[!,.?…;:)]|$))`, 'giu');
+  const reSolto = new RegExp(`(^|[,!?.…;:]\\s*|\\s[-–—]\\s*)(${alvo})\\b(?=\\s*(?:[!,.?…;:)]|$))`, 'giu');
+  const outros = (outrosNomes || []).map((n) => norm(n)).filter(Boolean);
+  const caixa = (orig, novo) => (orig[0] === orig[0].toUpperCase() ? novo[0].toUpperCase() + novo.slice(1) : novo);
+  const poss = g === 'masculino' ? 'meu' : 'minha';
+  return String(texto || '')
+    .split('\n')
+    .map((linha) =>
+      frasesDe(linha)
+        .map((fr) => {
+          const n = ` ${norm(fr)} `;
+          if (outros.some((o) => n.includes(` ${o} `))) return fr; // fala de outra pessoa: não mexe
+          return fr
+            .replace(rePoss, (m, p, w) => `${caixa(p, poss)} ${caixa(w, mapa.get(w.toLowerCase()) || w)}`)
+            .replace(reSolto, (m, pre, w) => `${pre}${caixa(w, mapa.get(w.toLowerCase()) || w)}`);
+        })
+        .join(' ')
+    )
+    .join('\n');
+}
+
+const RE_LINHA_OCULTA = /^\s*(REFEICAO|ATUALIZAR|HABITO|REGISTRO|AUDIO|REAGIR|NOTA|DESPENSA|ATIVIDADE|PESQUISAR|PRODUTO)\s*:.*$/gim;
+/** Cobrança pronta pra sair: sem linha técnica, sem bordão de chegada, gíria e vocativo conferidos. */
+export function prepararCobranca(texto, { genero, outrosNomes = [], persona = '' } = {}) {
+  const limpo = String(texto || '').replace(RE_LINHA_OCULTA, '').replace(/\n{3,}/g, '\n\n').trim();
+  const b = removerBordoesRepetidos(limpo, { persona, cobranca: true });
+  return { texto: concordarVocativos(corrigirGirias(b.texto), { genero, outrosNomes }), removidas: b.removidas };
 }

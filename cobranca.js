@@ -8,7 +8,7 @@ import { agora, fusoDe, SLOTS, minutosDe, hhmmDe, comTempo } from './util.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
 import { lembrar, garantirDiaAtual } from './dia.js';
-import { vocabularioErrado, removerFrasesCom } from './consciencia.js';
+import { vocabularioErrado, removerFrasesCom, prepararCobranca } from './consciencia.js';
 import { enriquecerPerfis } from './perfis.js';
 import { ocupadoAgora } from './agenda.js';
 
@@ -83,6 +83,11 @@ export async function verificarCobrancas() {
           textoCobranca = removerFrasesCom(textoCobranca, termos);
           console.warn(`[cobranca] frases com objetivo trocado removidas pra ${p.nome}: ${termos.join(', ')}`);
         }
+        // linha técnica (REFEICAO: {...} vazou na cobrança da Ale, 02/10 10:20), bordão de chegada ("Apareceu a Margarida" pra quem NÃO apareceu)
+        // e vocativo no gênero errado não saem na cobrança
+        const prep = prepararCobranca(textoCobranca, { genero: p.genero, outrosNomes: perfis.filter((o) => o !== p).map((o) => o.nome.split(' ')[0]), persona: estado.persona });
+        if (prep.removidas.length) console.log(`[cobranca] bordão de chegada removido da cobrança de ${p.nome}: ${prep.removidas.map((f) => f.slice(0, 60)).join(' | ')}`);
+        textoCobranca = prep.texto;
         if (!textoCobranca.trim()) continue;
         await enviar(estado.memoria.grupo, textoCobranca);
         await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: textoCobranca, tipo: 'bot' });

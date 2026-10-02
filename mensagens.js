@@ -18,7 +18,7 @@ import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
 import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarras } from './off.js';
-import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao, temasJaDitos, removerRepeticoes, respostasRecentes, papoCurto, enxugarPapo } from './consciencia.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao, temasJaDitos, removerRepeticoes, respostasRecentes, papoCurto, enxugarPapo, bordoesJaDitos, removerBordoesRepetidos, corrigirGirias, concordarVocativos } from './consciencia.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
@@ -818,7 +818,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: temasJaDitos(historico, hora), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(texto), forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(texto), forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -972,6 +972,18 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       console.log(`[consciencia] ${rep.removidas.length} frase(s) repetida(s) removida(s) da resposta pra ${perfil.nome}: ${rep.removidas.map((f) => f.slice(0, 60)).join(' | ')}`);
       resposta = rep.texto;
     }
+  }
+
+  // Bordão de chegada já usado hoje sai; gíria com grafia inventada ("Arraseu") e vocativo no gênero errado ("amada" pro Heitor) são corrigidos
+  {
+    const b = removerBordoesRepetidos(resposta, { historico, persona: estado.persona });
+    if (b.removidas.length) {
+      console.log(`[consciencia] bordão repetido removido da resposta pra ${perfil.nome}: ${b.removidas.map((f) => f.slice(0, 60)).join(' | ')}`);
+      resposta = b.texto;
+    }
+    const antes = resposta;
+    resposta = concordarVocativos(corrigirGirias(resposta), { genero: eu.genero || perfil.genero, outrosNomes: perfis.filter((p) => p !== eu).map((p) => p.nome.split(' ')[0]) });
+    if (resposta !== antes) console.log(`[consciencia] gíria/concordância corrigida na resposta pra ${perfil.nome}`);
   }
 
   // Foi refeição? Quando a análise traz "🕐 Refeição:" ou "O que eu vi" (comida consumida). "Estimativa" sozinha não basta:
