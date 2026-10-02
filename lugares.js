@@ -848,10 +848,13 @@ export async function esquecerLugares(perfil) {
 export async function mercadosProximos(perfil) {
   if (!perfil?.lugaresAtivo) return null;
   const em = perfil.mercados?.em ? new Date(perfil.mercados.em) : null;
-  if (em && Date.now() - em.getTime() < MERCADOS_DIAS * 86400_000) return perfil.mercados.texto || null;
+  // falha do Overpass (timeout nos 3 espelhos) fica guardada por 1 dia: sem isso cada plano esperava 70 s de timeout de novo
+  const validadeMs = (perfil.mercados?.falhou ? 1 : MERCADOS_DIAS) * 86400_000;
+  if (em && Date.now() - em.getTime() < validadeMs) return perfil.mercados.texto || null;
   const ancoras = (perfil.lugares || []).filter((l) => l.papel === 'casa' || l.papel === 'trabalho' || ['faculdade', 'trabalho', 'academia'].includes(l.tipo)).slice(0, 3);
   if (!ancoras.length) return null;
   const linhas = [];
+  let falhou = false;
   for (const a of ancoras) {
     try {
       const el = await overpass(a.lat, a.lon, 800, ['[shop~"^(supermarket|greengrocer|butcher|bakery|convenience|grocery|deli)$"]', '[amenity=marketplace]']);
@@ -859,11 +862,12 @@ export async function mercadosProximos(perfil) {
       const nomes = [...new Set(el.map((e) => (e.tags?.name || e.tags?.brand ? `${e.tags.name || e.tags.brand}${e.tags['addr:street'] ? ` (${abreviarRua(e.tags['addr:street'])})` : ''}` : null)).filter(Boolean))].slice(0, 6);
       if (nomes.length) linhas.push(`- perto de ${rotuloLugar(a, { comNome: false })}: ${nomes.join(', ')}`);
     } catch (e) {
+      falhou = true;
       console.warn('[lugares] mercados:', e.message);
     }
   }
   const texto = linhas.length ? `MERCADOS E FEIRAS PERTO (OpenStreetMap, até 800 m dos lugares dela(e); a lista de compras pode citar):\n${linhas.join('\n')}` : null;
-  await salvarPerfil({ jids: perfil.jids, mercados: { em: new Date().toISOString(), texto } }).catch(() => {});
+  await salvarPerfil({ jids: perfil.jids, mercados: { em: new Date().toISOString(), texto, falhou: falhou && !linhas.length } }).catch(() => {});
   return texto;
 }
 
@@ -980,4 +984,87 @@ export async function importarTimeline(perfil, texto) {
   await salvarPerfil({ jids: perfil.jids, lugares, lugaresAtivo: true });
   await atualizarLugares({ ...perfil, lugares, lugaresAtivo: true });
   return { visitas: docs.length, lugares: lugares.length };
+}
+
+// ---------- semana típica (pro plano da semana): onde a pessoa costuma estar em cada dia e em cada refeição ----------
+const NOME_SLOT_SEMANA = { cafe: 'café da manhã', lanche_manha: 'lanche da manhã', almoco: 'almoço', lanche: 'lanche da tarde', jantar: 'jantar', ceia: 'ceia' };
+const TIPOS_RUIDO_SEMANA = new Set(['loja', 'shopping', 'igreja', 'bar', 'residência', 'residencia', 'salão', 'salao', 'parque', 'praça', 'praca']);
+/** Rótulo seguro pra sair no grupo: tipo do lugar (e nome só de lugar público de comer); casa de terceiros vira "casa de família". */
+function rotuloSemana(l) {
+  if (l.papel === 'casa') return 'casa de família (fora da sua casa)';
+  if (l.papel === 'trabalho') return 'trabalho';
+  const tipo = String(l.tipo || 'lugar').toLowerCase();
+  if (/restaurante|lanchonete|padaria|caf[eé]/.test(tipo)) return `${tipo}${l.nome ? ` ${l.nome}` : ''}`;
+  return tipo;
+}
+/**
+ * Puro. Por dia da semana do plano: paradas prováveis (lugares com padrão nesse dia da semana, atividades fixas, agenda da
+ * semana) e, pra cada refeição que a pessoa registra (`slots`, horário habitual em `hab`), se cai em casa, fora (onde) ou
+ * em cima de treino/vôlei. Só tipo de lugar e nome de lugar público de comer: o texto vai pro grupo.
+ */
+export function semanaTipica({ perfil, semana, hab = {}, slots = [], agenda = [], fuso = 'America/Sao_Paulo' }) {
+  if (!perfil || !semana?.dias?.length) return '';
+  const fixos = (perfil.lugares || []).filter(
+    (l) =>
+      (l.papel !== 'casa' || l.nome) && // a casa da pessoa fica implícita; "casa da mãe do Heitor" conta como fora
+      l.diasIdx?.length &&
+      l.horaTipica != null &&
+      (l.manual || l.papel || (l.dias || 0) >= 3) &&
+      !TIPOS_RUIDO_SEMANA.has(String(l.tipo || '').toLowerCase())
+  );
+  const hhmmDec = (t) => {
+    const m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+    return m ? Number(m[1]) + Number(m[2]) / 60 : null;
+  };
+  const linhas = [];
+  for (const d of semana.dias) {
+    const dow = new Date(`${d.dia}T12:00:00Z`).getUTCDay();
+    const paradas = [];
+    for (const a of perfil.atividades || []) {
+      if (!a.dias?.includes(dow)) continue;
+      const ini = hhmmDec(a.inicio);
+      const fim = hhmmDec(a.fim);
+      if (ini == null || fim == null) continue;
+      paradas.push({ ini, fim: fim < ini ? fim + 24 : fim, rotulo: a.nome, tipo: 'atividade' });
+    }
+    for (const l of fixos) {
+      if (!l.diasIdx.includes(dow)) continue;
+      const ini = hDec(l.horaTipica);
+      let fim = hDec(l.horaFim ?? l.horaTipica);
+      if (fim < ini) fim = ini + 1;
+      const dur = fim - ini;
+      if (dur < 0.4 && !l.manual && !l.papel && !/restaurante|lanchonete/i.test(l.tipo || '')) continue; // passagem de minutos não é parada
+      // lugar que coincide com uma atividade fixa (a quadra do vôlei, o parque ao lado) não entra duas vezes
+      if (paradas.some((p) => p.tipo === 'atividade' && Math.min(fim, p.fim) - Math.max(ini, p.ini) > dur / 2)) continue;
+      paradas.push({ ini, fim, rotulo: rotuloSemana(l), tipo: l.papel || l.tipo });
+    }
+    for (const e of agenda || []) {
+      if (!e?.inicio || e.diaTodo) continue;
+      const li = localDe(e.inicio, fuso);
+      if (li.dia !== d.dia) continue;
+      const lf = localDe(e.fim || e.inicio, fuso);
+      paradas.push({ ini: li.hora, fim: lf.hora < li.hora ? 24 : lf.hora, rotulo: `${e.tipo || 'compromisso'} (agenda)`, tipo: e.tipo || 'agenda' });
+    }
+    paradas.sort((a, b) => a.ini - b.ini);
+    const refs = [];
+    for (const sl of slots) {
+      const min = hab?.[sl]?.minutos;
+      if (min == null) continue;
+      const h = min / 60;
+      const emCima = paradas.find((p) => p.tipo === 'atividade' && h >= p.ini - 0.5 && h <= p.fim);
+      const onde = paradas.find((p) => p.tipo !== 'atividade' && h >= p.ini - 0.25 && h <= p.fim + 0.25);
+      const txt = emCima
+        ? `em cima de ${emCima.rotulo} (${hTxt(emCima.ini)}–${hTxt(emCima.fim)}): desloque pra antes ou pra depois`
+        : onde
+          ? `fora de casa, em ${onde.rotulo}`
+          : 'em casa (provável)';
+      refs.push(`${NOME_SLOT_SEMANA[sl] || sl} ${hTxt(h)}: ${txt}`);
+    }
+    linhas.push(
+      `- ${d.rotulo}: ${paradas.length ? paradas.map((p) => `${p.rotulo} ${hTxt(p.ini)}–${hTxt(p.fim)}`).join(' · ') : 'sem lugar fixo aprendido (provavelmente em casa)'}` +
+        (refs.length ? `\n  refeições: ${refs.join('; ')}` : '')
+    );
+  }
+  const primeiro = String(perfil.nome || '').split(' ')[0];
+  return `SEMANA TÍPICA DE ${primeiro.toUpperCase()} (lugares aprendidos pelo celular, atividades fixas e agenda da semana; cite só o tipo do lugar, nunca endereço):\n${linhas.join('\n')}`;
 }

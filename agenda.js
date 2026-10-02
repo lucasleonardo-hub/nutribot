@@ -14,7 +14,7 @@ import { agora, fusoDe } from './util.js';
 
 const CACHE_MS = Number(process.env.AGENDA_CACHE_MIN) * 60_000 || 15 * 60_000;
 const TIMEOUT_MS = 15_000;
-let cache = { em: 0, eventos: null };
+let cache = { em: 0, eventos: null, dias: 0 };
 let desligada = false; // vira true quando falta escopo (não adianta bater de novo a cada mensagem)
 
 export const donoDaAgenda = () => (process.env.AGENDA_DONO || '').trim().toLowerCase();
@@ -270,7 +270,8 @@ async function eventosDaApi(inicio, fim) {
  * credencial não tiver o escopo, os endereços iCal secretos. Cache curto pra não bater no Google a cada mensagem.
  */
 export async function eventos({ dias = 3 } = {}) {
-  if (cache.eventos && Date.now() - cache.em < CACHE_MS) return cache.eventos;
+  // o cache serve se cobre pelo menos os dias pedidos (a conversa pede 3; o plano da semana pede 10)
+  if (cache.eventos && cache.dias >= dias && Date.now() - cache.em < CACHE_MS) return cache.eventos;
   const inicio = new Date();
   inicio.setHours(0, 0, 0, 0);
   const fim = new Date(inicio.getTime() + dias * 86400000);
@@ -284,7 +285,7 @@ export async function eventos({ dias = 3 } = {}) {
         const extras = await eventosDoIcs(inicio, fim).catch((e) => (console.warn('[agenda] iCal extra falhou:', String(e.message).slice(0, 100)), []));
         lista = juntarEventos(lista, extras);
       }
-      cache = { em: Date.now(), eventos: lista };
+      cache = { em: Date.now(), eventos: lista, dias };
       return lista;
     } catch (e) {
       const msg = String(e.message || '');
@@ -305,7 +306,7 @@ export async function eventos({ dias = 3 } = {}) {
   if (urlsIcs().length) {
     try {
       const lista = await eventosDoIcs(inicio, fim);
-      cache = { em: Date.now(), eventos: lista };
+      cache = { em: Date.now(), eventos: lista, dias };
       return lista;
     } catch (e) {
       console.warn('[agenda] falha no endereço iCal:', String(e.message).slice(0, 140));

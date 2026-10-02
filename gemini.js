@@ -1746,7 +1746,7 @@ export async function embutir(texto, taskType = 'RETRIEVAL_DOCUMENT') {
 }
 
 /** Plano da semana + lista de compras, a partir do que a pessoa já come, do objetivo e da meta calculada. Uma chamada Flash. */
-export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares, despensa }) {
+export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares, despensa, semanaTipica }) {
   const primeiro = perfil.nome.split(' ')[0];
   const cidade = perfil.cidade || 'a cidade dela(e)';
   const slots = padrao?.slots ? Object.keys(padrao.slots) : [];
@@ -1763,6 +1763,9 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       (visao ? `NÚMEROS ATUAIS (calculados pelo sistema; a meta calórica e de proteína vêm daqui):\n${visao}\n\n` : '') +
       (metaSemana ? `${metaSemana}\n\n` : '') +
       (lugares ? `${lugares}\n(use a rotina de lugares pra encaixar: dia de academia, dia de faculdade à noite, almoço fora no trabalho; nunca cite endereço)\n\n` : '') +
+      (semanaTipica
+        ? `${semanaTipica}\n(REGRA DE ROTINA: cada refeição marcada "fora de casa" diz no próprio item como resolver: o que deixar pronto antes e levar, com a marca "(levar)" (marmita do almoço, lanche na mochila), ou o que comer no lugar, com "(no RU)"/"(na padaria)"; refeição "em cima de" treino ou vôlei é deslocada e o item diz pra quando (antes, leve; depois, em casa); dia de academia cedo pede o pré e o pós na refeição mais perto; "em casa" pode ser feita na hora. Cite só o tipo do lugar (faculdade, trabalho, academia, RU), nunca nome de lugar privado nem endereço.)\n\n`
+        : '') +
       (mercados ? `${mercados}\n\n` : '') +
       (despensa ? `${despensa}\n(o plano começa pelo que JÁ TEM em casa, usando primeiro o que vence; a lista de compras NÃO repete o que está na despensa, salvo se estiver acabando)\n\n` : '') +
       (perfil.reflexao?.sintese ? `COMO VOCÊ ENTENDE ESSA PESSOA (sua reflexão): ${perfil.reflexao.sintese}\n\n` : '') +
@@ -1776,12 +1779,13 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       `- Calorias: se houver META POR DIA, cada dia do plano mira a faixa daquele dia (dia de treino ou de mais gasto ganha porção maior; dia parado, menor) e a linha da meta diz que a meta varia por dia. Sem ela, use a meta dos NÚMEROS ATUAIS.\n` +
       `- Compra esperta: pode INSERIR ou SUBSTITUIR itens baratos, rendosos e fáceis de preparar mesmo que a pessoa nunca tenha mandado (frango desfiado feito no domingo pra 3 almoços, ovos, sardinha, banana, aveia, feijão de panela, PTS pra vegetariano), desde que respeitem dieta, restrições e objetivo; marque no dia como "(troca barata)" ou "(novo)" e explique numa seção *💡 Compra esperta* com 2 ou 3 dicas: o que comprar, quanto, o preparo único (ex.: cozinhar e desfiar 1 kg no domingo) e em quais refeições da semana entra. Isso não vale pra bebida ou hábito que ela(e) não tem: comida barata entra, "tome um café" não.\n` +
       `- Sem histórico suficiente (menos de 5 dias com registro): pergunte em uma linha quais refeições ela(e) faz por dia e monte um plano curto só de almoço e jantar.\n` +
-      `ESTRUTURA (WhatsApp, pra ser lido no celular): seções com título em negrito (*assim*), um dado por linha, listas com "- " no começo da linha (o WhatsApp mostra como marcador), nenhum parágrafo com mais de 2 linhas, negrito SÓ nos números-chave e no veredito, nada de "~" antes de número. Formato: uma seção por dia ("*Segunda 05/10*") com itens ${itensDia} (só essas refeições; cada item com a porção e as kcal aproximadas), e no fim "*🛒 Lista de compras*" com um item por linha:\n` +
+      `ESTRUTURA (WhatsApp, pra ser lido no celular): seções com título em negrito (*assim*), um dado por linha, listas com "- " no começo da linha (o WhatsApp mostra como marcador), nenhum parágrafo com mais de 2 linhas, negrito SÓ nos números-chave e no veredito, nada de "~" antes de número. Formato: uma seção por dia ("*Segunda 05/10*") com itens ${itensDia} (só essas refeições; cada item com a porção e as kcal como número redondo: "480 kcal", nunca "~480", "cerca de" ou "aprox."), e no fim "*🛒 Lista de compras*" com um item por linha:\n` +
       `1) Uma linha com a meta diária (calorias e proteína) que o plano persegue e uma linha dizendo em que refeições o plano se baseia (ex.: "Baseado no teu padrão: almoço, lanche e jantar").\n` +
       `2) Sete dias (Seg a Dom), cada um com as refeições do padrão em poucas palavras, com porções (g, unidades, colheres), variando pouco o que a pessoa já come e corrigindo o que falta pro objetivo. Respeite a dieta e as aversões. Treino e fim de semana contam.\n` +
       `3) *💡 Compra esperta* (2 ou 3 dicas, como descrito acima) e depois *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas e pensada pra caber no orçamento (itens que se repetem na semana), incluindo o que as dicas pedem.\n` +
       `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.`,
-    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 3000, temperature: 0.7 },
+    // 9 min: o plano roda solto da fila e qualidade vale mais que pressa (num pico de "alta demanda" os Flash voltam em minutos)
+    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 3000, temperature: 0.7, prazoMs: 540_000 },
   });
 }
 const NOME_SLOT_PLANO = { cafe: 'Café', lanche_manha: 'Lanche da manhã', almoco: 'Almoço', lanche: 'Lanche', jantar: 'Jantar', ceia: 'Ceia' };

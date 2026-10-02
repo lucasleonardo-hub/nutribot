@@ -441,3 +441,51 @@ test('sugestões de carga: incremento por tipo, geração a partir dos parados e
   assert.equal(c2.find((s) => s.exercicio === 'Tríceps na Polia').status, 'batida');
   assert.equal(textoSugestoesCarga([]), '');
 });
+
+import { semanaTipica } from '../lugares.js';
+import { semanaDoPlano } from '../resumo.js';
+
+test('semanaTipica: paradas por dia da semana, refeição em casa/fora/em cima de treino, ruído fora', () => {
+  const perfil = {
+    nome: 'Lucas Leonardo',
+    lugares: [
+      { papel: 'casa', diasIdx: [1, 2, 3, 4, 5], horaTipica: 17.7, horaFim: 6.5, dias: 20 },
+      { tipo: 'academia', nome: 'Garra', diasIdx: [1, 2, 3, 4, 5], horaTipica: 7.1, horaFim: 8, dias: 15 },
+      { tipo: 'faculdade', nome: 'UFSC (ECV)', diasIdx: [1, 2, 3, 4], horaTipica: 10, horaFim: 12.6, dias: 12, manual: true },
+      { papel: 'trabalho', tipo: 'trabalho', nome: 'CELTA', diasIdx: [1], horaTipica: 12.1, horaFim: 17.2, dias: 4, manual: true },
+      { tipo: 'faculdade', nome: 'UFSC (Trindade)', diasIdx: [1, 3], horaTipica: 15.1, horaFim: 18.2, dias: 6, manual: true },
+      { tipo: 'loja', nome: 'Salão', diasIdx: [1], horaTipica: 16.7, horaFim: 17.3, dias: 5 }, // ruído
+      { tipo: 'faculdade', nome: 'Senac', diasIdx: [2], horaTipica: 18.8, horaFim: 19.1, dias: 3 }, // passagem de 18 min
+      { tipo: 'parque', nome: 'Praça Berman', diasIdx: [4], horaTipica: 17.3, horaFim: 20.1, dias: 6, manual: true }, // coincide com o vôlei
+      { papel: 'casa', nome: 'da mãe do Heitor', diasIdx: [0, 6], horaTipica: 12.4, horaFim: 15.1, dias: 5 },
+    ],
+    atividades: [
+      { nome: 'Vôlei de quadra', dias: [1, 3], inicio: '20:00', fim: '22:00' },
+      { nome: 'Vôlei de areia', dias: [4], inicio: '17:30', fim: '20:00' },
+    ],
+  };
+  const hab = { cafe: { minutos: 8 * 60 + 29 }, almoco: { minutos: 14 * 60 + 3 }, lanche: { minutos: 17 * 60 + 55 }, jantar: { minutos: 20 * 60 + 22 } };
+  const semana = semanaDoPlano('2026-10-02'); // sexta -> plano de seg 05/10 a dom 11/10
+  const txt = semanaTipica({ perfil, semana, hab, slots: ['cafe', 'almoco', 'lanche', 'jantar'] });
+  const seg = txt.split('\n').filter((l) => /Segunda 05\/10|^  refeições/.test(l));
+  assert.match(txt, /^SEMANA TÍPICA DE LUCAS/);
+  const linhaSeg = txt.slice(txt.indexOf('- Segunda 05/10'), txt.indexOf('- Terça 06/10'));
+  assert.match(linhaSeg, /academia 07:06–08:00 · faculdade 10:00–12:36 · trabalho 12:06–17:12 · faculdade 15:06–18:12 · Vôlei de quadra 20:00–22:00/);
+  assert.doesNotMatch(linhaSeg, /loja|Salão|CELTA|Garra/); // ruído fora; nome de lugar privado não sai
+  assert.match(linhaSeg, /café da manhã 08:29: em casa \(provável\)/);
+  assert.match(linhaSeg, /almoço 14:03: fora de casa, em trabalho/);
+  assert.match(linhaSeg, /lanche da tarde 17:55: fora de casa, em faculdade/);
+  assert.match(linhaSeg, /jantar 20:22: em cima de Vôlei de quadra \(20:00–22:00\): desloque/);
+  const linhaTer = txt.slice(txt.indexOf('- Terça 06/10'), txt.indexOf('- Quarta 07/10'));
+  assert.doesNotMatch(linhaTer, /Senac|faculdade 18:48/); // passagem de 18 min não é parada
+  const linhaQui = txt.slice(txt.indexOf('- Quinta 08/10'), txt.indexOf('- Sexta 09/10'));
+  assert.match(linhaQui, /Vôlei de areia 17:30–20:00/);
+  assert.doesNotMatch(linhaQui, /parque/); // a praça do vôlei não entra duas vezes
+  assert.match(linhaQui, /lanche da tarde 17:55: em cima de Vôlei de areia/);
+  const linhaDom = txt.slice(txt.indexOf('- Domingo 11/10'));
+  assert.match(linhaDom, /casa de família \(fora da sua casa\) 12:24–15:06/);
+  assert.match(linhaDom, /almoço 14:03: fora de casa, em casa de família/);
+  assert.equal(seg.length >= 1, true);
+  // sem semana ou sem perfil: vazio
+  assert.equal(semanaTipica({ perfil: null, semana }), '');
+});

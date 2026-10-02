@@ -18,9 +18,9 @@ import { fecharDia, estudar } from './dia.js';
 import { enriquecerPerfis } from './perfis.js';
 import { situacaoRelogio } from './relogio.js';
 import { treinoZap } from './treino.js';
-import { agendaZap } from './agenda.js';
+import { agendaZap, agendaDe } from './agenda.js';
 import { pareceAceitePlano } from './consciencia.js';
-import { lugaresZap, marcarLugarAtual, esquecerLugares, mercadosProximos } from './lugares.js';
+import { lugaresZap, marcarLugarAtual, esquecerLugares, mercadosProximos, semanaTipica } from './lugares.js';
 import { refletirSobre, reflexaoZap } from './reflexao.js';
 import { atividadesZap, criarAtividade, removerAtividade, responderPendente } from './atividades.js';
 import { despensaZap, ajustarItem, extrairChave, interpretarQr, blocoDespensa, limparDespensa } from './despensa.js';
@@ -77,8 +77,14 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
     const padrao = padraoAlimentar(minhas, { periodoDias: PERIODO });
     const grupo = repertorioDoGrupo(doGrupo.filter((r) => !minhas.includes(r)));
     // meta por dia da semana pra quem tem relógio (gasto do mesmo dia da semana nas últimas semanas)
-    const mercados = await mercadosProximos(perfil).catch(() => null);
-    const despensa = await blocoDespensa(perfil).catch(() => '');
+    // mercados (Overpass pode levar 1 min em timeout), despensa e agenda da semana do plano em paralelo
+    const [mercados, despensa, agendaSemana] = await Promise.all([
+      mercadosProximos(perfil).catch(() => null),
+      blocoDespensa(perfil).catch(() => ''),
+      agendaDe(perfil, { dias: 10 }).catch(() => null),
+    ]);
+    // onde a pessoa costuma estar em cada dia e em cada refeição da semana do plano (lugares, atividades fixas, agenda)
+    const tipica = semanaTipica({ perfil: comAgenda || perfil, semana, hab: comAgenda?._hab || {}, slots: padrao?.slots ? Object.keys(padrao.slots) : [], agenda: agendaSemana?.lista || [], fuso: fusoDe(perfil) });
     const gastos = comAgenda?.relogio?.gastos || perfil.relogio?.gastos;
     let metaSemana = null;
     if (gastos) {
@@ -86,8 +92,8 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
       metaSemana = previsaoSemana({ gastos, dia, objetivo: perfil.objetivo, metaAdaptativa: meta, semana, perfil })?.texto || null;
     }
     const plano = ia.separarAtualizacao(
-      await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '', despensa })
-    ).texto;
+      await ia.planoSemanal({ perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '', despensa, semanaTipica: tipica })
+    ).texto.replace(/[~≈]\s?(?=\d)/g, ''); // "~480 kcal" vira "480 kcal" mesmo que o modelo insista
     if (!plano) throw new Error('plano vazio');
     await enviar(jidGrupo, plano, msg, { rapido: true });
     await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(plano da semana de ${perfil.nome} enviado)`, tipo: 'bot' });
@@ -131,7 +137,8 @@ export async function aceiteDePlano({ texto, perfil, jidGrupo, msg, dia }) {
   const chave = perfil.jids?.[0] || perfil.nome;
   if ((oferta.atendidos || []).includes(chave)) return false;
   estado.config = await salvarConfig({ 'ofertaPlano.atendidos': [...(oferta.atendidos || []), chave] }).catch(() => estado.config);
-  await gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg: pedido });
+  // roda solto: o plano pode levar minutos (IA em alta demanda) e não pode prender a fila nem estourar o cão de guarda de 4 min
+  void gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg: pedido });
   return true;
 }
 
@@ -583,7 +590,7 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       await enviar(jidGrupo, SEM_CADASTRO, msg);
       return true;
     }
-    await gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg: texto.slice(cmd.length).trim() });
+    void gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg: texto.slice(cmd.length).trim() }); // solto da fila (ver aceiteDePlano)
     return true;
   }
 
