@@ -98,13 +98,20 @@ const semAcentoC = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '
 const RE_VOCAB_GANHO = /\[\[hipertrofia\]\]|hipertrofia|ganho de massa|ganhar massa|ganhar peso|super[áa]vit|bulk(?:ing)?|massa muscular subir|engordar/gi;
 const RE_VOCAB_PERDA = /\[\[d[ée]ficit cal[óo]rico\]\]|d[ée]ficit cal[óo]rico|emagrec\w*|secar|perder gordura|queimar gordura|cutting|\[\[perda de peso\]\]/gi;
 
-/** 'perda' (emagrecer/definir/secar), 'ganho' (hipertrofia/massa/força) ou null. */
+/**
+ * 'perda' (emagrecer/secar/déficit), 'ganho' (hipertrofia/massa/bulk) ou null (sem lado claro, ou os dois: recomposição).
+ * "Hipertrofia com definição, mantendo o percentual de gordura" é GANHO: "definição" e "gordura" soltos não puxam pra perda
+ * (puxavam, e toda resposta com "hipertrofia/superávit" pro Lucas era barrada e refeita).
+ */
 export function ladoDoObjetivo(objetivo) {
   const t = semAcentoC(objetivo);
   if (!t) return null;
-  if (/emagre|perd|reduz|defin|secar|gordura|deficit/.test(t)) return 'perda';
-  if (/hipertrof|ganh|massa|bulk|forca|volume|crescer/.test(t)) return 'ganho';
-  return null;
+  const ganho = /hipertrof|ganh\w* (?:de )?(?:massa|peso)|massa muscular|bulk|crescer|engordar|superavit/.test(t);
+  const perda = /emagre|perd\w* (?:de )?(?:peso|gordura)|perda de peso|reduz|secar|deficit|cutting/.test(t);
+  if (ganho && !perda) return 'ganho';
+  if (perda && !ganho) return 'perda';
+  if (!ganho && !perda && /defin|gordura/.test(t)) return 'perda'; // só "definir" ou "gordura", sem falar de massa
+  return null; // os dois lados (recomposição) ou nada: não policia vocabulário
 }
 
 /** Termos do objetivo OPOSTO que apareceram na resposta (vazios = ok). "massa magra" e "definição" não contam. */

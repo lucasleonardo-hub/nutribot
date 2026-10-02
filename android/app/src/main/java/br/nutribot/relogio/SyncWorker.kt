@@ -29,6 +29,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     override suspend fun doWork(): Result {
         val prefs = Prefs(applicationContext)
         if (!prefs.configurado) return Result.success(workDataOf("msg" to "não configurado"))
+        // nota de cupom que ficou pendente (sem rede na hora): reagenda o envio dela junto com o sync de 15 min
+        if (prefs.notaPendente.isNotBlank()) NotaWorker.agendar(applicationContext)
         // periódico, "agora" e repetição podem cair juntos: se acabou de mandar (menos de 60 s), não manda de novo
         val manual = inputData.getBoolean("manual", false)
         if (!manual && System.currentTimeMillis() - prefs.ultimoEnvio < 60_000) return Result.success(workDataOf("msg" to "já enviado há pouco"))

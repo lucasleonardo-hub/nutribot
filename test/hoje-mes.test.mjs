@@ -463,6 +463,11 @@ test('objetivo trocado: vocabulário do objetivo oposto é detectado e, no limit
   assert.equal(ladoDoObjetivo('Hipertrofia'), 'ganho');
   assert.equal(ladoDoObjetivo('perda de peso e reduzir índice de gordura abdominal'), 'perda');
   assert.equal(ladoDoObjetivo(''), null);
+  // objetivo do Lucas (02/10): fala de definição e gordura, mas é ganho; "ganhar e perder" é recomposição, sem lado
+  assert.equal(ladoDoObjetivo('Hipertrofia com definição: ganhar massa o mais rápido possível dentro do saudável, sem teto de peso (etapas de peso que vão subindo), mantendo o percentual de gordura'), 'ganho');
+  assert.equal(ladoDoObjetivo('ganhar massa e perder gordura'), null);
+  assert.equal(ladoDoObjetivo('definição muscular'), 'perda');
+  assert.deepEqual(vocabularioErrado('bora de superávit pra [[hipertrofia]]', 'Hipertrofia com definição, mantendo o percentual de gordura'), []);
   const heitor = '💡 *Dica:* Essa refeição tá ótima. Pode adicionar tofu ao final do jantar. E se quiser, troque a massa por aveia — mantém o ritmo da [[Hipertrofia]] mesmo com dieta vegetariana. Bora manter até domingo? 💪';
   assert.deepEqual(vocabularioErrado(heitor, 'emagrecer e definir'), ['[[hipertrofia]]']);
   assert.deepEqual(vocabularioErrado('perfeito pra manter a massa magra durante o déficit e a definição', 'emagrecer e definir'), []); // massa magra e definição não contam

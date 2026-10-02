@@ -31,5 +31,15 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("localizacao", false)
         set(v) = sp.edit().putBoolean("localizacao", v).apply()
 
+    /** Nota do cupom lida e ainda não confirmada pelo bot (JSON: chave, url, texto). O NotaWorker envia e limpa. */
+    var notaPendente: String
+        get() = sp.getString("notaPendente", "") ?: ""
+        set(v) = sp.edit().putString("notaPendente", v).apply()
+
+    /** Último estado do envio da nota (pra tela). */
+    var notaResultado: String
+        get() = sp.getString("notaResultado", "") ?: ""
+        set(v) = sp.edit().putString("notaResultado", v).apply()
+
     val configurado: Boolean get() = url.isNotBlank() && pessoa.isNotBlank() && token.isNotBlank()
 }

@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.view.WindowManager
 import android.webkit.WebView
 import android.widget.Button
 import android.widget.EditText
@@ -110,6 +111,11 @@ class MainActivity : AppCompatActivity() {
             val w = infos.firstOrNull() ?: return@observe
             if ((w.state == WorkInfo.State.SUCCEEDED || w.state == WorkInfo.State.FAILED) && !lendoCupom) atualizarStatus()
         }
+        // resultado do envio da nota (NotaWorker) aparece na tela assim que terminar
+        WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData(NotaWorker.NOME).observe(this) { infos ->
+            val w = infos.firstOrNull() ?: return@observe
+            if ((w.state == WorkInfo.State.SUCCEEDED || w.state == WorkInfo.State.FAILED) && !lendoCupom) atualizarStatus()
+        }
         if (prefs.configurado) SyncWorker.agendar(this)
         atualizarStatus()
         // no primeiro uso, confere permissões e avisa
@@ -159,6 +165,7 @@ class MainActivity : AppCompatActivity() {
     private fun lerCupom(link: String) {
         if (lendoCupom) return
         lendoCupom = true
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) // a página da SEFAZ precisa da tela acesa pra carregar
         web.visibility = View.GONE
         status.text = "Abrindo a nota na SEFAZ..."
         Cupom.ler(
@@ -167,23 +174,18 @@ class MainActivity : AppCompatActivity() {
             mostrar = { web.visibility = View.VISIBLE },
             progresso = { status.text = it },
             pronto = { texto ->
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 web.visibility = View.GONE
                 if (texto == null) {
                     lendoCupom = false
                     status.text = "A SEFAZ não mostrou a nota em 90 s. Alternativa: manda a FOTO do cupom no grupo que o bot lê pela imagem."
                     return@ler
                 }
-                status.text = "Nota lida (${texto.length} caracteres). Enviando pro bot..."
-                lifecycleScope.launch {
-                    val resultado = withContext(Dispatchers.IO) {
-                        runCatching { Cupom.enviar(prefs.url, prefs.token, prefs.pessoa, Cupom.chaveDe(link), link, texto) }
-                    }
-                    lendoCupom = false
-                    status.text = resultado.fold(
-                        onSuccess = { r -> runCatching { JSONObject(r).optString("resumo") }.getOrNull()?.takeIf { it.isNotBlank() }?.let { "Cupom enviado ✅ $it" } ?: "Cupom enviado ✅ $r".take(300) },
-                        onFailure = { e -> "Falha ao enviar o cupom: ${e.message}" }
-                    )
-                }
+                // 1.5: o envio vai pro WorkManager (NotaWorker): segue com a tela apagada e com o app fechado, e tenta de novo se a
+                // rede falhar. Na 1.4 era na hora, preso à tela: apagou, parou, e a nota se perdia.
+                NotaWorker.enviar(this@MainActivity, Cupom.chaveDe(link), link, texto)
+                lendoCupom = false
+                status.text = prefs.notaResultado
             }
         )
     }
@@ -196,6 +198,7 @@ class MainActivity : AppCompatActivity() {
     private fun atualizarStatus() {
         val r = prefs.ultimoResultado
         val loc = if (prefs.localizacao) (if (Local.temSegundoPlano(this)) "Localização: ligada." else "Localização: ligada só com o app aberto (falta \"o tempo todo\").") else "Localização: desligada (opcional)."
-        if (r.isNotBlank()) status.text = r + "\nEnvio automático a cada 15 min enquanto houver internet.\n" + loc
+        val nota = prefs.notaResultado
+        if (r.isNotBlank() || nota.isNotBlank()) status.text = (if (nota.isNotBlank()) nota + "\n\n" else "") + r + "\nEnvio automático a cada 15 min enquanto houver internet.\n" + loc
     }
 }
