@@ -17,7 +17,7 @@ import express from 'express';
 import cron from 'node-cron';
 import QRCode from 'qrcode';
 
-import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemoria, persistirMemoria, carregarPersona, lerConfig, salvarConfig, refeicoesDoDia, carregarAprendizados } from './mongo.js';
+import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemoria, persistirMemoria, carregarPersona, lerConfig, salvarConfig, refeicoesDoDia, carregarAprendizados, colecao } from './mongo.js';
 import { iniciarDrive, verificarCredencial } from './drive.js';
 import * as ia from './gemini.js';
 import { carregarConhecimento } from './conhecimento.js';
@@ -94,6 +94,13 @@ app.post('/nota', express.json({ limit: '2mb' }), async (req, res) => {
     if (!perfil) {
       console.warn(`[despensa] /nota recusada: pessoa "${pessoa}" não cadastrada`);
       return res.status(404).json({ ok: false, erro: 'pessoa não cadastrada' });
+    }
+    // diagnóstico do app (1.6): a página da SEFAZ não virou nota; o começo do que a tela mostrava fica 3 dias em notas_brutas
+    if (req.body?.diagnostico) {
+      const pagina = String(req.body.texto || '');
+      console.warn(`[despensa] diagnóstico do app de ${perfil.nome}: ${String(req.body.motivo || '?').slice(0, 80)}; página (${pagina.length} chars): ${pagina.slice(0, 300).replace(/\s+/g, ' ')}`);
+      await colecao('notas_brutas').insertOne({ jid: perfil.jids?.[0] || null, chave: req.body.chave || null, motivo: `app: ${String(req.body.motivo || 'diagnóstico').slice(0, 80)}`, url: String(req.body.url || '').slice(0, 300), texto: pagina.replace(/\d{3}\.\d{3}\.\d{3}-\d{2}/g, '[cpf]').slice(0, 20000), criadoEm: new Date() }).catch(() => {});
+      return res.status(200).json({ ok: true, resumo: 'diagnóstico recebido' });
     }
     if (tamanho < 50) {
       console.warn(`[despensa] /nota recusada: texto vazio (${tamanho} chars) de ${perfil.nome}`);

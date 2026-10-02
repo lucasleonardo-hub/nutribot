@@ -11,8 +11,8 @@ android {
         applicationId = "br.nutribot.relogio"
         minSdk = 28
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.5" // 1.3: alta precisão (GNSS) e envio mais robusto · 1.4: leitor de cupom (QR da NFC-e aberto no celular e texto da nota enviado ao bot) · 1.5: envio da nota pelo WorkManager (segue com a tela apagada, tenta de novo)
+        versionCode = 7
+        versionName = "1.6" // 1.3: alta precisão (GNSS) e envio mais robusto · 1.4: leitor de cupom (QR da NFC-e aberto no celular e texto da nota enviado ao bot) · 1.5: envio da nota pelo WorkManager (segue com a tela apagada, tenta de novo) · 1.6: página da SEFAZ visível quando a nota demora, desafio em português reconhecido, diagnóstico ao bot quando falha
     }
 
     // Assinatura estável (mesma chave em todo build, senão o Android recusa atualizar por cima):

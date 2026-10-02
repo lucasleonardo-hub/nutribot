@@ -173,12 +173,18 @@ class MainActivity : AppCompatActivity() {
             link,
             mostrar = { web.visibility = View.VISIBLE },
             progresso = { status.text = it },
-            pronto = { texto ->
+            pronto = { texto, pagina ->
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 web.visibility = View.GONE
                 if (texto == null) {
                     lendoCupom = false
-                    status.text = "A SEFAZ não mostrou a nota em 90 s. Alternativa: manda a FOTO do cupom no grupo que o bot lê pela imagem."
+                    status.text = "A SEFAZ não mostrou a nota em 150 s. Mandei um diagnóstico pro bot. Alternativa: manda a FOTO do cupom no grupo que o bot lê pela imagem."
+                    // o que a tela mostrava vai pro servidor (fica 3 dias) pra descobrir por que a nota não veio
+                    lifecycleScope.launch {
+                        withContext(Dispatchers.IO) {
+                            runCatching { Cupom.enviarDiagnostico(prefs.url, prefs.token, prefs.pessoa, Cupom.chaveDe(link), link, pagina ?: "", "pagina nao virou nota em 150 s") }
+                        }
+                    }
                     return@ler
                 }
                 // 1.5: o envio vai pro WorkManager (NotaWorker): segue com a tela apagada e com o app fechado, e tenta de novo se a
