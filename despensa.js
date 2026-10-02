@@ -134,6 +134,9 @@ export function parsearTextoNfce(texto) {
 export async function receberNotaDoApp({ perfil, chave, url, texto, dia, avisarGrupo }) {
   let lido = parsearTextoNfce(texto);
   if (!lido.itens.length) {
+    // o parser conhece o modelo de página de SC/SP/RS; outro modelo vai pra IA, e o texto fica guardado 3 dias pra eu ajustar o parser
+    console.warn(`[despensa] parser não achou itens no texto da nota (${String(texto || '').length} chars); começo: ${String(texto || '').slice(0, 200).replace(/\s+/g, ' ')}`);
+    await guardarNotaBruta({ perfil, chave, texto, motivo: 'parser sem itens' });
     // página num modelo diferente: a IA extrai do texto
     const r = await ia.extrairItensTexto({ texto: String(texto || '').slice(0, 20000) }).catch(() => null);
     if (r?.itens?.length) lido = { loja: r.loja || lido.loja, data: r.data || lido.data, itens: r.itens };
@@ -146,6 +149,14 @@ export async function receberNotaDoApp({ perfil, chave, url, texto, dia, avisarG
   const confirmacao = confirmacaoNota({ loja: lido.loja, dia: r.dia, itens, repetida: r.repetida });
   if (avisarGrupo && r.nova) await avisarGrupo(confirmacao).catch(() => {}); // o grupo só vê que entrou; a lista fica com a pessoa
   return { ok: true, itens: itens.length, repetida: Boolean(r.repetida), loja: lido.loja, resumoCompleto: resumo, confirmacao, resumo: r.repetida ? 'nota já lida antes' : `${itens.length} itens na despensa${lido.loja ? ` (${lido.loja})` : ''}` };
+}
+/** Texto cru de nota que o parser não leu: fica 3 dias (TTL em notas_brutas) pra ajustar o parser. CPF mascarado. */
+async function guardarNotaBruta({ perfil, chave, texto, motivo }) {
+  try {
+    await colecao('notas_brutas').insertOne({ jid: jidDe(perfil), chave: chave || null, motivo, texto: String(texto || '').replace(/\d{3}\.\d{3}\.\d{3}-\d{2}/g, '[cpf]').slice(0, 60000), criadoEm: new Date() });
+  } catch (e) {
+    console.warn('[despensa] nota bruta:', e.message);
+  }
 }
 /** !despensa limpar: zera despensa e notas da pessoa (começar do zero depois de um teste). */
 export async function limparDespensa(perfil) {

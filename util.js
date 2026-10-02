@@ -213,3 +213,65 @@ export const parecePedidoOuPlano = (t) => RE_PEDIDO.test(String(t || '')) && !RE
 export const pareceConsumo = (t) => RE_CONSUMO.test(String(t || ''));
 /** Correção de uma análise recente ("não é picanha, é fígado", "eram 2 pães"). */
 export const pareceCorrecao = (t) => RE_CORRECAO.test(String(t || '')) && !parecePedidoOuPlano(t);
+
+// ============================================================
+// JSON vindo do modelo: aguenta resposta cortada pelo limite de saída
+// ============================================================
+/**
+ * JSON.parse que aguenta resposta CORTADA pelo limite de saída: corta no último elemento de array que fechou inteiro,
+ * fecha string, arrays e objetos abertos e descarta o item incompleto. Aceita cerca ```json. Devolve null se não der.
+ * (Nota de mercado com 100 itens: a IA leve devolveu 800 linhas de JSON e parou no meio; perdia tudo por um item.)
+ */
+export function parseJsonTolerante(texto) {
+  const s = String(texto || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {}
+  // anda pelo texto com a pilha de aberturas; guarda onde um elemento de array fechou por inteiro pela última vez
+  const pilha = [];
+  let emStr = false;
+  let esc = false;
+  let ultimoFechoSeguro = -1;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (emStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') emStr = false;
+      continue;
+    }
+    if (c === '"') emStr = true;
+    else if (c === '{' || c === '[') pilha.push(c);
+    else if (c === '}' || c === ']') {
+      pilha.pop();
+      if (pilha.length && pilha[pilha.length - 1] === '[') ultimoFechoSeguro = i;
+    }
+  }
+  const fechar = (prefixo) => {
+    const p = [];
+    let str = false;
+    let e = false;
+    for (const c of prefixo) {
+      if (str) {
+        if (e) e = false;
+        else if (c === '\\') e = true;
+        else if (c === '"') str = false;
+        continue;
+      }
+      if (c === '"') str = true;
+      else if (c === '{' || c === '[') p.push(c);
+      else if (c === '}' || c === ']') p.pop();
+    }
+    return prefixo + (str ? '"' : '') + p.reverse().map((c) => (c === '{' ? '}' : ']')).join('');
+  };
+  const candidatos = ultimoFechoSeguro > 0 ? [s.slice(0, ultimoFechoSeguro + 1), s] : [s];
+  for (const c of candidatos) {
+    try {
+      const v = JSON.parse(fechar(c));
+      console.warn(`[json] resposta cortada: aproveitei o que estava completo (${c.length} de ${s.length} chars)`);
+      return v;
+    } catch {}
+  }
+  return null;
+}

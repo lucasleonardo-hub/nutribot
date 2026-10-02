@@ -122,3 +122,18 @@ test('parecePedidoOuPlano: "ia ser", "vai ser", "o que acha", "pode ser" são pl
     assert.equal(planoOuPedido(t), false, t);
   assert.equal(consumoDito('comi iogurte'), true);
 });
+
+import { parseJsonTolerante } from '../util.js';
+test('parseJsonTolerante: JSON inteiro, cercado, cortado no meio de um item (objeto e array na raiz), lixo', () => {
+  assert.deepEqual(parseJsonTolerante('{"a":1}'), { a: 1 });
+  assert.deepEqual(parseJsonTolerante('```json\n{"a":[1,2]}\n```'), { a: [1, 2] });
+  const cortado = '{"loja":"Bistek","itens":[{"descricao":"ARROZ 5KG","qtd":1},{"descricao":"FEIJAO","qtd":2},{"descricao":"LEITE INTE';
+  assert.deepEqual(parseJsonTolerante(cortado), { loja: 'Bistek', itens: [{ descricao: 'ARROZ 5KG', qtd: 1 }, { descricao: 'FEIJAO', qtd: 2 }] });
+  const lista = '[{"nome":"arroz","categoria":"grao"},{"nome":"feij';
+  assert.deepEqual(parseJsonTolerante(lista), [{ nome: 'arroz', categoria: 'grao' }]);
+  // aspas escapadas dentro de string não confundem a pilha
+  const esc = '{"itens":[{"descricao":"QUEIJO \"MINAS\" 500G"},{"descricao":"PA';
+  assert.deepEqual(parseJsonTolerante(esc), { itens: [{ descricao: 'QUEIJO "MINAS" 500G' }] });
+  assert.equal(parseJsonTolerante('isso não é json'), null);
+  assert.equal(parseJsonTolerante(''), null);
+});

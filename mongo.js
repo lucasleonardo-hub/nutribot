@@ -31,6 +31,7 @@ export async function garantirIndices() {
     colecao('locais_brutos').createIndex({ jid: 1, ts: 1 }, { unique: true }),
     colecao('locais_brutos').createIndex({ ts: 1 }, { expireAfterSeconds: 7 * 86400 }),
     colecao('visitas').createIndex({ jid: 1, inicio: 1 }, { unique: true }),
+    colecao('notas_brutas').createIndex({ criadoEm: 1 }, { expireAfterSeconds: 3 * 86400 }), // texto de nota que o parser não leu (3 dias)
   ]).catch((e) => console.warn('[mongo] índices:', e.message));
 }
 

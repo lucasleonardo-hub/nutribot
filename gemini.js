@@ -3,7 +3,7 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
 import { gerarReserva, reservasDisponiveis, ultimaReservaUsada } from './reservas.js';
 import { blocoAncoras } from './taco.js';
-import { agora, dataExtenso, formatarDuracao, formatarTokens, pareceConsumo } from './util.js';
+import { agora, dataExtenso, formatarDuracao, formatarTokens, pareceConsumo, parseJsonTolerante } from './util.js';
 import { avisarAdmin } from './avisos.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { blocoLicoes } from './consciencia.js';
@@ -1525,7 +1525,7 @@ export async function extrairItensCupom({ imagens }) {
     config: {
       temperature: 0.1,
       pensar: false,
-      maxOutputTokens: 4000,
+      maxOutputTokens: 8000,
       responseMimeType: 'application/json',
       responseSchema: {
         type: 'object',
@@ -1538,7 +1538,8 @@ export async function extrairItensCupom({ imagens }) {
       },
     },
   });
-  const r = JSON.parse(json);
+  const r = parseJsonTolerante(json);
+  if (!r) throw new Error('JSON do cupom ilegível');
   return { loja: r.loja || null, data: r.data || null, itens: (r.itens || []).filter((i) => i.descricao && !i.ilegivel) };
 }
 
@@ -1550,7 +1551,7 @@ export async function extrairItensTexto({ texto }) {
       temperature: 0.1,
       pensar: false,
       leve: true,
-      maxOutputTokens: 4000,
+      maxOutputTokens: 12000, // nota grande: 100 itens em JSON passam de 7 mil tokens (cortou em 02/10)
       responseMimeType: 'application/json',
       responseSchema: {
         type: 'object',
@@ -1563,7 +1564,8 @@ export async function extrairItensTexto({ texto }) {
       },
     },
   });
-  const r = JSON.parse(json);
+  const r = parseJsonTolerante(json);
+  if (!r) throw new Error('JSON da extração ilegível');
   return { loja: r.loja || null, data: r.data || null, itens: r.itens || [] };
 }
 
@@ -1576,12 +1578,12 @@ export async function normalizarItensNota({ itens, nome }) {
       temperature: 0.1,
       pensar: false,
       leve: true,
-      maxOutputTokens: 3500,
+      maxOutputTokens: 10000,
       responseMimeType: 'application/json',
       responseSchema: { type: 'array', items: { type: 'object', properties: { indice: { type: 'integer' }, nome: { type: 'string' }, categoria: { type: 'string' }, quantidade: { type: 'number', nullable: true }, unidade: { type: 'string', nullable: true }, granel: { type: 'boolean' }, perecivel: { type: 'boolean' }, validade_dias: { type: 'integer', nullable: true }, alimento: { type: 'boolean' }, ean: { type: 'string', nullable: true } }, required: ['indice', 'nome', 'categoria', 'granel', 'perecivel', 'alimento'] } },
     },
   });
-  const r = JSON.parse(json);
+  const r = parseJsonTolerante(json);
   return Array.isArray(r) ? r : [];
 }
 
@@ -1664,7 +1666,7 @@ export async function verificarHipoteses({ perfil, hipoteses, fontes, dia }) {
       responseSchema: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, veredito: { type: 'string', enum: ['confirmada', 'refutada', 'aberta'] }, evidencia: { type: 'string' } }, required: ['id', 'veredito', 'evidencia'] } },
     },
   });
-  const r = JSON.parse(json);
+  const r = parseJsonTolerante(json);
   return Array.isArray(r) ? r : [];
 }
 
