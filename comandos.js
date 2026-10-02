@@ -51,8 +51,8 @@ export function duracaoDe(texto) {
  * Plano da semana de uma pessoa: padrão real (28 dias), repertório do grupo, meta por dia da semana (relógio), agenda e o pedido
  * dela (orçamento, mercado perto). pedidoArg vem do "!plano <texto>" ou da resposta à oferta de sexta; fica guardado no perfil.
  */
-const TENTATIVAS_PLANO = 5; // ~17 min no pior caso: 5 x (até 2,5 min de cadeia Flash + 1 min de espera)
-const PRAZO_TENTATIVA_PLANO_MS = 150_000;
+const TENTATIVAS_PLANO = 4; // ~24 min no pior caso: 4 x (até 5 min de cadeia Flash com raciocínio alto + 1 min de espera)
+const PRAZO_TENTATIVA_PLANO_MS = 300_000;
 const ESPERA_PLANO_MS = 60_000;
 export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' }) {
   // "!plano orçamento apertado, mercado perto só tem o básico": o pedido vale pra este plano e fica guardado pros próximos.

@@ -438,6 +438,8 @@ const nivelPensar = new Map(); // model -> 'MINIMAL' | 'LOW' | 'PADRAO'
 // pensar: false = mínimo (conversa); 'baixo' = pensa pouco (documento longo: raciocínio conta no maxOutputTokens e um plano
 // de 7 dias saiu cortado no primeiro item porque o modelo gastou 5.700 tokens pensando); undefined = padrão do modelo.
 function configPensar(model, pensar) {
+  // 'alto': raciocínio máximo (plano da semana: poucas vezes por semana, e é onde objetivo, rotina, lugares e conhecimento se cruzam)
+  if (pensar === 'alto') return /gemini-3/i.test(model) ? { thinkingConfig: { thinkingLevel: 'HIGH' } } : { thinkingConfig: { thinkingBudget: -1 } };
   if (pensar !== false && pensar !== 'baixo') return {};
   if (/gemini-3/i.test(model)) {
     const nivel = nivelPensar.get(model) || (pensar === 'baixo' ? 'LOW' : /flash|lite/i.test(model) ? 'MINIMAL' : 'LOW');
@@ -510,7 +512,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
             ...configPensar(model, pensar),
             ...configApi,
             _dobrado: undefined,
-            httpOptions: { timeout: longo ? 180_000 : comImagem ? 45_000 : 30_000 },
+            httpOptions: { timeout: pensar === 'alto' ? 300_000 : longo ? 180_000 : comImagem ? 45_000 : 30_000 },
           },
         });
         const texto = res.text?.trim();
@@ -520,7 +522,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
           // ou para no meio da frase. Repete UMA vez com o dobro do limite antes de aceitar/recusar; nada sai cortado
           // pro grupo sem essa segunda chance (o resumo do dia 26/09 saiu pela metade por isso).
           const atual = configApi.maxOutputTokens || 1024;
-          configApi.maxOutputTokens = Math.min(atual * 2, 8192);
+          configApi.maxOutputTokens = Math.min(atual * 2, atual >= 8192 ? 65536 : 8192); // documento com limite alto (plano) dobra até o teto do modelo
           configApi._dobrado = true;
           console.warn(`[gemini] ${model} ${texto ? 'cortou a resposta' : 'devolveu vazio'} por MAX_TOKENS; repetindo com maxOutputTokens=${configApi.maxOutputTokens}`);
           i--;
@@ -1789,8 +1791,9 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       `3) *💡 Compra esperta* (2 ou 3 dicas, como descrito acima) e depois *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas e pensada pra caber no orçamento (itens que se repetem na semana), incluindo o que as dicas pedem.\n` +
       `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.`,
     // 9 min: o plano roda solto da fila e qualidade vale mais que pressa (num pico de "alta demanda" os Flash voltam em minutos)
+    // raciocínio ALTO (o plano é onde tudo se cruza e sai poucas vezes), 24k de saída porque o raciocínio conta no limite;
     // estrito: plano cortado por limite de saída vira erro (o laço de tentativas refaz) em vez de ir pela metade pro grupo
-    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 6000, temperature: 0.7, pensar: 'baixo', estrito: true, prazoMs, ...(soPrincipal ? { soPrincipal: true, semReserva: true } : {}) },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 24000, temperature: 0.7, pensar: 'alto', estrito: true, prazoMs, ...(soPrincipal ? { soPrincipal: true, semReserva: true } : {}) },
   });
 }
 const NOME_SLOT_PLANO = { cafe: 'Café', lanche_manha: 'Lanche da manhã', almoco: 'Almoço', lanche: 'Lanche', jantar: 'Jantar', ceia: 'Ceia' };
