@@ -13,6 +13,7 @@ import { contextoDoDia, blocoTreinoRefeicoes, blocoForcaRecuperacao } from './co
 import { agora, fusoDe, diasAnteriores } from './util.js';
 import { estado } from './estado.js';
 import * as ia from './gemini.js';
+import { ferramentasPara } from './ferramentas.js';
 
 const MAX_SINAIS_POR_HIPOTESE = 14;
 
@@ -59,6 +60,11 @@ export async function pensarSobre(perfil, { dia, persona, forcar = false } = {})
     return null;
   }
   const abertas = (perfil.hipoteses || []).filter((h) => h.status === 'aberta');
+  // function calling (fase 1): antes de pensar, ela investiga o que quiser nos dados (refeições, treino, relógio, lugares, lembranças...)
+  const ferramentas = ferramentasPara(retrato.comExtras || perfil, { dia });
+  const investigacao = await ia
+    .investigarPessoa({ perfil: retrato.comExtras || perfil, retrato: retrato.texto, sintese: perfil.reflexao?.sintese || '', persona, dia, ferramentas })
+    .catch((e) => (console.warn('[pensamentos] investigação falhou:', e.message), ''));
   const r = await ia.pensarSobrePessoa({
     perfil: retrato.comExtras,
     retrato: retrato.texto,
@@ -67,10 +73,11 @@ export async function pensarSobre(perfil, { dia, persona, forcar = false } = {})
     sintese: perfil.reflexao?.sintese || '',
     persona,
     dia,
+    investigacao,
   });
   if (!r?.pensamento) return null;
   const hora = agora(fusoDe(perfil)).hora;
-  const doc = { jid: perfil.jids?.[0], nome: perfil.nome, dia, hora, texto: String(r.pensamento).slice(0, 1200), notar: (r.notar || []).slice(0, 4), sinais: (r.sinais || []).slice(0, 8), valeFalar: Boolean(r.vale_falar), assinatura: retrato.assinatura, criadoEm: new Date() };
+  const doc = { jid: perfil.jids?.[0], nome: perfil.nome, dia, hora, consultas: [...new Set(ferramentas.usadas)], investigacao: String(investigacao || '').slice(0, 1500), texto: String(r.pensamento).slice(0, 1200), notar: (r.notar || []).slice(0, 4), sinais: (r.sinais || []).slice(0, 8), valeFalar: Boolean(r.vale_falar), assinatura: retrato.assinatura, criadoEm: new Date() };
   await colecao('pensamentos').insertOne(doc);
   // sinais entram nas hipóteses abertas (evidência acumulada pra conferência de domingo)
   let hipoteses = perfil.hipoteses || [];

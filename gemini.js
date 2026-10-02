@@ -467,7 +467,8 @@ function rebaixarPensar(model, e) {
  */
 async function gerar({ contents, config = {}, tentativas = 2 }) {
   // soPrincipal: só a família principal (Flash), sem Lite nem reserva externa; falhou, lança. Pra documento que pode esperar (plano da semana).
-  const { pensar, estrito, leve, prazoMs, semReserva, validar, soPrincipal = false, ...configApi } = config;
+  // bruto: devolve { texto, chamadas, conteudo, modelo } em vez de texto; `chamadas` são os pedidos de ferramenta (function calling)
+  const { pensar, estrito, leve, prazoMs, semReserva, validar, soPrincipal = false, bruto = false, ...configApi } = config;
   let erro;
   const falhas = []; // { modelo, chave, motivo } desta chamada, pro aviso do admin
   const inicio = Date.now();
@@ -515,6 +516,14 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
             httpOptions: { timeout: pensar === 'alto' ? 300_000 : longo ? 180_000 : comImagem ? 45_000 : 30_000 },
           },
         });
+        // function calling: o modelo pediu ferramenta(s) em vez de responder; gerarComFerramentas executa e volta com o resultado.
+        // Conferido ANTES de ler res.text: o getter avisa no console quando há partes functionCall.
+        const chamadas = bruto && configApi.tools?.length ? res.functionCalls || [] : [];
+        if (chamadas.length) {
+          contabilizar(model, res.usageMetadata, ci);
+          origemUltima = 'gemini';
+          return { texto: '', chamadas, conteudo: res.candidates?.[0]?.content || null, modelo: model };
+        }
         const texto = res.text?.trim();
         const fim = res.candidates?.[0]?.finishReason;
         if (fim === 'MAX_TOKENS' && !configApi._dobrado) {
@@ -542,7 +551,7 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
         origemUltima = 'gemini';
         anotarResposta({ modelo: model, chave: ci + 1, papel: mi === 0 ? 'principal' : MODELOS_LEVES.includes(model) ? 'leve' : 'reserva', motivo: foraDoEsperado ? resumirFalhas(falhas) : '' });
         if (foraDoEsperado) avisarAdmin('reserva-gemini', `resposta das ${agora().hora} saiu pelo *${model}* (chave ${ci + 1}) porque: ${resumirFalhas(falhas)}. Aviso 1x a cada 30 min; !status lista as últimas.`).catch(() => {});
-        return texto;
+        return bruto ? { texto, chamadas: [], conteudo: res.candidates?.[0]?.content || null, modelo: model } : texto;
       } catch (e) {
         erro = e;
         if (e.cortada) throw e; // insistir não resolve e trocar de modelo também não
@@ -605,12 +614,38 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
       origemUltima = 'externa';
       anotarResposta({ modelo: `externa: ${rotuloReserva}`, chave: 0, papel: 'externa', motivo: resumirFalhas(falhas) });
       avisarAdmin('reserva-externa', `resposta das ${agora().hora} saiu pela reserva externa *${rotuloReserva}* porque o Gemini falhou em tudo: ${resumirFalhas(falhas)}. Qualidade menor; aviso 1x a cada 30 min.`).catch(() => {});
-      return textoReserva;
+      return bruto ? { texto: textoReserva, chamadas: [], conteudo: null, modelo: 'reserva' } : textoReserva;
     } catch (e) {
       console.error('[reserva] todos falharam:', e.message);
     }
   }
   throw erro;
+}
+
+/**
+ * Function calling (fase 1, só leitura): o modelo pede ferramentas, o código executa e devolve, até sair texto.
+ * `ferramentas` = { declaracoes, executar(nome, args) } (ferramentas.js). Na última rodada as ferramentas são desligadas
+ * (toolConfig NONE) pra forçar a resposta. Reserva externa não entra (não fala function calling). `_gerar` é injetável em teste.
+ */
+export async function gerarComFerramentas({ contents, config = {}, ferramentas, maxRodadas = 5, rotulo = 'ferramentas', _gerar = gerar }) {
+  if (!ferramentas?.declaracoes?.length) return _gerar({ contents, config });
+  const historico = Array.isArray(contents) ? [...contents] : [{ role: 'user', parts: partesDe(contents) }];
+  const cfg = { ...config, bruto: true, semReserva: true, tools: [{ functionDeclarations: ferramentas.declaracoes }] };
+  for (let rodada = 1; rodada <= maxRodadas; rodada++) {
+    const ultima = rodada === maxRodadas;
+    const r = await _gerar({ contents: historico, config: ultima ? { ...cfg, toolConfig: { functionCallingConfig: { mode: 'NONE' } } } : cfg });
+    if (!r?.chamadas?.length) return r?.texto ?? r;
+    // o conteúdo do modelo volta inteiro (com as assinaturas de raciocínio que o Gemini 3 exige de volta)
+    historico.push(r.conteudo || { role: 'model', parts: r.chamadas.map((c) => ({ functionCall: { name: c.name, args: c.args || {} } })) });
+    const respostas = [];
+    for (const c of r.chamadas) {
+      const resultado = await ferramentas.executar(c.name, c.args || {});
+      respostas.push({ functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response: { resultado } } });
+    }
+    historico.push({ role: 'user', parts: respostas });
+    console.log(`[${rotulo}] rodada ${rodada}/${maxRodadas}: ${r.chamadas.map((c) => `${c.name}(${JSON.stringify(c.args || {})})`).join(', ')}`);
+  }
+  throw new Error('ferramentas: estourou as rodadas sem resposta em texto');
 }
 
 /** "3.6-flash e 3.8-flash em alta demanda; 3.7-flash cota diária" */
@@ -1554,7 +1589,28 @@ export async function normalizarItensNota({ itens, nome }) {
  * Pensamento particular sobre uma pessoa a partir do retrato do dia: curto, em primeira pessoa, sem destinatário.
  * Devolve { pensamento, notar: [...], sinais: [{ id, direcao, evidencia }], vale_falar }.
  */
-export async function pensarSobrePessoa({ perfil, retrato, anterior, hipoteses, sintese, persona, dia }) {
+/**
+ * Antes do pensamento: a IA consulta os dados que quiser (ferramentas de leitura) e devolve anotações curtas do que notou.
+ * Texto livre, modelo leve, sem JSON (function calling e responseSchema não andam juntos).
+ */
+export async function investigarPessoa({ perfil, retrato, sintese, persona, dia, ferramentas }) {
+  const primeiro = perfil.nome.split(' ')[0];
+  return gerarComFerramentas({
+    contents:
+      `Hoje é ${dataExtenso(dia)}. Daqui a pouco você vai pensar sobre ${primeiro}. Antes, INVESTIGUE: use as ferramentas pra conferir o que o retrato de hoje não mostra e que vale cruzar ` +
+      `(o padrão dos últimos dias, treino e recuperação, sono e passos, lugares e horários, pesagens, lembranças de conversas, sua base de conhecimento sobre o que estiver em jogo). ` +
+      `Faça de 2 a 4 consultas, só as que fizerem diferença. Depois devolva ANOTAÇÕES: até 8 linhas curtas, cada uma um fato cruzado com a fonte ` +
+      `("sono 5h40 nas 3 noites antes do treino de hoje; supino parado há 3 semanas", "almoçou fora em 4 dos últimos 5 dias de aula"). Sem conselho, sem texto corrido.\n\n` +
+      (sintese ? `COMO VOCÊ ENTENDE ${primeiro.toUpperCase()}: ${sintese}\n\n` : '') +
+      `RETRATO DE HOJE:\n${retrato}`,
+    config: { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.4, pensar: false, maxOutputTokens: 900, leve: true },
+    ferramentas,
+    maxRodadas: 5,
+    rotulo: `investigar ${primeiro}`,
+  });
+}
+
+export async function pensarSobrePessoa({ perfil, retrato, anterior, hipoteses, sintese, persona, dia, investigacao = '' }) {
   const primeiro = perfil.nome.split(' ')[0];
   const json = await gerar({
     contents:
@@ -1562,6 +1618,7 @@ export async function pensarSobrePessoa({ perfil, retrato, anterior, hipoteses, 
       (sintese ? `COMO VOCÊ ENTENDE ${primeiro.toUpperCase()} (sua reflexão de domingo): ${sintese}\n\n` : '') +
       (anterior ? `SEU PENSAMENTO ANTERIOR: ${anterior}\n\n` : '') +
       (hipoteses?.length ? `SUAS HIPÓTESES ABERTAS (diga se o dia de hoje traz sinal a favor, contra ou nenhum):\n${hipoteses.map((h) => `- id ${h.id}: ${h.texto}`).join('\n')}\n\n` : '') +
+      (investigacao ? `O QUE VOCÊ FOI CONFERIR AGORA HÁ POUCO (suas consultas aos dados; cruze com o retrato):\n${investigacao}\n\n` : '') +
       `${retrato}\n` +
       `Escreva o pensamento em até 110 palavras, primeira pessoa, no seu jeito: o que está notando HOJE cruzando as fontes (comida x padrão, lugar x horário, gasto x apetite, compra x prato, atividade x cansaço), o que te preocupa ou te agrada, e o que quer observar até a noite. Nada de repetir o pensamento anterior; se nada mudou de verdade, diga em uma frase o que confirma. Sem endereço. Sem conselho dirigido a ela(e): é pensamento, não mensagem.\n` +
       `Também devolva: notar = até 3 fatos curtos que valem guardar (\"almoçou às 15h de novo\", \"passou no mercado e não mandou nota\"); sinais = para cada hipótese aberta que o dia tocou, { id, direcao: a_favor | contra | neutro, evidencia (até 20 palavras) }; vale_falar = true só se houver algo que mereceria uma mensagem espontânea (não vai ser enviada; é só o seu julgamento).`,
@@ -1752,13 +1809,12 @@ export async function embutir(texto, taskType = 'RETRIEVAL_DOCUMENT') {
 }
 
 /** Plano da semana + lista de compras, a partir do que a pessoa já come, do objetivo e da meta calculada. Uma chamada Flash. */
-export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares, despensa, semanaTipica, soPrincipal = false, prazoMs = 540_000 }) {
+export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares, despensa, semanaTipica, soPrincipal = false, prazoMs = 540_000, ferramentas = null }) {
   const primeiro = perfil.nome.split(' ')[0];
   const cidade = perfil.cidade || 'a cidade dela(e)';
   const slots = padrao?.slots ? Object.keys(padrao.slots) : [];
   const itensDia = slots.length ? slots.map((sl) => `"- ${nomeDoSlotPlano(sl)}: ..."`).join(', ') : '"- Almoço: ...", "- Jantar: ..."';
-  return gerar({
-    contents:
+  const contents =
       blocoConhecimento(conhecimento) +
       `PESSOA: ${perfil.nome} · ${perfil.peso || '?'} kg · ${perfil.altura || '?'} cm · objetivo: ${perfil.objetivo || '?'} · dieta: ${perfil.dieta || 'onívora'}${perfil.restricoes ? ` · restrições: ${perfil.restricoes}` : ''}${perfil.cidade ? ` · mora em ${perfil.cidade}` : ''}\n` +
       (padrao?.texto ? `${padrao.texto}\n\n` : '') +
@@ -1789,13 +1845,20 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       `1) Uma linha com a meta diária (calorias e proteína) que o plano persegue e uma linha dizendo em que refeições o plano se baseia (ex.: "Baseado no teu padrão: almoço, lanche e jantar").\n` +
       `2) Sete dias (Seg a Dom), cada um com as refeições do padrão em poucas palavras, com porções (g, unidades, colheres), variando pouco o que a pessoa já come e corrigindo o que falta pro objetivo. Respeite a dieta e as aversões. Treino e fim de semana contam.\n` +
       `3) *💡 Compra esperta* (2 ou 3 dicas, como descrito acima) e depois *🛒 Lista de compras* da semana agrupada (hortifrúti, proteínas, mercearia, laticínios), com quantidades aproximadas e pensada pra caber no orçamento (itens que se repetem na semana), incluindo o que as dicas pedem.\n` +
-      `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.`,
-    // 9 min: o plano roda solto da fila e qualidade vale mais que pressa (num pico de "alta demanda" os Flash voltam em minutos)
-    // raciocínio ALTO (o plano é onde tudo se cruza e sai poucas vezes), 24k de saída porque o raciocínio conta no limite;
-    // estrito: plano cortado por limite de saída vira erro (o laço de tentativas refaz) em vez de ir pela metade pro grupo
-    config: { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 24000, temperature: 0.7, pensar: 'alto', estrito: true, prazoMs, ...(soPrincipal ? { soPrincipal: true, semReserva: true } : {}) },
-  });
+      `4) Uma frase final de incentivo curta. Sem [[links]]. Sem linha ATUALIZAR.` +
+      (ferramentas ? FERRAMENTAS_PLANO : '');
+  // raciocínio ALTO (o plano é onde tudo se cruza e sai poucas vezes), 24k de saída porque o raciocínio conta no limite;
+  // estrito: plano cortado por limite de saída vira erro (o laço de tentativas refaz) em vez de ir pela metade pro grupo
+  const config = { systemInstruction: montarSystem(persona, { documento: true }), maxOutputTokens: 24000, temperature: 0.7, pensar: 'alto', estrito: true, prazoMs, ...(soPrincipal ? { soPrincipal: true, semReserva: true } : {}) };
+  if (ferramentas) return gerarComFerramentas({ contents, config, ferramentas, maxRodadas: 5, rotulo: `plano ${primeiro}` });
+  return gerar({ contents, config });
 }
+const FERRAMENTAS_PLANO =
+  '\n\nFERRAMENTAS: antes de escrever, você pode consultar o que NÃO está acima: refeicoes_periodo (o que a pessoa comeu nos últimos dias, com horários), ' +
+  'agenda (mais dias), semana_tipica, lugares, treino_forca (cargas, platôs, recuperação), relogio (sono, passos e gasto por dia), pesagens (tendência), despensa, ' +
+  'conhecimento (sua base, por assunto), lembrancas (memória das conversas), mercados_perto, reflexao. Use quando fizer diferença no plano, por exemplo: ver o que ela ' +
+  'comeu nos últimos dias de vôlei pra calibrar o jantar; conferir sono e treino pra decidir pré e pós; lembrar aversões antes de sugerir comida nova. ' +
+  'No máximo 4 consultas; depois escreva o plano COMPLETO em uma única resposta final.';
 const NOME_SLOT_PLANO = { cafe: 'Café', lanche_manha: 'Lanche da manhã', almoco: 'Almoço', lanche: 'Lanche', jantar: 'Jantar', ceia: 'Ceia' };
 const nomeDoSlotPlano = (sl) => NOME_SLOT_PLANO[sl] || sl;
 

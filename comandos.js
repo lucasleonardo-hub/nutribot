@@ -20,6 +20,7 @@ import { situacaoRelogio } from './relogio.js';
 import { treinoZap } from './treino.js';
 import { agendaZap, agendaDe } from './agenda.js';
 import { pareceAceitePlano } from './consciencia.js';
+import { ferramentasPara } from './ferramentas.js';
 import { lugaresZap, marcarLugarAtual, esquecerLugares, mercadosProximos, semanaTipica } from './lugares.js';
 import { refletirSobre, reflexaoZap } from './reflexao.js';
 import { atividadesZap, criarAtividade, removerAtividade, responderPendente } from './atividades.js';
@@ -96,7 +97,9 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
     }
     // Plano é documento, não resposta na hora: só o modelo principal (Flash). Em "alta demanda" avisa, espera e tenta de
     // novo (até ~17 min) em vez de entregar plano do Lite; a cadeia completa (Lite, reservas) só como último recurso.
-    const args = { perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '', despensa, semanaTipica: tipica };
+    // function calling (fase 1): além dos blocos prontos, a IA pode consultar o que quiser antes de escrever
+    const ferramentas = ferramentasPara(comAgenda || perfil, { dia });
+    const args = { perfil: comAgenda, visao, conhecimento: docsPara(perfil, { texto: 'plano da semana lista de compras' }), persona: estado.persona, dia, agenda: comAgenda?._agenda?.bloco || '', padrao, grupo, pedido, semana, metaSemana, mercados, lugares: comAgenda?._lugares?.bloco || '', despensa, semanaTipica: tipica, ferramentas };
     let bruto = null;
     let avisouEspera = false;
     for (let tentativa = 1; tentativa <= TENTATIVAS_PLANO && !bruto; tentativa++) {
@@ -118,6 +121,7 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
     }
     const plano = ia.separarAtualizacao(bruto).texto.replace(/[~≈]\s?(?=\d)/g, ''); // "~480 kcal" vira "480 kcal" mesmo que o modelo insista
     if (!plano) throw new Error('plano vazio');
+    if (ferramentas.usadas.length) console.log(`[plano] ${perfil.nome.split(' ')[0]} consultou: ${[...new Set(ferramentas.usadas)].join(', ')}`);
     await enviar(jidGrupo, plano, msg, { rapido: true });
     await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(plano da semana de ${perfil.nome} enviado)`, tipo: 'bot' });
     const pastaId = await pastaDe(perfil);

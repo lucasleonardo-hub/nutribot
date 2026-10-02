@@ -1,0 +1,221 @@
+// ferramentas.js - Ferramentas de LEITURA que a IA chama sozinha (function calling do Gemini) enquanto monta um documento:
+// plano da semana e investigação antes do pensamento particular. Fase 1: só leitura, nenhuma ação; a conversa do grupo
+// segue em uma chamada só. Cada ferramenta embrulha uma função que já existe no código e devolve texto curto (teto por
+// ferramenta), porque o resultado volta pro modelo como contexto. Nunca lança: erro vira texto "(erro ...)".
+import { refeicoesDesde, pesagensDesde, colecao } from './mongo.js';
+import { padraoAlimentar, semanaDoPlano } from './resumo.js';
+import { semanaTipica, contextoLugares, mercadosProximos } from './lugares.js';
+import { agendaDe, blocoAgenda } from './agenda.js';
+import { analiseForca, blocoTreinoRefeicoes } from './contexto.js';
+import { blocoDespensa } from './despensa.js';
+import { docsPara } from './conhecimento.js';
+import { lembrancasPara } from './memoria_semantica.js';
+import { linhaDeTendencia } from './previsao.js';
+import { treinoDe } from './treino.js';
+import { horariosHabituais, diasAnteriores, fusoDe } from './util.js';
+
+const TETO_CHARS = 7000;
+const NOME_DIA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+const corta = (t, n = TETO_CHARS) => {
+  const s = String(t ?? '').trim();
+  if (!s) return '(nada encontrado)';
+  return s.length > n ? `${s.slice(0, n)}\n[...cortado]` : s;
+};
+const inteiro = (v, min, max, padrao) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : padrao;
+};
+
+/** Semana (segunda a domingo) que contém `dia`, no mesmo formato de semanaDoPlano. */
+export function semanaAtual(dia) {
+  const base = new Date(`${dia}T12:00:00Z`);
+  const seg = new Date(base);
+  seg.setUTCDate(seg.getUTCDate() - ((base.getUTCDay() + 6) % 7));
+  const dias = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(seg);
+    d.setUTCDate(d.getUTCDate() + i);
+    const iso = d.toISOString().slice(0, 10);
+    const nome = NOME_DIA[d.getUTCDay()];
+    return { dia: iso, nome, rotulo: `${nome[0].toUpperCase()}${nome.slice(1)} ${iso.slice(8, 10)}/${iso.slice(5, 7)}` };
+  });
+  return { inicio: dias[0].dia, fim: dias[6].dia, dias, proximaSemana: false };
+}
+
+// Declarações no formato do Gemini (functionDeclarations). Sem `parameters` quando a ferramenta não recebe nada.
+const DECLARACOES = [
+  {
+    name: 'refeicoes_periodo',
+    description: 'O que a pessoa registrou de comida nos últimos N dias: dia, hora, refeição, descrição, kcal e proteína. Use pra ver padrão real, horários e o que ela come em dia de treino, vôlei ou aula.',
+    parameters: { type: 'OBJECT', properties: { dias: { type: 'INTEGER', description: 'quantos dias pra trás (1 a 60; padrão 14)' } } },
+  },
+  {
+    name: 'padrao_alimentar',
+    description: 'Resumo do padrão alimentar da pessoa num período: quais refeições faz, horários e o que costuma comer em cada uma.',
+    parameters: { type: 'OBJECT', properties: { dias: { type: 'INTEGER', description: '7 a 60; padrão 28' } } },
+  },
+  {
+    name: 'agenda',
+    description: 'Compromissos da agenda da pessoa (aula, trabalho, reunião, viagem) nos próximos N dias, com janelas livres.',
+    parameters: { type: 'OBJECT', properties: { dias: { type: 'INTEGER', description: '1 a 14; padrão 7' } } },
+  },
+  {
+    name: 'semana_tipica',
+    description: 'Por dia da semana: onde a pessoa costuma estar (lugares aprendidos pelo celular, atividades fixas, agenda) e, pra cada refeição que ela registra, se cai em casa, fora de casa (onde) ou em cima de treino.',
+    parameters: { type: 'OBJECT', properties: { semana: { type: 'STRING', description: '"proxima" (a semana do plano) ou "atual"' } } },
+  },
+  { name: 'lugares', description: 'Lugares que a pessoa frequenta (casa, trabalho, faculdade, academia, restaurantes) com o padrão de dias e horários, e onde ela está agora.' },
+  { name: 'treino_forca', description: 'Treinos de força do Hevy (exercícios, cargas, progressão, platôs), a leitura de força x recuperação (sono, comida, massa magra) e o que ela comeu antes e depois do treino de hoje.' },
+  {
+    name: 'relogio',
+    description: 'Dados do relógio por dia nos últimos N dias: passos, gasto calórico, batimento de repouso, sono (total, profundo, REM) e treinos detectados.',
+    parameters: { type: 'OBJECT', properties: { dias: { type: 'INTEGER', description: '1 a 30; padrão 7' } } },
+  },
+  {
+    name: 'pesagens',
+    description: 'Pesagens e bioimpedância (peso, gordura, massa magra) dos últimos N dias e a linha de tendência semanal com veredito (no ritmo, abaixo ou acima do alvo).',
+    parameters: { type: 'OBJECT', properties: { dias: { type: 'INTEGER', description: '7 a 120; padrão 42' } } },
+  },
+  { name: 'despensa', description: 'O que a pessoa tem em casa (despensa alimentada pelas notas fiscais), com quantidades e validades.' },
+  {
+    name: 'conhecimento',
+    description: 'Sua base de conhecimento técnico (nutrição, treino, suplementos, sono, recuperação) por assunto. Diga o assunto em poucas palavras.',
+    parameters: { type: 'OBJECT', properties: { consulta: { type: 'STRING', description: 'assunto, ex.: "pré-treino carboidrato", "creatina saturação", "proteína em déficit"' } }, required: ['consulta'] },
+  },
+  {
+    name: 'lembrancas',
+    description: 'Memória de longo prazo das conversas do grupo (o que a pessoa disse, preferências, aversões, episódios), por semelhança com uma consulta.',
+    parameters: { type: 'OBJECT', properties: { consulta: { type: 'STRING', description: 'o que você quer lembrar, em uma frase' } }, required: ['consulta'] },
+  },
+  { name: 'mercados_perto', description: 'Mercados, feiras e padarias perto dos lugares da pessoa (casa, trabalho, faculdade).' },
+  { name: 'reflexao', description: 'Como você entende essa pessoa: sua reflexão de domingo, as hipóteses abertas com os sinais da semana e seu último pensamento particular.' },
+];
+
+/**
+ * Ferramentas de leitura pra UMA pessoa. Devolve { declaracoes, executar(nome, args), usadas }.
+ * `apenas` restringe a lista (nomes). Os executores são preguiçosos: nada é consultado até o modelo pedir.
+ */
+export function ferramentasPara(perfil, { dia, apenas = null } = {}) {
+  const fuso = fusoDe(perfil);
+  const jids = perfil?.jids || [];
+  const usadas = [];
+  const exec = {
+    async refeicoes_periodo({ dias } = {}) {
+      const n = inteiro(dias, 1, 60, 14);
+      const refs = await refeicoesDesde(jids, diasAnteriores(dia, n)[0]);
+      if (!refs.length) return `(nenhuma refeição registrada nos últimos ${n} dias)`;
+      const linhas = refs
+        .slice(-120)
+        .map((r) => `${r.dia} ${r.horaLocal || r.hora || ''} [${r.slot || '?'}] ${r.descricao || r.resumo || ''}${r.kcal ? ` (${Math.round(r.kcal)} kcal${r.proteina ? `, P ${Math.round(r.proteina)} g` : ''})` : ''}`);
+      return `${refs.length} refeições em ${n} dias (${linhas.length < refs.length ? 'as últimas 120' : 'todas'}):\n${linhas.join('\n')}`;
+    },
+    async padrao_alimentar({ dias } = {}) {
+      const n = inteiro(dias, 7, 60, 28);
+      const refs = await refeicoesDesde(jids, diasAnteriores(dia, n)[0]);
+      return padraoAlimentar(refs, { periodoDias: n })?.texto || '(sem registros suficientes)';
+    },
+    async agenda({ dias } = {}) {
+      const n = inteiro(dias, 1, 14, 7);
+      const ag = await agendaDe(perfil, { dias: n });
+      if (!ag) return '(essa pessoa não tem agenda ligada)';
+      return blocoAgenda(ag.lista, { perfil, dias: n }) || `(sem compromissos nos próximos ${n} dias)`;
+    },
+    async semana_tipica({ semana } = {}) {
+      const sem = /atual/i.test(String(semana || '')) ? semanaAtual(dia) : semanaDoPlano(dia);
+      const refs = await refeicoesDesde(jids, diasAnteriores(dia, 60)[0]);
+      const padrao = padraoAlimentar(refs.filter((r) => r.dia >= diasAnteriores(dia, 28)[0]), { periodoDias: 28 });
+      const agendaSemana = await agendaDe(perfil, { dias: 14 }).catch(() => null);
+      return semanaTipica({ perfil, semana: sem, hab: horariosHabituais(refs), slots: padrao?.slots ? Object.keys(padrao.slots) : [], agenda: agendaSemana?.lista || [], fuso }) || '(sem lugares aprendidos ainda)';
+    },
+    async lugares() {
+      if (!perfil?.lugaresAtivo) return '(essa pessoa não ligou a localização)';
+      const ctx = await contextoLugares(perfil).catch(() => null);
+      const lista = (perfil.lugares || [])
+        .filter((l) => l.visitas >= 2 || l.papel || l.manual)
+        .slice(0, 15)
+        .map((l) => `- ${l.papel || l.tipo || 'lugar'}${l.nome ? ` ${l.nome}` : ''}: ${l.padrao || 'sem padrão'}`);
+      return [ctx?.bloco || '', lista.length ? `LUGARES COM PADRÃO:\n${lista.join('\n')}` : ''].filter(Boolean).join('\n\n') || '(sem lugares ainda)';
+    },
+    async treino_forca() {
+      const [forca, treino, hoje] = await Promise.all([
+        analiseForca(perfil, dia).catch(() => null),
+        treinoDe(perfil, dia, { sincronizar: false }).catch(() => null),
+        blocoTreinoRefeicoes(perfil, dia).catch(() => ''),
+      ]);
+      return [treino?.bloco || '', forca?.texto || '', hoje].filter(Boolean).join('\n\n') || '(sem treino de força registrado)';
+    },
+    async relogio({ dias } = {}) {
+      const n = inteiro(dias, 1, 30, 7);
+      const d = jids[0] ? await colecao('saude_relogio').findOne({ _id: jids[0] }).catch(() => null) : null;
+      if (!d) return '(essa pessoa não tem relógio ligado)';
+      const desde = diasAnteriores(dia, n)[0];
+      const hm = (min) => (min == null ? '?' : `${Math.floor(min / 60)}h${String(Math.round(min % 60)).padStart(2, '0')}`);
+      const sonos = new Map((d.sonos || []).filter((s) => s.dia >= desde).map((s) => [s.dia, s]));
+      const ats = (d.atividades || []).filter((a) => a.dia >= desde);
+      const diasTodos = [...new Set([...ats.map((a) => a.dia), ...sonos.keys()])].sort();
+      const linhas = diasTodos.map((x) => {
+        const a = ats.find((y) => y.dia === x);
+        const s = sonos.get(x);
+        return (
+          `${x}: ${a?.passos ? `${a.passos} passos` : 'passos ?'} · ${a?.calorias ? `gasto ${a.calorias} kcal` : 'gasto ?'}` +
+          (a?.fcRepouso ? ` · repouso ${a.fcRepouso} bpm` : '') +
+          (s ? ` · sono ${hm(s.total)} (profundo ${hm(s.profundo)}, REM ${hm(s.rem)})` : '') +
+          (a?.treinos?.length ? ` · treinos: ${a.treinos.map((t) => `${t.nome} ${t.hora}${t.min ? ` ${t.min} min` : ''}${t.kcal ? ` ${Math.round(t.kcal)} kcal` : ''}`).join(', ')}` : '')
+        );
+      });
+      return linhas.length ? `RELÓGIO, últimos ${n} dias (último envio ${d.ultimoEnvio || '?'}):\n${linhas.join('\n')}` : `(sem dados do relógio nos últimos ${n} dias)`;
+    },
+    async pesagens({ dias } = {}) {
+      const n = inteiro(dias, 7, 120, 42);
+      const pes = await pesagensDesde(jids, diasAnteriores(dia, n)[0]);
+      if (!pes.length) return `(sem pesagens nos últimos ${n} dias)`;
+      const tend = linhaDeTendencia({ pesagens: pes, perfil, dia, semanas: 6 });
+      const ult = [...pes]
+        .sort((a, b) => a.dia.localeCompare(b.dia))
+        .slice(-12)
+        .map((p) => `${p.dia}: ${p.peso} kg${p.gordura != null ? ` · gordura ${p.gordura}%` : ''}${p.magra != null ? ` · magra ${p.magra} kg` : ''}`);
+      return [tend?.texto || '', `ÚLTIMAS PESAGENS:\n${ult.join('\n')}`].filter(Boolean).join('\n\n');
+    },
+    async despensa() {
+      return (await blocoDespensa(perfil)) || '(despensa vazia ou sem notas)';
+    },
+    async conhecimento({ consulta } = {}) {
+      return docsPara(perfil, { texto: String(consulta || '') }) || '(nada na base sobre isso)';
+    },
+    async lembrancas({ consulta } = {}) {
+      return (await lembrancasPara({ consulta: String(consulta || ''), pessoa: perfil?.nome, limite: 6 })) || '(nenhuma lembrança parecida)';
+    },
+    async mercados_perto() {
+      return (await mercadosProximos(perfil)) || '(sem mercados mapeados perto dos lugares dela)';
+    },
+    async reflexao() {
+      const abertas = (perfil?.hipoteses || []).filter((h) => h.status === 'aberta');
+      return (
+        [
+          perfil?.reflexao?.sintese ? `SÍNTESE: ${perfil.reflexao.sintese}` : '',
+          abertas.length
+            ? `HIPÓTESES ABERTAS:\n${abertas.map((h) => `- ${h.texto}${h.sinais?.length ? ` (sinais: ${h.sinais.map((s) => `${String(s.dia || '').slice(5)} ${s.direcao === 'a_favor' ? '+' : '−'} ${s.evidencia}`).join('; ')})` : ''}`).join('\n')}`
+            : '',
+          perfil?.pensamento?.texto ? `ÚLTIMO PENSAMENTO (${perfil.pensamento.dia} ${perfil.pensamento.hora}): ${perfil.pensamento.texto}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n\n') || '(ainda sem reflexão sobre essa pessoa)'
+      );
+    },
+  };
+  const declaracoes = DECLARACOES.filter((d) => !apenas || apenas.includes(d.name));
+  async function executar(nome, args = {}) {
+    const fn = exec[nome];
+    if (!fn || !declaracoes.some((d) => d.name === nome)) return `(ferramenta desconhecida: ${nome})`;
+    const t0 = Date.now();
+    try {
+      const saida = corta(await fn(args || {}));
+      usadas.push(nome);
+      console.log(`[ferramentas] ${String(perfil?.nome || '').split(' ')[0]}: ${nome}(${JSON.stringify(args || {})}) -> ${(saida.length / 1000).toFixed(1)}k chars em ${Date.now() - t0} ms`);
+      return saida;
+    } catch (e) {
+      console.warn(`[ferramentas] ${nome} falhou:`, e.message);
+      return `(erro ao consultar ${nome}: ${String(e.message).slice(0, 120)})`;
+    }
+  }
+  return { declaracoes, executar, usadas };
+}
