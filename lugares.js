@@ -991,7 +991,7 @@ const NOME_SLOT_SEMANA = { cafe: 'café da manhã', lanche_manha: 'lanche da man
 const TIPOS_RUIDO_SEMANA = new Set(['loja', 'shopping', 'igreja', 'bar', 'residência', 'residencia', 'salão', 'salao', 'parque', 'praça', 'praca']);
 /** Rótulo seguro pra sair no grupo: tipo do lugar (e nome só de lugar público de comer); casa de terceiros vira "casa de família". */
 function rotuloSemana(l) {
-  if (l.papel === 'casa') return 'casa de família (fora da sua casa)';
+  if (l.papel === 'casa' || (String(l.tipo || '').toLowerCase() === 'casa' && l.nome)) return 'casa de família (fora da sua casa)';
   if (l.papel === 'trabalho') return 'trabalho';
   const tipo = String(l.tipo || 'lugar').toLowerCase();
   if (/restaurante|lanchonete|padaria|caf[eé]/.test(tipo)) return `${tipo}${l.nome ? ` ${l.nome}` : ''}`;

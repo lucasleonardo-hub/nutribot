@@ -457,7 +457,7 @@ test('semanaTipica: paradas por dia da semana, refeição em casa/fora/em cima d
       { tipo: 'loja', nome: 'Salão', diasIdx: [1], horaTipica: 16.7, horaFim: 17.3, dias: 5 }, // ruído
       { tipo: 'faculdade', nome: 'Senac', diasIdx: [2], horaTipica: 18.8, horaFim: 19.1, dias: 3 }, // passagem de 18 min
       { tipo: 'parque', nome: 'Praça Berman', diasIdx: [4], horaTipica: 17.3, horaFim: 20.1, dias: 6, manual: true }, // coincide com o vôlei
-      { papel: 'casa', nome: 'da mãe do Heitor', diasIdx: [0, 6], horaTipica: 12.4, horaFim: 15.1, dias: 5 },
+      { tipo: 'casa', nome: 'da mãe do Heitor', manual: true, diasIdx: [0, 6], horaTipica: 12.4, horaFim: 15.1, dias: 5 }, // tipo casa com nome = casa de outra pessoa
     ],
     atividades: [
       { nome: 'Vôlei de quadra', dias: [1, 3], inicio: '20:00', fim: '22:00' },
