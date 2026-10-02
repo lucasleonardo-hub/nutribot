@@ -132,7 +132,7 @@ test('parseJsonTolerante: JSON inteiro, cercado, cortado no meio de um item (obj
   const lista = '[{"nome":"arroz","categoria":"grao"},{"nome":"feij';
   assert.deepEqual(parseJsonTolerante(lista), [{ nome: 'arroz', categoria: 'grao' }]);
   // aspas escapadas dentro de string não confundem a pilha
-  const esc = '{"itens":[{"descricao":"QUEIJO \"MINAS\" 500G"},{"descricao":"PA';
+  const esc = '{"itens":[{"descricao":"QUEIJO \\"MINAS\\" 500G"},{"descricao":"PA';
   assert.deepEqual(parseJsonTolerante(esc), { itens: [{ descricao: 'QUEIJO "MINAS" 500G' }] });
   assert.equal(parseJsonTolerante('isso não é json'), null);
   assert.equal(parseJsonTolerante(''), null);
