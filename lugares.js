@@ -141,7 +141,7 @@ export function estatisticasDosLugares(lugares, visitas) {
     else if (diasIdx.length === 2 && diasIdx.includes(0) && diasIdx.includes(6)) diasTxt = 'fim de semana';
     else diasTxt = diasIdx.map((i) => NOME_DOW[i]).join(', ');
     const padrao = s.visitas ? `${diasTxt}${s.hIni.length ? ` · ${hStr(med(s.hIni))} às ${hStr(med(s.hFim))}` : ''}` : '';
-    saida.push({ ...s, dias: s.dias.size, dows: undefined, hIni: undefined, hFim: undefined, somaLat: undefined, somaLon: undefined, n: undefined, novo: undefined, padrao, horaTipica: med(s.hIni), horaFim: med(s.hFim), diasIdx });
+    saida.push({ ...s, porDow: s.dows, dias: s.dias.size, dows: undefined, hIni: undefined, hFim: undefined, somaLat: undefined, somaLon: undefined, n: undefined, novo: undefined, padrao, horaTipica: med(s.hIni), horaFim: med(s.hFim), diasIdx });
   }
   // casa = onde mais dorme; sem noites (primeiros dias), onde mais fica
   // casa marcada à mão manda: nenhum outro lugar vira casa
@@ -765,7 +765,7 @@ export async function contextoLugares(perfil) {
   const [situacao, visitas, companhia, hoje, notasHoje] = await Promise.all([situacaoAtual(perfil).catch(() => null), visitasRecentes(jid, 28).catch(() => []), companhiaAtual(perfil).catch(() => []), visitasDeHoje(perfil, hojeDia).catch(() => []), colecao('notas').countDocuments({ jid, dia: hojeDia }).catch(() => 0)]);
   const lugares = perfil.lugares || [];
   const linhas = lugares
-    .filter((l) => l.visitas >= 2 || l.papel || l.manual)
+    .filter((l) => (l.visitas >= 2 || l.papel || l.manual) && !(l.ultimaVez && l.papel !== 'casa' && l.papel !== 'trabalho' && diasEntreISO(l.ultimaVez, hojeDia) > 35)) // sem ida há 5+ semanas: fora da lista
     .slice(0, 10)
     .map((l) => `- ${comRua(l, rotuloLugar(l))}: ${l.padrao || 'sem padrão ainda'} · ${l.visitas} visita(s) em ${l.dias} dia(s)${l.ultimaVez ? `, última ${l.ultimaVez}` : ''}`);
   const semana = ultimos7(visitas, lugares);
@@ -874,26 +874,37 @@ export async function mercadosProximos(perfil) {
 // ---------- roteiro do dia: cruza padrão de lugares, agenda e treino, com as janelas apertadas ----------
 const hDec = (h) => (h == null ? null : Math.floor(h) + ((h % 1) * 60) / 60);
 const hTxt = (h) => `${String(Math.floor(h)).padStart(2, '0')}:${String(Math.round((h % 1) * 60)).padStart(2, '0')}`;
+const diasEntreISO = (a, b) => Math.round((new Date(`${b}T12:00:00Z`) - new Date(`${a}T12:00:00Z`)) / 86400000); // b − a
 /**
  * Puro. lugares = perfil.lugares; agenda = eventos de hoje [{ titulo, tipo, inicio, fim (ISO) }]; treinos = sessões de hoje
  * [{ nome, hora: 'HH:MM', min }]; dow = dia da semana de hoje; fuso = da pessoa; horaAgora = decimal.
  * Devolve texto tipo: "ROTEIRO PROVÁVEL DE HOJE (segunda): academia Garra 07:06–08:00 (padrão) → faculdade UFSC 10:00–12:36 (padrão) → aula X 14:00–16:00 (agenda). Janela apertada: 08:00→10:00 (2h)".
  */
-export function roteiroDoDia({ lugares = [], agenda = [], treinos = [], dow, fuso = 'America/Sao_Paulo', horaAgora = null, nomeDia }) {
+export function roteiroDoDia({ lugares = [], agenda = [], treinos = [], dow, fuso = 'America/Sao_Paulo', horaAgora = null, nomeDia, dia = null, situacao = null, visitasHoje = [] }) {
   const itens = [];
+  // padrão morto: não vai há mais de 5 semanas (Arena Beach, última ida 15/08, entrava no roteiro de todo sábado)
+  const velho = (l) => Boolean(dia && l.ultimaVez && diasEntreISO(l.ultimaVez, dia) > 35);
+  // padrão fraco: parada de minutos (Senac, 18 min de passagem), uma vez só nesse dia da semana, ou 1-2 dias no total
+  const fraco = (l) => {
+    if (l.manual || l.papel) return false;
+    const dur = hDec(l.horaFim ?? l.horaTipica) - hDec(l.horaTipica);
+    if (dur >= 0 && dur < 0.5) return true;
+    if (Array.isArray(l.porDow) && (l.porDow[dow] || 0) < 2) return true;
+    return l.dias != null && l.dias < 3;
+  };
   for (const l of lugares) {
     if (l.papel === 'casa' || !l.diasIdx?.includes(dow) || l.horaTipica == null) continue;
-    if (l.dias != null && l.dias < 3 && !l.manual && !l.papel) continue; // lugar visto em 1 ou 2 dias não é rotina
+    if (velho(l) || fraco(l)) continue;
     const ini = hDec(l.horaTipica);
     let fim = hDec(l.horaFim ?? l.horaTipica);
     if (fim < ini) fim = ini + 1;
-    itens.push({ ini, fim, rotulo: `${rotuloLugar(l)} (padrão)`, tipo: l.papel || l.tipo });
+    itens.push({ ini, fim, rotulo: `${rotuloLugar(l)} (padrão)`, tipo: l.papel || l.tipo, fonte: 'padrao', lugarId: l.id });
   }
   for (const e of agenda) {
     const li = localDe(e.inicio, fuso);
     const lf = localDe(e.fim || e.inicio, fuso);
     if (e.diaTodo) continue;
-    itens.push({ ini: li.hora, fim: lf.hora < li.hora ? 24 : lf.hora, rotulo: `${e.tipo ? `${e.tipo}: ` : ''}${e.titulo} (agenda)`, tipo: e.tipo || 'agenda' });
+    itens.push({ ini: li.hora, fim: lf.hora < li.hora ? 24 : lf.hora, rotulo: `${e.tipo ? `${e.tipo}: ` : ''}${e.titulo} (agenda)`, tipo: e.tipo || 'agenda', fonte: 'agenda' });
   }
   for (const t of treinos) {
     const m = /^(\d{1,2}):(\d{2})/.exec(t.hora || '');
@@ -901,7 +912,7 @@ export function roteiroDoDia({ lugares = [], agenda = [], treinos = [], dow, fus
     // caminhada curta detectada sozinha pelo relógio (ir até o ponto, atravessar o campus) não é treino nem compromisso
     if ((t.min || 0) < 20 && /caminhada|walk|corrida leve/i.test(t.nome || '')) continue;
     const ini = Number(m[1]) + Number(m[2]) / 60;
-    itens.push({ ini, fim: ini + (t.min || 60) / 60, rotulo: `treino ${t.nome || ''}${t.min ? ` ${t.min} min` : ''} (relógio, feito)`, tipo: 'treino' });
+    itens.push({ ini, fim: ini + (t.min || 60) / 60, rotulo: `treino ${t.nome || ''}${t.min ? ` ${t.min} min` : ''} (relógio, feito)`, tipo: 'treino', fonte: 'treino', feito: true });
   }
   if (!itens.length) return '';
   itens.sort((a, b) => a.ini - b.ini);
@@ -910,20 +921,54 @@ export function roteiroDoDia({ lugares = [], agenda = [], treinos = [], dow, fus
   for (const it of itens) {
     const igual = unicos.find((u) => Math.abs(u.ini - it.ini) < 0.75 && (u.tipo === it.tipo || (u.tipo === 'academia' && it.tipo === 'treino') || (u.tipo === 'treino' && it.tipo === 'academia')));
     if (igual) {
-      if (it.tipo === 'treino') igual.rotulo = `${igual.rotulo.replace(' (padrão)', '')} · ${it.rotulo}`;
+      if (it.tipo === 'treino') {
+        igual.rotulo = `${igual.rotulo.replace(' (padrão)', '')} · ${it.rotulo}`;
+        igual.feito = true; // o relógio viu o treino: a academia do padrão aconteceu
+      }
       continue;
     }
     unicos.push(it);
   }
-  const apertadas = [];
-  for (let i = 1; i < unicos.length; i++) {
-    const gap = unicos[i].ini - unicos[i - 1].fim;
-    if (gap >= 0 && gap <= 1.5) apertadas.push(`${hTxt(unicos[i - 1].fim)}→${hTxt(unicos[i].ini)} (${Math.round(gap * 60)} min entre ${unicos[i - 1].rotulo.split(' (')[0]} e ${unicos[i].rotulo.split(' (')[0]})`);
+  // cruza com a realidade: o que o celular já mostrou hoje (visitas) e onde a pessoa está AGORA. Padrão é probabilidade;
+  // o ✓ antigo (= "o horário passou") era lido como "esteve lá" e a bot dizia que a pessoa estava na rua estando em casa
+  const foiHoje = (it) => Boolean(it.feito || (it.lugarId && (visitasHoje || []).some((v) => (v.lugar?.id ?? v.lugarId) === it.lugarId)));
+  const emCasa = situacao?.estado === 'casa';
+  const temSinal = situacao && situacao.estado !== 'sem_sinal';
+  const noLugar = (it) => situacao?.estado === 'lugar' && it.lugarId && situacao.lugar?.id === it.lugarId;
+  const naoFoi = [];
+  const mantidos = [];
+  for (const it of unicos) {
+    const passou = horaAgora != null && it.fim < horaAgora;
+    const agora = horaAgora != null && it.ini <= horaAgora && horaAgora <= it.fim;
+    const nome = it.rotulo.replace(' (padrão)', '');
+    if (it.fonte === 'padrao' && !foiHoje(it)) {
+      if (passou && temSinal) {
+        naoFoi.push(nome);
+        continue;
+      }
+      if (agora && temSinal && !noLugar(it)) {
+        naoFoi.push(`${nome} (era agora, mas ${emCasa ? 'está em casa' : 'não está lá'})`);
+        continue;
+      }
+    }
+    const sufixo =
+      it.fonte === 'padrao' && foiHoje(it) ? (it.feito ? ' (feito, confirmado pelo relógio)' : ' (feito, confirmado pelo celular)') :
+      agora ? (noLugar(it) ? ' ◀ agora (confirmado pelo celular)' : ' ◀ agora') :
+      passou ? ' (já passou)' :
+      it.fonte === 'padrao' && emCasa ? ' (só se sair de casa)' : '';
+    mantidos.push({ ...it, linha: `${hTxt(it.ini)}–${hTxt(it.fim)} ${it.rotulo}${sufixo}` });
   }
-  const marca = (it) => (horaAgora != null && it.fim < horaAgora ? ' ✓' : horaAgora != null && it.ini <= horaAgora && horaAgora <= it.fim ? ' ◀ agora' : '');
+  if (!mantidos.length && !naoFoi.length) return '';
+  const apertadas = [];
+  for (let i = 1; i < mantidos.length; i++) {
+    const gap = mantidos[i].ini - mantidos[i - 1].fim;
+    if (gap >= 0 && gap <= 1.5) apertadas.push(`${hTxt(mantidos[i - 1].fim)}→${hTxt(mantidos[i].ini)} (${Math.round(gap * 60)} min entre ${mantidos[i - 1].rotulo.split(' (')[0]} e ${mantidos[i].rotulo.split(' (')[0]})`);
+  }
+  const cabecalho = situacao ? `AGORA (celular, isto é FATO): ${descreverSituacao(situacao)}. ` : '';
   return (
-    `ROTEIRO PROVÁVEL DE HOJE (${nomeDia || NOME_DOW[dow]}; "padrão" = pelos lugares que ela costuma frequentar nesse dia, "agenda" = Google Agenda, "relógio" = já aconteceu): ` +
-    unicos.map((it) => `${hTxt(it.ini)}–${hTxt(it.fim)} ${it.rotulo}${marca(it)}`).join(' → ') +
+    `${cabecalho}ROTEIRO PROVÁVEL DE HOJE (${nomeDia || NOME_DOW[dow]}; "padrão" = probabilidade pelo dia da semana, NÃO é fato; "agenda" = Google Agenda; "relógio" = já aconteceu): ` +
+    (mantidos.map((it) => it.linha).join(' → ') || 'nada mais previsto') +
+    (naoFoi.length ? `\nNÃO ACONTECEU HOJE (era o padrão desse dia, mas o celular não mostrou): ${naoFoi.join('; ')}. Não trate como se tivesse ido.` : '') +
     (apertadas.length ? `\nJANELAS APERTADAS (pouco tempo pra comer entre um e outro; sugira algo pronto ou levado de casa): ${apertadas.join('; ')}` : '')
   );
 }

@@ -3,7 +3,7 @@
 import { refeicoesDesde } from './mongo.js';
 import { treinoDe } from './treino.js';
 import { agendaDe } from './agenda.js';
-import { contextoLugares, roteiroDoDia, localDe } from './lugares.js';
+import { contextoLugares, roteiroDoDia, localDe, visitasDeHoje } from './lugares.js';
 import { situacaoRelogio } from './relogio.js';
 import { blocoAtividades, atividadesComoAgenda } from './atividades.js';
 import { blocoTreinoRefeicoes } from './contexto.js';
@@ -42,7 +42,8 @@ export async function enriquecerPerfis(perfis, dia) {
         const agendaHoje = (ag?.lista || []).filter((e) => localDe(e.inicio, fuso).dia === agoraLocal.dia);
         const rel = p.relogio ? await situacaoRelogio(p, agoraLocal.dia).catch(() => null) : null;
         const fixas = atividadesComoAgenda(p, { dia: agoraLocal.dia, dow: agoraLocal.dow, fuso });
-        roteiro = roteiroDoDia({ lugares: p.lugares || [], agenda: [...agendaHoje, ...fixas], treinos: rel?.treinosHoje || [], dow: agoraLocal.dow, fuso, horaAgora: agoraLocal.hora });
+        const visitasHoje = p.lugaresAtivo ? await visitasDeHoje(p, agoraLocal.dia).catch(() => []) : [];
+        roteiro = roteiroDoDia({ lugares: p.lugares || [], agenda: [...agendaHoje, ...fixas], treinos: rel?.treinosHoje || [], dow: agoraLocal.dow, fuso, horaAgora: agoraLocal.hora, dia: agoraLocal.dia, situacao: lg?.situacao || null, visitasHoje });
       } catch (e) {
         console.warn('[perfis] roteiro:', e.message);
       }

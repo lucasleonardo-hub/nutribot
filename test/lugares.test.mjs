@@ -202,7 +202,7 @@ test('roteiroDoDia cruza padrão de lugares, agenda e treino e aponta janela ape
   const treinos = [{ nome: 'Musculação', hora: '07:12', min: 52 }];
   const r = roteiroDoDia({ lugares, agenda, treinos, dow: 1, fuso: 'America/Sao_Paulo', horaAgora: 11, nomeDia: 'segunda' });
   assert.match(r, /^ROTEIRO PROVÁVEL DE HOJE \(segunda/);
-  assert.match(r, /07:06–08:00 academia Garra \(Córrego Grande\) · treino Musculação 52 min \(relógio, feito\) ✓/);
+  assert.match(r, /07:06–08:00 academia Garra \(Córrego Grande\) · treino Musculação 52 min \(relógio, feito\) \(feito, confirmado pelo relógio\)/);
   assert.match(r, /10:00–12:36 faculdade UFSC \(padrão\) ◀ agora/);
   assert.match(r, /14:00–16:00 aula: Aula de Madeira \(agenda\)/);
   assert.doesNotMatch(r, /\d{2}:\d{2} (casa|praia)/);
@@ -488,4 +488,31 @@ test('semanaTipica: paradas por dia da semana, refeição em casa/fora/em cima d
   assert.equal(seg.length >= 1, true);
   // sem semana ou sem perfil: vazio
   assert.equal(semanaTipica({ perfil: null, semana }), '');
+});
+
+test('roteiroDoDia: cruza com o celular (em casa), tira lugar fraco e velho, e não diz que foi onde não foi', () => {
+  const lugares = [
+    { id: 'quadra', tipo: 'quadra de vôlei de areia', nome: 'Arena', diasIdx: [0, 6], horaTipica: 9.9, horaFim: 12.6, dias: 3, manual: true, ultimaVez: '2026-08-15' }, // sem ida há 7 semanas
+    { id: 'mae', tipo: 'casa', nome: 'da mãe', diasIdx: [0, 5, 6], horaTipica: 12.4, horaFim: 15.1, dias: 8, manual: true, ultimaVez: '2026-09-19' },
+    { id: 'senac', tipo: 'faculdade', nome: 'Senac', diasIdx: [2, 5, 6], horaTipica: 18.8, horaFim: 19.1, dias: 4, porDow: [0, 0, 1, 0, 0, 1, 2], ultimaVez: '2026-09-26' }, // 18 min de passagem
+    { id: 'salao', tipo: 'loja', nome: 'Salão', diasIdx: [0, 2, 5, 6], horaTipica: 16.7, horaFim: 17.3, dias: 6, porDow: [1, 0, 1, 0, 0, 2, 2], ultimaVez: '2026-09-26' },
+    { id: 'pilates', tipo: 'academia', nome: 'Omnia', diasIdx: [6], horaTipica: 17.3, horaFim: 18.3, dias: 2, porDow: [0, 0, 0, 0, 0, 0, 2], ultimaVez: '2026-09-26' }, // 2 dias só
+    { id: 'igreja', tipo: 'igreja', diasIdx: [5, 6], horaTipica: 21.9, horaFim: 24, dias: 5, porDow: [0, 0, 0, 0, 0, 2, 3], ultimaVez: '2026-09-27' },
+  ];
+  const base = { lugares, agenda: [], treinos: [], dow: 6, fuso: 'America/Sao_Paulo', nomeDia: 'sábado', dia: '2026-10-03' };
+  const emCasa = roteiroDoDia({ ...base, horaAgora: 17.5, situacao: { estado: 'casa', desde: '11:29' }, visitasHoje: [] });
+  assert.match(emCasa, /^AGORA \(celular, isto é FATO\): em casa/);
+  assert.match(emCasa, /NÃO ACONTECEU HOJE[^\n]*casa da mãe/);
+  assert.match(emCasa, /NÃO ACONTECEU HOJE[^\n]*loja Salão/);
+  assert.doesNotMatch(emCasa, /Arena|Senac|Omnia|✓/);
+  assert.match(emCasa, /21:54–24:00 igreja[^→\n]*\(só se sair de casa\)/);
+  assert.match(emCasa, /probabilidade pelo dia da semana, NÃO é fato/);
+  // esteve no salão de verdade: vira "feito, confirmado pelo celular"
+  const foi = roteiroDoDia({ ...base, horaAgora: 17.5, situacao: { estado: 'casa', desde: '17:40' }, visitasHoje: [{ lugar: { id: 'salao' } }] });
+  assert.match(foi, /loja Salão[^→\n]*\(feito, confirmado pelo celular\)/);
+  assert.doesNotMatch(foi, /NÃO ACONTECEU HOJE[^\n]*Salão/);
+  // sem sinal do celular: nada é dado como "não foi"
+  const semSinal = roteiroDoDia({ ...base, horaAgora: 17.5, situacao: { estado: 'sem_sinal' }, visitasHoje: [] });
+  assert.doesNotMatch(semSinal, /NÃO ACONTECEU/);
+  assert.match(semSinal, /casa da mãe[^→\n]*\(já passou\)/);
 });
