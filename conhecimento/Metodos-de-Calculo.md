@@ -2,7 +2,7 @@
 tipo: conhecimento
 foco: metodo
 titulo: Como os números são calculados - fontes, fórmulas e margem de erro de cada estimativa
-versao: 1
+versao: 2
 atualizado: 2026-10-03
 consulta_en: energy balance weight change 7700 kcal rule adaptive TDEE estimation bioimpedance day to day variability rate of weight gain lean bulk evidence MET compendium
 tags: [nutribot, conhecimento, metodo, estatistica]
@@ -74,8 +74,8 @@ você explicar quando perguntarem ("como você sabe?", "isso é confiável?") e 
 ## Proteína e suplementos
 - Proteína: 1,6 a 2,2 g/kg/dia (Morton et al. 2018, Br J Sports Med; Jäger et al. 2017, ISSN), 20 a 40 g por refeição,
   3 a 5 refeições.
-- Creatina: 3 a 5 g/dia, saturação em 3 a 4 semanas, +1 a 2 kg de água no início (Kreider et al. 2017, ISSN). A tendência
-  de peso desconta isso quando a creatina começa.
+- Creatina: 3 a 5 g/dia, saturação em 3 a 4 semanas, +1 a 2 kg de água no início (Kreider et al. 2017, ISSN). O sistema
+  NÃO desconta isso sozinho: nas 2 a 4 primeiras semanas de creatina, leia a balança sabendo que parte do ganho é água.
 
 ## Como falar disso
 - Dê o número com a margem: "ritmo esperado +0,35 kg/semana, provavelmente entre +0,25 e +0,45".
