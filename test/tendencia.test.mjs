@@ -99,3 +99,33 @@ test('projecaoAteMeta: avisos de sono curto e de balança x comida discordando',
   assert.ok(p.avisos.some((a) => /sono médio de 5h50/.test(a)), JSON.stringify(p.avisos));
   assert.ok(p.avisos.some((a) => /discordam/.test(a)), JSON.stringify(p.avisos));
 });
+
+test('projecaoAteMeta: incerteza, janela de chegada, banda por semana e composição do ganho', () => {
+  const c = cenario();
+  const p = projecaoAteMeta({ perfil, dia: '2026-10-03', ...c, faixa });
+  assert.ok(p.incerteza >= 0.06 && p.incerteza <= 0.2, `incerteza ${p.incerteza}`);
+  assert.ok(p.janelaChegada && p.janelaChegada.cedo < p.chegada.data, JSON.stringify(p.janelaChegada));
+  assert.ok(p.janelaChegada.tarde == null || p.janelaChegada.tarde > p.chegada.data);
+  assert.ok(Math.abs(p.futuro[3].banda - p.incerteza * 4) < 1e-9);
+  assert.match(p.zap, /\(±0,\d\)/);
+  assert.match(p.zap, /provável entre/);
+  // gordura constante em 18,5%: ~81,5% do ganho é massa magra
+  assert.ok(p.composicao && Math.abs(p.composicao.parteMagra - 0.815) < 0.03, JSON.stringify(p.composicao));
+  assert.match(p.texto, /COMPOSIÇÃO DA MUDANÇA/);
+  assert.match(p.texto, /8[0-3]% do ganho foi massa magra/);
+  assert.match(p.zap, /Composição da mudança/);
+  assert.match(p.resumoZap, /do ganho foi massa magra/);
+  assert.match(p.textoCurto, /incerteza ±0,\d\d/);
+});
+
+test('semanasPassadas: dia com um registro só, ou muito abaixo da mediana, fica fora do balanço', () => {
+  const c = cenario();
+  const d1 = somarDias('2026-10-03', -3);
+  const d2 = somarDias('2026-10-03', -4);
+  const refeicoes = c.refeicoes.filter((r) => r.dia !== d1 && r.dia !== d2).concat([{ dia: d1, kcal: 1400 }, { dia: d2, kcal: 700 }, { dia: d2, kcal: 500 }]);
+  const s = semanasPassadas({ ...c, refeicoes, dia: '2026-10-03' });
+  const ult = s[s.length - 1];
+  assert.equal(ult.diasComida, 4); // 6 dias fechados na semana; um só registro (d1) e 1.200 de 3.100 (d2) saem
+  assert.ok(Math.abs(ult.kcal - 3100) < 1);
+  assert.equal(ult.diasBalanco, 4);
+});

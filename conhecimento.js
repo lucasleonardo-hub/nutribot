@@ -123,6 +123,8 @@ function focosDe(objetivo) {
 // Assuntos que puxam o documento de treino (séries, carga, RPE, deload): ela precisa dele pra ler os números do Hevy
 const ASSUNTO_TREINO = /treino|treinei|academia|s[ée]rie|carga|peso morto|agachamento|supino|rosca|leg press|volume|rpe|falha|deload|hipertrof|musculac|muscula[çc][ãa]o|repeti[çc]|descanso|recupera|dor muscular|puxad|remada|desenvolvimento|panturr|gl[uú]teo|b[íi]ceps|tr[íi]ceps|perna|peito|costas|ombro/i;
 
+// como os números são calculados (fontes, fórmulas, margem de erro): quando perguntam "como você sabe?", "isso é confiável?"
+const ASSUNTO_METODO = /calcul|estimativ|estat[íi]stic|precis[ãa]o|margem de erro|incerteza|confi[áa]vel|como voc[êe] (sabe|chegou|mede)|regress[ãa]o|7\.?700|bioimped|cient[íi]fic/i;
 const ASSUNTO_ROTINA = /marmita|hor[aá]rio|pr[eé].?treino|p[oó]s.?treino|antes do treino|depois do treino|jejum|timing|janela|refei[cç][aã]o pulada|pular refei|ceia|caf[eé] da manh/i;
 
 /**
@@ -140,6 +142,7 @@ export function docsPara(perfilOuLista, { texto, soBase = false } = {}) {
   if (!soBase) {
     if (completo || ASSUNTO_ROTINA.test(texto || '')) focos.add('rotina');
     if (completo || ASSUNTO_TREINO.test(texto || '')) focos.add('treino');
+    if (completo || ASSUNTO_METODO.test(texto || '')) focos.add('metodo');
     for (const p of perfis) {
       if (p?.treino) focos.add('treino'); // quem tem treino sincronizado do Hevy sempre leva o documento junto
       for (const f of focosDe(p?.objetivo)) focos.add(f);
