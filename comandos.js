@@ -27,6 +27,7 @@ import { atividadesZap, criarAtividade, removerAtividade, responderPendente } fr
 import { despensaZap, ajustarItem, extrairChave, interpretarQr, blocoDespensa, limparDespensa } from './despensa.js';
 import { pensamentosZap, pensarSobre } from './pensamentos.js';
 import { linhaDeTendencia } from './previsao.js';
+import { tendenciaCompleta } from './tendencia.js';
 import { metaBalancoPara, tendenciaGordura } from './resumo.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
@@ -535,7 +536,8 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       const pes = await pesagensDesde(perfil.jids, diasAnteriores(dia, 60)[0]).catch(() => []);
       const pesoAtual = [...pes].sort((a, b) => a.dia.localeCompare(b.dia)).pop()?.peso || perfil.peso;
       const faixa = metaBalancoPara({ objetivo: perfil.objetivo, peso: pesoAtual, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia, ritmo: perfil.ritmo, metaModo: perfil.metaModo, gorduraTend: tendenciaGordura(pes.filter((p) => p.dia >= diasAnteriores(dia, 28)[0])) });
-      const t = linhaDeTendencia({ pesagens: pes, perfil, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
+      // linha completa: passado (todas as semanas com pesagem), ritmo pela balança e pela comida, projeção semana a semana até a etapa
+      const t = (await tendenciaCompleta(perfil, dia).catch(() => null)) || linhaDeTendencia({ pesagens: pes, perfil, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
       await enviar(jidGrupo, t ? t.zap : 'Ainda não tenho pesagens suficientes pra uma tendência (preciso de pelo menos 4 em 10 dias ou mais). Sobe na balança do relógio que eu monto.', msg, { rapido: true });
     } catch (e) {
       console.error('[tendencia]', e.message);

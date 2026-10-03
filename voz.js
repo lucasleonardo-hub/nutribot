@@ -73,7 +73,7 @@ export function vazouInstrucao(transcricao, fala, estilo = ESTILO) {
   return { vazou: false, motivo: '' };
 }
 
-/** Transcreve o WAV com o modelo leve (500/dia) e confere se a instrução vazou. Falha na conferência = aceita o áudio. */
+/** Transcreve o WAV com o modelo leve e confere se a instrução vazou. Falha na conferência = { vazou: null } (quem chama não aceita o áudio às cegas). */
 async function conferirFala(wav, fala, ci) {
   try {
     const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent', {
@@ -86,12 +86,12 @@ async function conferirFala(wav, fala, ci) {
       signal: AbortSignal.timeout(45_000),
     });
     const d = await r.json().catch(() => ({}));
-    if (r.status !== 200) return { vazou: false, motivo: `conferência HTTP ${r.status}` };
+    if (r.status !== 200) return { vazou: null, motivo: `conferência HTTP ${r.status}` };
     const transcricao = (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
-    if (!transcricao.trim()) return { vazou: false, motivo: 'conferência vazia' };
+    if (!transcricao.trim()) return { vazou: null, motivo: 'conferência vazia' };
     return vazouInstrucao(transcricao, fala);
   } catch (e) {
-    return { vazou: false, motivo: `conferência falhou: ${String(e.message).slice(0, 60)}` };
+    return { vazou: null, motivo: `conferência falhou: ${String(e.message).slice(0, 60)}` };
   }
 }
 
@@ -175,7 +175,15 @@ export async function sintetizarGemini(fala, { voz = VOZ_GEMINI, estilo = ESTILO
         proximaChave = (ci + 1) % CHAVES.length; // espalha a cota entre as chaves
         // o modelo às vezes lê a instrução de estilo junto: transcreve e confere antes de mandar pro grupo
         if (CONFERIR) {
-          const c = await conferirFala(wav, fala, ci);
+          let c = await conferirFala(wav, fala, ci);
+          // conferência indisponível nesta chave (503, cota): tenta com as outras antes de desistir
+          for (let k = 1; k < CHAVES.length && c.vazou === null; k++) c = await conferirFala(wav, fala, (ci + k) % CHAVES.length);
+          if (c.vazou === null) {
+            // sem conferência não arrisco: em 02/10 18:02 a instrução de estilo foi lida em voz alta porque a conferência falhou e o áudio passou
+            console.warn(`[voz] áudio sem conferência (${modelo}, chave ${ci + 1}): ${c.motivo}; não mando sem conferir`);
+            erros.push(`chave ${ci + 1}/${modelo}: sem conferência (${c.motivo})`);
+            continue;
+          }
           if (c.vazou) {
             console.warn(`[voz] áudio descartado (${modelo}, chave ${ci + 1}): ${c.motivo}; tentando de novo`);
             erros.push(`chave ${ci + 1}/${modelo}: instrução vazou (${c.motivo})`);

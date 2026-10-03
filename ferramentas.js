@@ -11,7 +11,9 @@ import { blocoDespensa } from './despensa.js';
 import { docsPara } from './conhecimento.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { linhaDeTendencia } from './previsao.js';
-import { treinoDe } from './treino.js';
+import { tendenciaCompleta } from './tendencia.js';
+import { treinoDe, temHevy } from './treino.js';
+import { ehDonoDaAgenda } from './agenda.js';
 import { horariosHabituais, diasAnteriores, fusoDe } from './util.js';
 
 const TETO_CHARS = 7000;
@@ -72,8 +74,8 @@ const DECLARACOES = [
   },
   {
     name: 'pesagens',
-    description: 'Pesagens e bioimpedância (peso, gordura, massa magra) dos últimos N dias e a linha de tendência semanal com veredito (no ritmo, abaixo ou acima do alvo).',
-    parameters: { type: 'OBJECT', properties: { dias: { type: 'INTEGER', description: '7 a 120; padrão 42' } } },
+    description: 'Linha de tendência completa: pesagens e bioimpedância por semana (peso, gordura, massa magra) cruzadas com comida registrada, gasto do relógio, treinos e sono; ritmo pela balança e pela comida; projeção semana a semana até a etapa de peso, data de chegada e veredito (no ritmo, abaixo, acima). Peça sempre que a conversa for de ritmo, meta, etapa ou peso.',
+    parameters: { type: 'OBJECT', properties: { dias: { type: 'INTEGER', description: 'quantos dias de pesagens listar no fim (7 a 120; padrão 42)' } } },
   },
   { name: 'despensa', description: 'O que a pessoa tem em casa (despensa alimentada pelas notas fiscais), com quantidades e validades.' },
   {
@@ -105,7 +107,11 @@ export function ferramentasPara(perfil, { dia, apenas = null } = {}) {
       if (!refs.length) return `(nenhuma refeição registrada nos últimos ${n} dias)`;
       const linhas = refs
         .slice(-120)
-        .map((r) => `${r.dia} ${r.horaLocal || r.hora || ''} [${r.slot || '?'}] ${r.descricao || r.resumo || ''}${r.kcal ? ` (${Math.round(r.kcal)} kcal${r.proteina ? `, P ${Math.round(r.proteina)} g` : ''})` : ''}`);
+        .map((r) => {
+          const kcal = Number(r.estimativa?.kcal ?? r.kcal) || 0;
+          const prot = Number(r.estimativa?.p ?? r.proteina) || 0;
+          return `${r.dia} ${r.horaLocal || r.hora || ''} [${r.slot || '?'}] ${r.descricao || r.resumo || ''}${kcal ? ` (${Math.round(kcal)} kcal${prot ? `, P ${Math.round(prot)} g` : ''})` : ''}`;
+        });
       return `${refs.length} refeições em ${n} dias (${linhas.length < refs.length ? 'as últimas 120' : 'todas'}):\n${linhas.join('\n')}`;
     },
     async padrao_alimentar({ dias } = {}) {
@@ -168,7 +174,7 @@ export function ferramentasPara(perfil, { dia, apenas = null } = {}) {
       const n = inteiro(dias, 7, 120, 42);
       const pes = await pesagensDesde(jids, diasAnteriores(dia, n)[0]);
       if (!pes.length) return `(sem pesagens nos últimos ${n} dias)`;
-      const tend = linhaDeTendencia({ pesagens: pes, perfil, dia, semanas: 6 });
+      const tend = (await tendenciaCompleta(perfil, dia).catch(() => null)) || linhaDeTendencia({ pesagens: pes, perfil, dia, semanas: 6 });
       const ult = [...pes]
         .sort((a, b) => a.dia.localeCompare(b.dia))
         .slice(-12)
@@ -202,7 +208,17 @@ export function ferramentasPara(perfil, { dia, apenas = null } = {}) {
       );
     },
   };
-  const declaracoes = DECLARACOES.filter((d) => !apenas || apenas.includes(d.name));
+  // só o que a pessoa tem: sem relógio não há `relogio`; sem localização não há lugares/semana típica/mercados; sem Hevy não há
+  // treino_forca; agenda só do dono. (Heitor e Ale chamavam relogio e pesagens toda vez e recebiam "não tem".)
+  const temRelogio = Boolean(perfil?.relogio && Object.keys(perfil.relogio.gastos || {}).length);
+  const disponivel = (nome) => {
+    if (nome === 'relogio') return temRelogio;
+    if (nome === 'lugares' || nome === 'semana_tipica' || nome === 'mercados_perto') return Boolean(perfil?.lugaresAtivo);
+    if (nome === 'treino_forca') return Boolean(temHevy(perfil) || perfil?.treino);
+    if (nome === 'agenda') return Boolean(ehDonoDaAgenda(perfil));
+    return true;
+  };
+  const declaracoes = DECLARACOES.filter((d) => (!apenas || apenas.includes(d.name)) && disponivel(d.name));
   async function executar(nome, args = {}) {
     const fn = exec[nome];
     if (!fn || !declaracoes.some((d) => d.name === nome)) return `(ferramenta desconhecida: ${nome})`;

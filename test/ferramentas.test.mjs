@@ -7,10 +7,14 @@ const { ferramentasPara, semanaAtual } = await import('../ferramentas.js');
 const { gerarComFerramentas } = await import('../gemini.js');
 
 test('ferramentasPara: declarações válidas, nomes únicos, executor pra cada uma, desconhecida não lança', async () => {
-  const f = ferramentasPara({ nome: 'Teste Pessoa', jids: [], lugares: [], atividades: [] }, { dia: '2026-10-02' });
+  const f = ferramentasPara({ nome: 'Teste Pessoa', jids: [], lugares: [], atividades: [], lugaresAtivo: true, relogio: { gastos: { '2026-10-01': 2500 } }, treino: 'x' }, { dia: '2026-10-02' });
   const nomes = f.declaracoes.map((d) => d.name);
   assert.equal(new Set(nomes).size, nomes.length);
-  assert.ok(nomes.includes('refeicoes_periodo') && nomes.includes('semana_tipica') && nomes.includes('conhecimento') && nomes.includes('reflexao'));
+  assert.ok(nomes.includes('refeicoes_periodo') && nomes.includes('semana_tipica') && nomes.includes('conhecimento') && nomes.includes('reflexao') && nomes.includes('relogio') && nomes.includes('treino_forca'));
+  // quem não tem relógio, localização nem Hevy não recebe essas ferramentas (Heitor e Ale chamavam e recebiam "não tem")
+  const semNada = ferramentasPara({ nome: 'Outra', jids: [] }, { dia: '2026-10-02' }).declaracoes.map((d) => d.name);
+  for (const n of ['relogio', 'semana_tipica', 'lugares', 'mercados_perto', 'treino_forca', 'agenda']) assert.ok(!semNada.includes(n), n);
+  assert.ok(semNada.includes('refeicoes_periodo') && semNada.includes('pesagens') && semNada.includes('lembrancas'));
   for (const d of f.declaracoes) {
     assert.match(d.name, /^[a-z_]+$/);
     assert.ok(d.description.length > 20, d.name);

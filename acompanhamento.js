@@ -5,6 +5,7 @@
 import { refeicoesDesde, pesagensDesde } from './mongo.js';
 import { visaoPeriodo,  metaBalancoPara, tendenciaGordura } from './resumo.js';
 import { linhaDeTendencia } from './previsao.js';
+import { projecaoAteMeta } from './tendencia.js';
 import { diasAnteriores } from './util.js';
 
 const DIAS = 30;
@@ -28,15 +29,12 @@ export async function visaoDe(perfil, dia, { formato = 'prompt' } = {}) {
     try {
       const pesoAtual = [...pesagens].sort((a, b) => a.dia.localeCompare(b.dia)).pop()?.peso || perfil.peso;
       const faixa = metaBalancoPara({ objetivo: perfil.objetivo, peso: pesoAtual, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia, ritmo: perfil.ritmo, metaModo: perfil.metaModo, gorduraTend: tendenciaGordura(pesagens) });
-      const tend = linhaDeTendencia({ pesagens, perfil, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null, semanas: 4 });
+      // projeção até a etapa com os dados já carregados (30 dias): ritmo pela balança e pela comida, chegada, veredito
+      const proj = projecaoAteMeta({ perfil, dia, pesagens, refeicoes, gastos: perfil.relogio?.gastos || {}, faixa });
+      const tend = proj || linhaDeTendencia({ pesagens, perfil, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null, semanas: 4 });
       if (tend) {
-        if (formato === 'zap') return `${base}
-
-*Ritmo real x alvo*
-• ${tend.veredito[0].toUpperCase()}${tend.veredito.slice(1)}${tend.magraSem != null ? `
-• Massa magra ${tend.magraSem >= 0 ? '+' : '−'}${Math.abs(tend.magraSem).toFixed(2).replace('.', ',')} kg/semana · gordura ${tend.gorduraSem >= 0 ? '+' : '−'}${Math.abs(tend.gorduraSem).toFixed(2).replace('.', ',')} kg/semana` : ''}`;
-        return `${base}
-${tend.texto}`;
+        if (formato === 'zap') return `${base}\n\n*Ritmo real x etapa*\n${proj ? proj.resumoZap : `• ${tend.veredito[0].toUpperCase()}${tend.veredito.slice(1)}`}`;
+        return `${base}\n${proj ? proj.textoCurto : tend.texto}`;
       }
     } catch (e) {
       console.warn('[acompanhamento] tendência:', e.message);

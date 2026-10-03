@@ -16,6 +16,7 @@ import { refletirTodos } from './reflexao.js';
 import { fecharPendentes } from './atividades.js';
 import { contextoDoDia, contextoDoDiaDeTodos, analiseForca, gerarSugestoesCarga, textoSugestoesCarga } from './contexto.js';
 import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta, linhaDeTendencia } from './previsao.js';
+import { tendenciaCompleta } from './tendencia.js';
 import { proporEtapa, metaBalancoPara, tendenciaGordura } from './resumo.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
@@ -361,7 +362,8 @@ export async function fecharSemana({ dia, perfis, grupo }) {
           try {
             const pes60 = await pesagensDesde(jids, diasAnteriores(dia, 60)[0]).catch(() => pes30);
             const faixa = metaBalancoPara({ objetivo: p.objetivo, peso: nova.pesoInicial, metaPeso: p.metaPeso, metaPrazo: p.metaPrazo, dia, ritmo: p.ritmo, metaModo: p.metaModo, gorduraTend: tendenciaGordura(pes30) });
-            const tend = linhaDeTendencia({ pesagens: pes60, perfil: p, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
+            // linha completa (passado por semana cruzando comida, gasto, treino e sono; futuro semana a semana até a etapa; chegada)
+            const tend = (await tendenciaCompleta(p, dia).catch(() => null)) || linhaDeTendencia({ pesagens: pes60, perfil: p, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
             if (tend) linhas.push(tend.texto);
             const forca = await analiseForca(p, dia, { magraSem: tend?.magraSem ?? null }).catch(() => null);
             if (forca?.texto) linhas.push(forca.texto);
