@@ -5,6 +5,7 @@ import { pesagensDesde, refeicoesDesde, colecao } from './mongo.js';
 import { metaBalancoPara, tendenciaGordura } from './resumo.js';
 import { faixaSaudavel } from './previsao.js';
 import { diasAnteriores } from './util.js';
+import { corrigirBalanco } from './calibracao.js';
 
 const KCAL_POR_KG = 7700; // régua clássica (tecido misto); ganho magro custa menos por kg, mas serve de ordem de grandeza
 const MAX_SEMANAS_PASSADAS = 12;
@@ -157,7 +158,10 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
   // ritmo pelo balanço energético: comida registrada − gasto do relógio, nas últimas 3 semanas com 3+ dias completos
   const comBalanco = semanas.filter((s) => s.balanco != null && s.diasBalanco >= 3).slice(-3);
   const balancoDia = comBalanco.length ? media(comBalanco.map((s) => s.balanco)) : null;
-  const ritmoBalanco = balancoDia != null ? (balancoDia * 7) / KCAL_POR_KG : null;
+  // calibração aprendida no domingo: desconta o viés do registro antes de converter em ritmo (só com confiança >= 0,5)
+  const corr = corrigirBalanco(balancoDia, perfil.calibracao);
+  const balancoUsado = corr.valor;
+  const ritmoBalanco = balancoUsado != null ? (balancoUsado * 7) / KCAL_POR_KG : null;
   // esperado daqui pra frente: média PONDERADA pelo inverso da variância. A balança é a verdade sobre o peso (σ = erro-padrão
   // da regressão, mínimo 0,08 kg/semana); o balanço energético carrega ±250 kcal/dia de erro de foto e de relógio
   // (σ ≈ 0,25 kg/semana): confere, não manda. (Média simples transformava +0,29 e +0,74 em +0,52 e num falso "acima do saudável".)
@@ -311,7 +315,7 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
   const txtJanela = chegada ? `Chegada aos ${kg1(metaPeso)} no ritmo esperado: ${dmy(chegada.data)} (${chegada.semanas} semanas${janelaChegada ? `; provável entre ${dmy(janelaChegada.cedo)} e ${janelaChegada.tarde ? dmy(janelaChegada.tarde) : 'sem data, se o ritmo cair pro limite baixo'}` : ''}).` : '';
   const ritmos =
     `Ritmo real (balança, 4 semanas): ${ritmoReal != null ? `${kgSinal(ritmoReal)}/semana` : '?'}` +
-    `${ritmoBalanco != null ? `; pela comida (balanço médio ${kcalSinal(balancoDia)}/dia em ${comBalanco.reduce((a, s) => a + s.diasBalanco, 0)} dias com relógio e registro): ${kgSinal(ritmoBalanco)}/semana` : ''}` +
+    `${ritmoBalanco != null ? `; pela comida (balanço médio ${kcalSinal(balancoDia)}/dia em ${comBalanco.reduce((a, s) => a + s.diasBalanco, 0)} dias com relógio e registro${corr.aplicado ? `, corrigido pelo seu histórico pra ${kcalSinal(balancoUsado)}` : ''}): ${kgSinal(ritmoBalanco)}/semana` : ''}` +
     `${ritmoEsperado != null ? `; esperado daqui pra frente: ${kgSinal(ritmoEsperado)}/semana${incerteza != null ? ` (incerteza ±${incerteza.toFixed(2).replace('.', ',')})` : ''}` : ''}` +
     `${alvoSem != null ? `; alvo da faixa: ${kgSinal(alvoSem)}/semana` : ''}` +
     `${necessario != null ? `; necessário pra ${rotuloMeta}: ${kgSinal(necessario)}/semana${prazoInviavel ? ` (acima do saudável, máximo ${kgSinal(limiteSaudavel)})` : ''}` : ''}` +
@@ -342,7 +346,7 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
     `${ritmoBalanco != null ? `\n• Pela comida: ${kgSinal(ritmoBalanco)}/semana (balanço ${kcalSinal(balancoDia)}/dia)` : ''}` +
     `${magraSem != null ? `\n• Massa magra ${kgSinal(magraSem)} · gordura ${kgSinal(gorduraSem)} por semana` : ''}` +
     `${composicao ? `\n• Desde ${dmy(composicao.desde)}: ${descreverParte(composicao)}` : ''}`;
-  return { semanas, pesoAtual, falta, ritmo: { real: ritmoReal, balanco: ritmoBalanco, esperado: ritmoEsperado, alvo: alvoSem, necessario, necessarioSaudavel, limiteSaudavel }, seSem, incerteza, balancoDia, chegada, janelaChegada, chegadaSaudavel, prazoInviavel, futuro, composicao, gorduraNaMeta, veredito, status, ajusteKcal, magraSem, gorduraSem, gorduraPpSem, avisos, texto, textoCurto, zap, resumoZap };
+  return { semanas, pesoAtual, falta, ritmo: { real: ritmoReal, balanco: ritmoBalanco, esperado: ritmoEsperado, alvo: alvoSem, necessario, necessarioSaudavel, limiteSaudavel }, seSem, incerteza, balancoDia, balancoCorrigido: corr.aplicado ? balancoUsado : null, chegada, janelaChegada, chegadaSaudavel, prazoInviavel, futuro, composicao, gorduraNaMeta, veredito, status, ajusteKcal, magraSem, gorduraSem, gorduraPpSem, avisos, texto, textoCurto, zap, resumoZap };
 }
 
 /** Junta os dados da pessoa (120 dias de pesagens, 35 de comida, relógio, Hevy) e devolve projecaoAteMeta; null sem base. */

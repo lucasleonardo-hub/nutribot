@@ -167,6 +167,8 @@ FORMATO (WhatsApp):
   ⚖️ *Veredito:* (nota 0 a 10 + comentário sincero ligado ao objetivo)
   💡 *Dica:* (a orientação prática)
 - Nutrientes SEMPRE por extenso (Proteína, Carboidratos, Gorduras). Nunca abrevie como P/C/G.
+- ÂNCORA DA DESPENSA: se um item da foto é um produto que está na DESPENSA da pessoa com marca e tabela ([kcal/100 g]), use a tabela da despensa e cite a marca ("o pão X que você comprou") em vez de um valor genérico; é a melhor informação que você tem sobre aquele item.
+- INCERTEZA E PERGUNTA ÚTIL: em análise de foto, se a quantidade de um item que domina as calorias não dá pra ver (fatias, colheres, unidades, tamanho da porção, óleo/molho escondido), NÃO invente precisão: registre com a melhor estimativa, acrescente a linha oculta INCERTEZA: alta e faça UMA pergunta curta no fim do texto só sobre o dado que mais reduz o erro ("quantas fatias?"), repetida na linha oculta PERGUNTA: <a pergunta>. Uma pergunta por refeição, nunca interrogatório; se o bloco JÁ DITO diz que você já perguntou, não pergunte de novo: registre e siga. Quando dá pra ver bem, INCERTEZA: baixa (ou omita). Quando a pessoa responder a quantidade, é correção do registro (linha REFEICAO com correcao true).
 - LINHA OCULTA REFEICAO (obrigatória em TODA análise de comida CONSUMIDA e em toda correção de estimativa): no FIM da resposta, sozinha numa linha, REFEICAO: {"tipo": "almoco", "itens": "200 g de arroz, 150 g de feijão, 1 sobrecoxa assada", "kcal": 930, "proteina": 59, "carbo": 112, "gordura": 30, "correcao": false, "hora": "08:20"}. tipo é UM destes: cafe, lanche_manha, almoco, lanche, jantar, ceia. "hora" (HH:MM, no fuso da pessoa) só quando ela DISSER quando comeu ("às 8h20 eu comi", "esqueci de informar meu café da manhã", "de manhã tomei"): é a hora em que a refeição aconteceu, não a hora da mensagem; sem essa informação, omita o campo. Os números são OS MESMOS do bloco visível. correcao: true quando você corrige a estimativa da refeição anterior (rótulo mandado depois, "eram 2 pães", "a vitamina tem whey"). Em sugestão, plano, rótulo só avaliado, receita ou dúvida, NÃO escreva a linha. É por esta linha que o sistema registra a refeição; ela é removida antes de ir pro grupo.
 - Se a pessoa COMPLEMENTA ou CORRIGE a refeição que acabou de mandar (mesma refeição, poucos minutos depois: "a vitamina tem whey", "eram 2 pães"), NÃO refaça a análise inteira: responda curto, agradeça o detalhe e ajuste só o bloco "🔥 *Estimativa corrigida:*" seguido das quatro linhas (Calorias: XXX kcal / Proteína: XX g / Carboidratos: XX g / Gorduras: XX g, uma por linha, sem "~") quando mudar algo relevante.
 - Se não dá pra ver comida na foto, brinca e pede outra.
@@ -631,10 +633,9 @@ export async function gerarComFerramentas({ contents, config = {}, ferramentas, 
   if (!ferramentas?.declaracoes?.length) return _gerar({ contents, config });
   const historico = Array.isArray(contents) ? [...contents] : [{ role: 'user', parts: partesDe(contents) }];
   const cfg = { ...config, bruto: true, semReserva: true, tools: [{ functionDeclarations: ferramentas.declaracoes }] };
-  for (let rodada = 1; rodada <= maxRodadas; rodada++) {
-    const ultima = rodada === maxRodadas;
-    const r = await _gerar({ contents: historico, config: ultima ? { ...cfg, toolConfig: { functionCallingConfig: { mode: 'NONE' } } } : cfg });
-    if (!r?.chamadas?.length) return r?.texto ?? r;
+  const semChamadas = { ...cfg, toolConfig: { functionCallingConfig: { mode: 'NONE' } } };
+  const textoDe = (r) => (typeof r === 'string' ? r : r?.texto) || '';
+  const registrar = async (r, rodada) => {
     // o conteúdo do modelo volta inteiro (com as assinaturas de raciocínio que o Gemini 3 exige de volta)
     historico.push(r.conteudo || { role: 'model', parts: r.chamadas.map((c) => ({ functionCall: { name: c.name, args: c.args || {} } })) });
     const respostas = [];
@@ -643,8 +644,22 @@ export async function gerarComFerramentas({ contents, config = {}, ferramentas, 
       respostas.push({ functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response: { resultado } } });
     }
     historico.push({ role: 'user', parts: respostas });
-    console.log(`[${rotulo}] rodada ${rodada}/${maxRodadas}: ${r.chamadas.map((c) => `${c.name}(${JSON.stringify(c.args || {})})`).join(', ')}`);
+    console.log(`[${rotulo}] rodada ${rodada}: ${r.chamadas.map((c) => `${c.name}(${JSON.stringify(c.args || {})})`).join(', ')}`);
+  };
+  for (let rodada = 1; rodada <= maxRodadas; rodada++) {
+    const ultima = rodada === maxRodadas;
+    const r = await _gerar({ contents: historico, config: ultima ? semChamadas : cfg });
+    if (!r?.chamadas?.length) return r?.texto ?? r;
+    // última rodada com as ferramentas desligadas e o modelo pediu mesmo assim (modelo reserva faz isso quando uma
+    // ferramenta devolveu erro): se veio texto junto, serve; senão, uma rodada extra pedindo texto
+    if (ultima && textoDe(r)) return textoDe(r);
+    await registrar(r, `${rodada}/${maxRodadas}`);
   }
+  const extra = await _gerar({
+    contents: [...historico, { role: 'user', parts: [{ text: 'Agora responda em texto, com o que você já tem (se uma ferramenta falhou, responda sem ela e sem citar o erro). Não peça mais ferramentas.' }] }],
+    config: semChamadas,
+  });
+  if (textoDe(extra)) return textoDe(extra);
   throw new Error('ferramentas: estourou as rodadas sem resposta em texto');
 }
 
@@ -674,7 +689,11 @@ const textoDe = (contents) =>
 // ============================================================
 // 1) Resposta normal do grupo (texto e/ou imagem)
 // ============================================================
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, roteiro, atividades, treinoHoje, forca, jaDito, despensa, rotulos, planejando = false, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false }) {
+const FERRAMENTAS_CONVERSA =
+  '\n\nFERRAMENTAS: se a resposta ficar melhor com um dado que NÃO está acima (refeições de dias anteriores, agenda, tendência até a etapa, treino e força, relógio, despensa, lembranças, sua base de conhecimento), consulte: no máximo 2 consultas, só o que muda a resposta. Pergunta simples, opinião ou papo não precisa de ferramenta. ' +
+  'anotar_memoria só pra fato que vale daqui a 30 dias (preferência, aversão, restrição, rotina fixa, combinado); atualizar_perfil só com dado que a pessoa ACABOU de dizer. Depois responda normalmente (mesmo formato e mesmas linhas ocultas de sempre).';
+
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, roteiro, atividades, treinoHoje, forca, jaDito, despensa, rotulos, planejando = false, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false, ferramentas = null, maxRodadas = 2, calibracao = '' }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -701,6 +720,8 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (objetivosAlheios ? ` Os objetivos a seguir são de OUTRAS pessoas e NÃO podem aparecer na resposta dela: ${objetivosAlheios}. Não fale de ganho de massa com quem quer emagrecer, nem de déficit com quem quer ganhar.` : '') +
     `\n\n` +
     (visao ? `ACOMPANHAMENTO DE ${perfil.nome} (calculado pelo sistema; use pra situar a conversa e as dicas no rumo do objetivo, sem recalcular e sem despejar tudo de uma vez):\n${visao}\n\n` : '') +
+    (calibracao ? `${calibracao}\n\n` : '') +
+    (perfil.anotacoes?.length ? `ANOTAÇÕES QUE VOCÊ GUARDOU SOBRE ${perfil.nome.split(' ')[0].toUpperCase()} (fatos de longo prazo que você mesma anotou em outros dias; use, não repita pra pessoa como novidade): ${perfil.anotacoes.slice(-10).map((x) => x.texto).join(' · ')}\n\n` : '') +
     (agenda ? `AGENDA DE ${perfil.nome} (Google Agenda DELA(E), só pra falar COM ELA(E)):\n${agenda}\n\n` : '') +
     (lugares ? `${lugares}\n\n` : '') +
     (roteiro ? `${roteiro}\n\n` : '') +
@@ -739,10 +760,13 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
   for (const f of fotos) parts.push({ inlineData: { mimeType: f.mimeType || 'image/jpeg', data: f.data.toString('base64') } });
   if (audio) parts.push({ inlineData: { mimeType: audioMime || 'audio/ogg', data: audio.toString('base64') } });
 
-  const bruto = await gerar({
-    contents: [{ role: 'user', parts }],
-    config: { systemInstruction: montarSystem(persona), pensar: false, leve, validar: fotos.length ? validadorDeFoto(texto) : undefined },
-  });
+  const config = { systemInstruction: montarSystem(persona), pensar: false, leve, validar: fotos.length ? validadorDeFoto(texto) : undefined };
+  // ferramentas na conversa (fase 2): só texto (pergunta ou pedido), teto de rodadas; quem chamou cai no caminho normal se falhar
+  const usaFerramentas = Boolean(ferramentas?.declaracoes?.length) && !fotos.length && !audio;
+  if (usaFerramentas) parts[0].text += FERRAMENTAS_CONVERSA;
+  const bruto = usaFerramentas
+    ? await gerarComFerramentas({ contents: [{ role: 'user', parts }], config, ferramentas, maxRodadas, rotulo: `conversa ${perfil.nome.split(' ')[0]}` })
+    : await gerar({ contents: [{ role: 'user', parts }], config });
   // eco da mensagem, "Nome:" solto e lixo de outro alfabeto no começo (coisa de modelo reserva) saem antes de tudo
   return separarAtualizacao(limparEco(bruto, perfil.nome, texto));
 }
@@ -798,6 +822,19 @@ export function separarAtualizacao(resposta) {
     if (/^\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic}|\p{Emoji_Modifier})*$/u.test(emoji)) reacao = emoji;
     texto = `${texto.slice(0, rg2.index)}\n${texto.slice(rg2.index + rg2[0].length)}`.trim();
   }
+  // linhas ocultas INCERTEZA: alta|media|baixa e PERGUNTA: <uma pergunta> (foto com quantidade que não dá pra ver)
+  let incerteza = null;
+  const inc = texto.match(/\n?\s*INCERTEZA:\s*(alta|m[ée]dia|baixa)\s*/i);
+  if (inc) {
+    incerteza = inc[1].toLowerCase().replace('é', 'e');
+    texto = `${texto.slice(0, inc.index)}\n${texto.slice(inc.index + inc[0].length)}`.trim();
+  }
+  let pergunta = null;
+  const pg = texto.match(/\n?\s*PERGUNTA:\s*(.+?)\s*$/im);
+  if (pg) {
+    pergunta = pg[1].trim().slice(0, 160);
+    texto = `${texto.slice(0, pg.index)}\n${texto.slice(pg.index + pg[0].length)}`.trim();
+  }
   // linha oculta REFEICAO: {"tipo": "almoco", "itens": "...", "kcal": 930, ...} -> registro estruturado (não depende de regex no texto)
   let refeicao = null;
   const rf = texto.match(/\n?\s*REFEICAO:\s*(\{[^\n]*\})\s*/i);
@@ -830,7 +867,6 @@ export function separarAtualizacao(resposta) {
     }
     texto = texto.slice(0, m.index).trim();
   }
-  if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
   // linha oculta ATIVIDADE: {"nome": "vôlei", "feita": true, "inicio": "18:00", "fim": "20:00"} -> relato sobre atividade fixa sem relógio
   let atividade = null;
   const at = texto.match(/\n?\s*ATIVIDADE:\s*(\{[^\n]*\})\s*/i);
@@ -867,7 +903,10 @@ export function separarAtualizacao(resposta) {
     }
     texto = `${texto.slice(0, dp.index)}\n${texto.slice(dp.index + dp[0].length)}`.trim();
   }
-  return { texto, atualizacao, habito, audio, registro, refeicao, produto, reacao, atividade, nota, despensa };
+  // SILENCIO (ou nada sobrando depois das linhas ocultas) vira null SÓ AQUI, depois de todas as extrações: antes disso o
+  // null quebrava o `.match` da ATIVIDADE e uma resposta "SILENCIO" derrubava a chamada inteira (visto na avaliação C26b)
+  if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
+  return { texto, incerteza, pergunta, atualizacao, habito, audio, registro, refeicao, produto, reacao, atividade, nota, despensa };
 }
 
 // ============================================================
@@ -1591,6 +1630,20 @@ export async function normalizarItensNota({ itens, nome }) {
  * Pensamento particular sobre uma pessoa a partir do retrato do dia: curto, em primeira pessoa, sem destinatário.
  * Devolve { pensamento, notar: [...], sinais: [{ id, direcao, evidencia }], vale_falar }.
  */
+/** Intervenção proativa: UMA mensagem curta pro grupo a partir de um pensamento que valia falar. Pode devolver SILENCIO. */
+export async function redigirIntervencao({ perfil, pensamento, persona, dia, jaDito = [] }) {
+  const primeiro = perfil.nome.split(' ')[0];
+  return gerar({
+    contents:
+      `Hoje é ${dataExtenso(dia)}. Você pensou isto sobre ${primeiro} agora há pouco (particular): "${pensamento.texto}"` +
+      `${pensamento.assunto ? `\nAssunto: ${pensamento.assunto}` : ''}${pensamento.valeFalarPor ? `\nPor que vale falar: ${pensamento.valeFalarPor}` : ''}\n\n` +
+      (jaDito.length ? `O QUE VOCÊ JÁ DISSE HOJE NO GRUPO (não repita):\n${jaDito.map((t) => `- ${String(t).slice(0, 160)}`).join('\n')}\n\n` : '') +
+      `Escreva UMA mensagem curta pro grupo, dirigida a ${primeiro} pelo nome, no seu personagem: no máximo 2 frases, com o que vale dizer agora (uma observação concreta e, se couber, uma pergunta ou uma sugestão). ` +
+      `Sem número que não esteja no pensamento, sem bordão de chegada, sem [[links]], sem "só passando pra lembrar", sem urgência falsa. Se, lendo de novo, não valer a pena, responda SILENCIO.`,
+    config: { systemInstruction: montarSystem(persona), temperature: 0.7, pensar: false, maxOutputTokens: 300, leve: true },
+  });
+}
+
 /**
  * Antes do pensamento: a IA consulta os dados que quiser (ferramentas de leitura) e devolve anotações curtas do que notou.
  * Texto livre, modelo leve, sem JSON (function calling e responseSchema não andam juntos).
@@ -1601,7 +1654,7 @@ export async function investigarPessoa({ perfil, retrato, sintese, persona, dia,
     contents:
       `Hoje é ${dataExtenso(dia)}. Daqui a pouco você vai pensar sobre ${primeiro}. Antes, INVESTIGUE: use as ferramentas pra conferir o que o retrato de hoje não mostra e que vale cruzar ` +
       `(o padrão dos últimos dias, treino e recuperação, sono e passos, lugares e horários, pesagens, lembranças de conversas, sua base de conhecimento sobre o que estiver em jogo). ` +
-      `Faça de 2 a 4 consultas, só as que fizerem diferença. Depois devolva ANOTAÇÕES: até 8 linhas curtas, cada uma um fato cruzado com a fonte ` +
+      `Faça de 2 a 4 consultas, só as que fizerem diferença. Se notar um fato de longo prazo que ainda não está anotado (preferência, aversão, restrição, rotina fixa), guarde com anotar_memoria (raro; nunca coisa só de hoje). Depois devolva ANOTAÇÕES: até 8 linhas curtas, cada uma um fato cruzado com a fonte ` +
       `("sono 5h40 nas 3 noites antes do treino de hoje; supino parado há 3 semanas", "almoçou fora em 4 dos últimos 5 dias de aula"). Sem conselho, sem texto corrido.\n\n` +
       (sintese ? `COMO VOCÊ ENTENDE ${primeiro.toUpperCase()}: ${sintese}\n\n` : '') +
       `RETRATO DE HOJE:\n${retrato}`,
@@ -1623,7 +1676,8 @@ export async function pensarSobrePessoa({ perfil, retrato, anterior, hipoteses, 
       (investigacao ? `O QUE VOCÊ FOI CONFERIR AGORA HÁ POUCO (suas consultas aos dados; cruze com o retrato):\n${investigacao}\n\n` : '') +
       `${retrato}\n` +
       `Escreva o pensamento em até 110 palavras, primeira pessoa, no seu jeito: o que está notando HOJE cruzando as fontes (comida x padrão, lugar x horário, gasto x apetite, compra x prato, atividade x cansaço), o que te preocupa ou te agrada, e o que quer observar até a noite. Nada de repetir o pensamento anterior; se nada mudou de verdade, diga em uma frase o que confirma. Sem endereço. Sem conselho dirigido a ela(e): é pensamento, não mensagem.\n` +
-      `Também devolva: notar = até 3 fatos curtos que valem guardar (\"almoçou às 15h de novo\", \"passou no mercado e não mandou nota\"); sinais = para cada hipótese aberta que o dia tocou, { id, direcao: a_favor | contra | neutro, evidencia (até 20 palavras) }; vale_falar = true só se houver algo que mereceria uma mensagem espontânea (não vai ser enviada; é só o seu julgamento).`,
+      `Também devolva: notar = até 3 fatos curtos que valem guardar (\"almoçou às 15h de novo\", \"passou no mercado e não mandou nota\"); sinais = para cada hipótese aberta que o dia tocou, { id, direcao: a_favor | contra | neutro, evidencia (até 20 palavras) }; vale_falar = true só se houver algo que mereceria uma mensagem espontânea (não vai ser enviada; é só o seu julgamento).` +
+      ` Se vale_falar for true, devolva também assunto (3 a 6 palavras), vale_falar_por (uma frase: por que a mensagem ajudaria AGORA) e confianca (0 a 1: quanto você apostaria que a pessoa agradece a mensagem). Vale falar só quando ajudaria agora e nada parecido foi dito hoje; na dúvida, false.`,
     config: {
       systemInstruction: montarSystem(persona, { documento: true }),
       temperature: 0.6,
@@ -1637,6 +1691,9 @@ export async function pensarSobrePessoa({ perfil, retrato, anterior, hipoteses, 
           notar: { type: 'array', items: { type: 'string' } },
           sinais: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, direcao: { type: 'string', enum: ['a_favor', 'contra', 'neutro'] }, evidencia: { type: 'string' } }, required: ['id', 'direcao', 'evidencia'] } },
           vale_falar: { type: 'boolean' },
+          assunto: { type: 'string' },
+          vale_falar_por: { type: 'string' },
+          confianca: { type: 'number' },
         },
         required: ['pensamento', 'notar', 'sinais', 'vale_falar'],
       },
@@ -1695,10 +1752,12 @@ export async function extrairHipoteses({ perfil, texto, abertas = [], dia }) {
  * Reflexão livre sobre uma pessoa: sem formato fixo, primeira pessoa, pensando em voz alta sobre tudo que ela sabe.
  * O último parágrafo ("Em uma frase") vira a síntese que entra nas conversas com a pessoa.
  */
-export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, hipoteses, despensa, pensamentos, persona, dia }) {
+const FERRAMENTAS_REFLEXAO =
+  '\n\nFERRAMENTAS: antes de escrever, consulte o que faltar pra reflexão ficar honesta (refeições do período, tendência até a etapa, treino e força, relógio, lembranças, sua base de conhecimento). Até 4 consultas; depois escreva a reflexão completa de uma vez.';
+
+export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, hipoteses, despensa, pensamentos, persona, dia, ferramentas = null }) {
   const primeiro = perfil.nome.split(' ')[0];
-  return gerar({
-    contents:
+  const contents =
       `Hoje é ${dataExtenso(dia)}. Este é o SEU caderno particular sobre ${perfil.nome} (${perfil.peso || '?'} kg, ${perfil.altura || '?'} cm, objetivo: ${perfil.objetivo || '?'}, ${perfil.cidade || 'cidade ?'}, dieta ${perfil.dieta || '?'}). Ninguém pede nada aqui: é você pensando, sem prompt, sem lista pra preencher.\n\n` +
       (anterior ? `O QUE VOCÊ ESCREVEU DA ÚLTIMA VEZ (pode manter, mudar de ideia ou se corrigir; não copie):\n${String(anterior).slice(0, 4000)}\n\n` : '') +
       (notas ? `SUAS NOTAS FACTUAIS:\n${String(notas).slice(0, 2500)}\n\n` : '') +
@@ -1712,9 +1771,11 @@ export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugare
       (despensa ? `${despensa}\n\n` : '') +
       (pensamentos ? `${pensamentos}\n\n` : '') +
       `Escreva, em primeira pessoa e no seu jeito, O QUE VOCÊ PENSA sobre ${primeiro}: como essa pessoa funciona (rotina real, onde passa o dia, quanto gasta e quanto come, como dorme, quando treina, quando desanda), o que os dados dizem que ela talvez não perceba, o que você suspeita mas ainda não tem certeza e quer observar (escreva essas suspeitas de forma explícita, começando por "Suspeito que" ou "Quero observar se": elas serão conferidas nos dados da semana que vem), o que te preocupa e o que te impressiona, e como isso muda o jeito de você falar com ela. Ligue os pontos entre fontes diferentes (ex.: dia de faculdade à noite x jantar tarde; gasto do relógio x apetite; lugar x escolha de comida). Pode ser em parágrafos corridos, pode ter uma lista se ajudar, sem títulos obrigatórios e sem tom de relatório: é reflexão, não ficha. Sem endereço, rua ou coordenada (bairro pode). Nada sobre outras pessoas do grupo. Até 700 palavras.\n` +
-      `Termine com um parágrafo separado começando exatamente com "Em uma frase:" resumindo como você entende ${primeiro} hoje, em no máximo 60 palavras, do jeito que você usaria na cabeça antes de responder uma mensagem dela(e). Sem linha ATUALIZAR. Sem [[links]].`,
-    config: { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.8, maxOutputTokens: 2200 },
-  });
+      `Termine com um parágrafo separado começando exatamente com "Em uma frase:" resumindo como você entende ${primeiro} hoje, em no máximo 60 palavras, do jeito que você usaria na cabeça antes de responder uma mensagem dela(e). Sem linha ATUALIZAR. Sem [[links]].` +
+    (ferramentas ? FERRAMENTAS_REFLEXAO : '');
+  const config = { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.8, maxOutputTokens: 2200 };
+  if (ferramentas) return gerarComFerramentas({ contents, config, ferramentas, maxRodadas: 4, rotulo: `reflexão ${perfil.nome.split(' ')[0]}` });
+  return gerar({ contents, config });
 }
 
 export async function atualizarNotas({ perfil, notasAtuais, dossieDocs, historico, dia, refeicoes, contexto }) {

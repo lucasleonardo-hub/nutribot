@@ -18,7 +18,10 @@ import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
 import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarras } from './off.js';
-import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao, temasJaDitos, removerRepeticoes, respostasRecentes, papoCurto, enxugarPapo, bordoesJaDitos, removerBordoesRepetidos, corrigirGirias, concordarVocativos } from './consciencia.js';
+import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao, temasJaDitos, removerRepeticoes, respostasRecentes, papoCurto, enxugarPapo, bordoesJaDitos, removerBordoesRepetidos, corrigirGirias, concordarVocativos, parecePergunta } from './consciencia.js';
+import { ferramentasPara } from './ferramentas.js';
+import { registrarCorrecaoEstimativa, ehCorrecaoDeEstimativa } from './calibracao.js';
+import { marcarResposta } from './proatividade.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
 import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
@@ -143,6 +146,16 @@ const ESPERA_FRAGMENTO_MS = Number(process.env.ESPERA_FRAGMENTO_MS) || 45_000;
 const ESPERA_FRAGMENTO_MAX_MS = Number(process.env.ESPERA_FRAGMENTO_MAX_MS) || 90_000;
 const esperaFragmentos = new Map(); // jid da pessoa -> { msgs, desde, timer }
 
+// ferramentas na conversa (fase 2): FERRAMENTAS_CONVERSA=off desliga; o caminho normal continua sendo a reserva
+const FERRAMENTAS_CONVERSA_ON = !/^(off|false|0|n[ãa]o)$/i.test(process.env.FERRAMENTAS_CONVERSA || 'on');
+/** A bot já perguntou algo sobre a refeição dessa pessoa há pouco? (uma pergunta por refeição, nunca interrogatório) */
+function perguntaRecenteDe(jid, hora) {
+  const p = estado.memoria?.perguntas?.[jid];
+  if (!p?.hora) return '';
+  const dt = minutosDe(hora) - minutosDe(p.hora);
+  if (dt < 0 || dt > 45) return '';
+  return `VOCÊ JÁ FEZ UMA PERGUNTA SOBRE A REFEIÇÃO DESSA PESSOA ÀS ${p.hora} ("${p.pergunta}"): não pergunte de novo. Se a resposta veio nesta mensagem, é correção do registro; se não veio, registre com a melhor estimativa e siga.`;
+}
 const imagemMsg = (m) => Boolean(extractMessageContent(m?.message)?.imageMessage);
 /** Bloco FORÇA x RECUPERAÇÃO com a faixa e a massa magra da pessoa (pesagens de 60 dias). */
 async function blocoForcaDe(perfil, dia) {
@@ -737,6 +750,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
     return;
   }
+  marcarResposta(jids, dia, hora).catch(() => {}); // havia intervenção proativa pra essa pessoa hoje? conta como respondida
   const papoLiberado = Date.now() - ultimoPapoEm >= PAPO_INTERVALO_MIN * 60_000;
   if (!motivo && !papoLiberado && !atrasadas) {
     // Papo entre eles dentro do intervalo: só guarda no histórico (ela "ouviu"), sem gastar IA nem responder
@@ -818,7 +832,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(texto), forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(texto), forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -827,12 +841,25 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   let refeicao = null; // linha REFEICAO da IA: números e tipo da refeição consumida, estruturados
   let produto = null; // "PRODUTO: x": ela quer o rótulo do Open Food Facts antes de responder
   let reacao = null; // linha REAGIR: ⭐ -> reação com emoji na mensagem da pessoa
+  let incertezaIA = null; // linha INCERTEZA da análise de foto (alta|media|baixa): vai pro registro
+  let perguntaIA = null; // linha PERGUNTA: a bot pediu um dado (uma por refeição)
   let atividadeRelato = null; // linha ATIVIDADE: relato de atividade fixa feita/não feita fora do horário
   let notaLida = null; // linha NOTA: a foto era um cupom de mercado (itens pra despensa)
   let despensaLinha = null; // linha DESPENSA: baixas/entradas na despensa
   try {
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
-    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto, reacao, atividade: atividadeRelato, nota: notaLida, despensa: despensaLinha } = await ia.responder({ ...base, conhecimento, leve: !motivo }));
+    // ferramentas na conversa (fase 2): pergunta ou pedido em texto, sem foto, pelo modelo principal, teto de 2 rodadas; falhou, caminho normal
+    let r1 = null;
+    const ferramentasConversa = FERRAMENTAS_CONVERSA_ON && !temImagem && !temAudio && motivo && !contestacao && !metaConversa && (parecePergunta(texto) || parecePedidoOuPlano(texto)) ? ferramentasPara(eu, { dia, escrita: true }) : null;
+    if (ferramentasConversa) {
+      try {
+        r1 = await ia.responder({ ...base, despensa: '', lugares: '', forca: '', conhecimento, leve: false, ferramentas: ferramentasConversa, maxRodadas: 2 });
+        console.log(`[ferramentas] conversa com ${perfil.nome.split(' ')[0]}: ${ferramentasConversa.usadas.length ? [...new Set(ferramentasConversa.usadas)].join(', ') : 'sem consulta'}`);
+      } catch (e) {
+        console.warn('[ferramentas] conversa falhou; caminho normal:', e.message);
+      }
+    }
+    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto, reacao, atividade: atividadeRelato, nota: notaLida, despensa: despensaLinha, incerteza: incertezaIA, pergunta: perguntaIA } = r1 || (await ia.responder({ ...base, conhecimento, leve: !motivo })));
   } catch (e) {
     // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -1032,6 +1059,11 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   let enviado = null;
   if (resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     enviado = await enviar(jidGrupo, resposta, msg, { rapido: temImagem }); // foto já teve o aviso, não precisa de pausa
+    if (perguntaIA) {
+      // uma pergunta por refeição: a próxima mensagem dessa pessoa sabe que já perguntou
+      estado.memoria.perguntas ||= {};
+      estado.memoria.perguntas[jids[0]] = { hora, pergunta: perguntaIA };
+    }
     // reação com emoji na mensagem da pessoa (linha REAGIR da IA): prato nota 10, piada boa, conquista
     if (reacao && !contestacao) reagir(jidGrupo, msg.key, reacao).catch(() => {});
     if (atividadeRelato) {
@@ -1100,6 +1132,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       if (typeof reg.descricao === 'string' && reg.descricao.trim()) set.descricao = reg.descricao.trim().slice(0, 220);
       if (Object.keys(set).length) {
         await atualizarRefeicao(alvo._id, set);
+        if (set.estimativa && alvo.estimativa?.kcal) registrarCorrecaoEstimativa({ jid: jids[0], nome: perfil.nome, dia, slot: alvo.slot, antes: alvo.estimativa, depois: set.estimativa, origem: 'registro', descricao: alvo.descricao, texto }).catch(() => {});
         console.log(`[refeicoes] ${perfil.nome} corrigiu o registro das ${alvo.horaLocal || alvo.hora}: ${JSON.stringify(set)}`);
         registrarCorrecao({ dia, pessoa: perfil.nome, texto: `registro das ${alvo.horaLocal || alvo.hora} CORRIGIDO a pedido de ${perfil.nome.split(' ')[0]}${set.estimativa ? ` para ~${set.estimativa.kcal} kcal` : ''}${set.slot ? ` (tipo: ${nomeDoSlot(set.slot)})` : ''}; o valor dito antes na conversa está errado` }).catch(() => {});
       }
@@ -1137,7 +1170,9 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       resumo: resumoRefeicao.slice(0, 120),
       descricao: descricaoBase,
       estimativa, // kcal e macros da análise (ou estimativa de reserva), gravados agora: o resumo semanal soma daqui
+      incerteza: incertezaIA || undefined, // alta|media|baixa: a bot sabia que estava chutando?
       correcao: Boolean(correcaoRecente),
+      correcaoEstimativa: Boolean(correcaoRecente) && ehCorrecaoDeEstimativa(texto), // só quantidade/alimento/rótulo entra na calibração; "tem também um suco" não
       manual: retroativa, // retroativa não se funde com o registro vizinho no banco
       // "lanche" 1 min depois do almoço é outra refeição, não complemento: quando a pessoa nomeia outra refeição, não funde
       slotExplicito: Boolean(minhaUltima) && slotFinal !== minhaUltima.slot && mencionaOutraRefeicao(texto, minhaUltima.slot),

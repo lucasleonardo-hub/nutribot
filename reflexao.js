@@ -17,6 +17,7 @@ import * as ia from './gemini.js';
 import { resumoDespensaPeriodo } from './despensa.js';
 import { pensamentosDaSemana } from './pensamentos.js';
 import { blocoForcaRecuperacao } from './contexto.js';
+import { ferramentasPara } from './ferramentas.js';
 
 export const ARQ_REFLEXOES = 'Nutri-Reflexoes.md';
 const MAX_SINTESE = 600;
@@ -131,6 +132,7 @@ export async function refletirSobre(perfil, { dia, persona, motivo = 'domingo' }
   // 2) a reflexão em si, já sabendo o que acertou e o que caiu
   const texto = await ia.refletirSobrePessoa({
     perfil: comExtras,
+    ferramentas: ferramentasPara(comExtras || perfil, { dia }),
     notas,
     visao,
     padrao: padrao.texto,

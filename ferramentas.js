@@ -2,7 +2,9 @@
 // plano da semana e investigação antes do pensamento particular. Fase 1: só leitura, nenhuma ação; a conversa do grupo
 // segue em uma chamada só. Cada ferramenta embrulha uma função que já existe no código e devolve texto curto (teto por
 // ferramenta), porque o resultado volta pro modelo como contexto. Nunca lança: erro vira texto "(erro ...)".
-import { refeicoesDesde, pesagensDesde, colecao } from './mongo.js';
+import { refeicoesDesde, pesagensDesde, colecao, salvarPerfil, registrarPesagem } from './mongo.js';
+import { guardarLembranca } from './memoria_semantica.js';
+import { aplicarAtualizacao } from './perfis.js';
 import { padraoAlimentar, semanaDoPlano } from './resumo.js';
 import { semanaTipica, contextoLugares, mercadosProximos } from './lugares.js';
 import { agendaDe, blocoAgenda } from './agenda.js';
@@ -92,11 +94,37 @@ const DECLARACOES = [
   { name: 'reflexao', description: 'Como você entende essa pessoa: sua reflexão de domingo, as hipóteses abertas com os sinais da semana e seu último pensamento particular.' },
 ];
 
+// Ações (fase 3, só as aditivas e seguras): guardar fato de longo prazo e atualizar o perfil. Registro de refeição continua
+// pela linha oculta REFEICAO, que é o coração do bot e tem suas próprias guardas.
+const DECLARACOES_ESCRITA = [
+  {
+    name: 'anotar_memoria',
+    description: 'Guarda na memória de longo prazo UM fato que vale lembrar em outros dias: preferência ou aversão recorrente, alergia/restrição, rotina fixa, meta ou combinado, contexto de vida duradouro. NÃO use pra coisa de hoje (o que comeu, onde está, como dormiu), nem pra dado que já está no perfil (peso, objetivo, cidade). Se não tiver certeza de que vale daqui a 30 dias, não guarde.',
+    parameters: { type: 'OBJECT', properties: { texto: { type: 'STRING', description: 'o fato em uma frase, começando pelo nome da pessoa' }, tipo: { type: 'STRING', description: 'preferencia | aversao | restricao | rotina | combinado | contexto' }, validade: { type: 'STRING', description: '"longa" (meses) ou "temporaria" (dias; não é guardada)' } }, required: ['texto', 'tipo'] },
+  },
+  {
+    name: 'atualizar_perfil',
+    description: 'Atualiza no perfil um dado que a pessoa ACABOU de informar: peso_kg, altura_cm, objetivo, cidade, dieta, restricoes, genero (masculino|feminino|outro), meta_peso_kg, meta_prazo (AAAA-MM-DD), ritmo (maximo|medio|minimo), meta_modo (etapa|final), biotipo. Só com dado dito pela própria pessoa; nunca por dedução.',
+    parameters: { type: 'OBJECT', properties: { peso_kg: { type: 'NUMBER' }, altura_cm: { type: 'NUMBER' }, objetivo: { type: 'STRING' }, cidade: { type: 'STRING' }, dieta: { type: 'STRING' }, restricoes: { type: 'STRING' }, genero: { type: 'STRING' }, meta_peso_kg: { type: 'NUMBER' }, meta_prazo: { type: 'STRING' }, ritmo: { type: 'STRING' }, meta_modo: { type: 'STRING' }, biotipo: { type: 'STRING' } } },
+  },
+];
+const normTexto = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const palavrasDe = (t) => new Set(normTexto(t).split(/[^a-z0-9]+/).filter((w) => w.length > 3));
+const parecidos = (a, b) => {
+  const A = palavrasDe(a);
+  const B = palavrasDe(b);
+  if (!A.size || !B.size) return false;
+  let inter = 0;
+  for (const w of A) if (B.has(w)) inter++;
+  return inter / (A.size + B.size - inter) >= 0.6;
+};
+
 /**
- * Ferramentas de leitura pra UMA pessoa. Devolve { declaracoes, executar(nome, args), usadas }.
- * `apenas` restringe a lista (nomes). Os executores são preguiçosos: nada é consultado até o modelo pedir.
+ * Ferramentas pra UMA pessoa. Devolve { declaracoes, executar(nome, args), usadas }.
+ * `apenas` restringe a lista (nomes); `escrita` inclui as ações (true = anotar_memoria e atualizar_perfil; 'anotar' = só anotar_memoria). Os executores são
+ * preguiçosos: nada é consultado até o modelo pedir.
  */
-export function ferramentasPara(perfil, { dia, apenas = null } = {}) {
+export function ferramentasPara(perfil, { dia, apenas = null, escrita = false } = {}) {
   const fuso = fusoDe(perfil);
   const jids = perfil?.jids || [];
   const usadas = [];
@@ -193,6 +221,28 @@ export function ferramentasPara(perfil, { dia, apenas = null } = {}) {
     async mercados_perto() {
       return (await mercadosProximos(perfil)) || '(sem mercados mapeados perto dos lugares dela)';
     },
+    async anotar_memoria({ texto, tipo, validade } = {}) {
+      const t = String(texto || '').trim();
+      if (/tempor/i.test(String(validade || ''))) return '(não guardei: coisa temporária não vai pra memória de longo prazo)';
+      if (t.length < 15) return '(não guardei: texto curto demais)';
+      const anteriores = perfil?.anotacoes || [];
+      if (anteriores.some((a) => parecidos(a.texto, t))) return '(já estava anotado; nada a fazer)';
+      const item = { dia, tipo: String(tipo || 'contexto').toLowerCase().slice(0, 20), texto: t.slice(0, 240) };
+      const anotacoes = [...anteriores.slice(-19), item];
+      await salvarPerfil({ jids: perfil.jids, anotacoes });
+      perfil.anotacoes = anotacoes; // a mesma conversa já enxerga
+      await guardarLembranca({ chave: `anotacao:${jids[0] || perfil.nome}:${Date.now()}`, tipo: 'anotacao', pessoa: perfil.nome, dia, texto: `${item.texto} (anotado por você em ${dia}; ${item.tipo})` }).catch(() => false);
+      return `anotado (${item.tipo}): ${item.texto}`;
+    },
+    async atualizar_perfil(args = {}) {
+      const novo = aplicarAtualizacao(perfil, args || {}, dia);
+      const campos = novo ? Object.keys(novo).filter((k) => !['jids', 'atualizacoes'].includes(k)) : [];
+      if (!campos.length) return '(nada válido pra atualizar: valor fora do permitido ou igual ao que já está)';
+      await salvarPerfil(novo);
+      Object.assign(perfil, novo);
+      if (novo.peso && jids[0]) registrarPesagem({ jid: jids[0], nome: perfil.nome, dia, peso: novo.peso }).catch(() => {});
+      return `perfil atualizado: ${campos.map((k) => `${k}=${JSON.stringify(novo[k])}`).join(', ')}`;
+    },
     async reflexao() {
       const abertas = (perfil?.hipoteses || []).filter((h) => h.status === 'aberta');
       return (
@@ -218,7 +268,10 @@ export function ferramentasPara(perfil, { dia, apenas = null } = {}) {
     if (nome === 'agenda') return Boolean(ehDonoDaAgenda(perfil));
     return true;
   };
-  const declaracoes = DECLARACOES.filter((d) => (!apenas || apenas.includes(d.name)) && disponivel(d.name));
+  // escrita: true = anotar_memoria + atualizar_perfil (conversa, onde a pessoa acabou de falar); 'anotar' = só anotar_memoria
+  // (investigação antes do pensamento: não há fala nova, então perfil não se mexe por inferência)
+  const base = escrita ? [...DECLARACOES, ...DECLARACOES_ESCRITA.filter((d) => escrita === true || d.name === 'anotar_memoria')] : DECLARACOES;
+  const declaracoes = base.filter((d) => (!apenas || apenas.includes(d.name)) && disponivel(d.name));
   async function executar(nome, args = {}) {
     const fn = exec[nome];
     if (!fn || !declaracoes.some((d) => d.name === nome)) return `(ferramenta desconhecida: ${nome})`;
@@ -230,7 +283,7 @@ export function ferramentasPara(perfil, { dia, apenas = null } = {}) {
       return saida;
     } catch (e) {
       console.warn(`[ferramentas] ${nome} falhou:`, e.message);
-      return `(erro ao consultar ${nome}: ${String(e.message).slice(0, 120)})`;
+      return `(erro ao consultar ${nome}: ${String(e.message).slice(0, 120)}; não chame de novo, responda com o que já tem e sem citar o erro)`;
     }
   }
   return { declaracoes, executar, usadas };

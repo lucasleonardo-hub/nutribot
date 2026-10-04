@@ -32,6 +32,8 @@ export async function garantirIndices() {
     colecao('locais_brutos').createIndex({ ts: 1 }, { expireAfterSeconds: 7 * 86400 }),
     colecao('visitas').createIndex({ jid: 1, inicio: 1 }, { unique: true }),
     colecao('notas_brutas').createIndex({ criadoEm: 1 }, { expireAfterSeconds: 3 * 86400 }), // texto de nota que o parser não leu (3 dias)
+    colecao('intervencoes').createIndex({ dia: 1 }), // intervenções proativas (1 por dia no grupo)
+    colecao('correcoes_estimativa').createIndex({ jid: 1, criadoEm: -1 }), // correções da pessoa (antes x depois) pra calibração
   ]).catch((e) => console.warn('[mongo] índices:', e.message));
 }
 
@@ -197,6 +199,12 @@ export async function registrarRefeicao(entrada) {
     // complemento (a sobremesa 18 min depois da janta): a estimativa nova é só do item novo e SOMA na anterior.
     // (em 28/09 o brownie de 160 kcal substituiu os 420 kcal da janta do Heitor por falta desta distinção)
     if (r.estimativa) {
+      // calibração: correção com estimativa anterior conhecida vira um par antes x depois (a pessoa é a fonte da verdade)
+      if (r.correcao && r.correcaoEstimativa === true && ultima.estimativa?.kcal && r.estimativa?.kcal) {
+        colecao('correcoes_estimativa')
+          .insertOne({ jid: r.jid, nome: r.nome, dia: r.dia, slot: ultima.slot, antes: { kcal: ultima.estimativa.kcal, p: ultima.estimativa.p ?? null }, depois: { kcal: r.estimativa.kcal, p: r.estimativa.p ?? null }, origem: 'correcao', descricao: String(r.descricao || ultima.descricao || '').slice(0, 160), texto: String(r.resumo || '').slice(0, 200), criadoEm: new Date() })
+          .catch(() => {});
+      }
       if (r.correcao || !ultima.estimativa?.kcal) set.estimativa = r.estimativa;
       else set.estimativa = { kcal: (ultima.estimativa.kcal || 0) + (r.estimativa.kcal || 0), p: (ultima.estimativa.p || 0) + (r.estimativa.p || 0), c: (ultima.estimativa.c || 0) + (r.estimativa.c || 0), g: (ultima.estimativa.g || 0) + (r.estimativa.g || 0) };
     }

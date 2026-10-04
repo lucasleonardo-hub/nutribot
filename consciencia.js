@@ -425,3 +425,13 @@ export function prepararCobranca(texto, { genero, outrosNomes = [], persona = ''
   const b = removerBordoesRepetidos(limpo, { persona, cobranca: true });
   return { texto: concordarVocativos(corrigirGirias(b.texto), { genero, outrosNomes }), removidas: b.removidas };
 }
+
+// ---------- pergunta ou pedido (vai pelo caminho com ferramentas) ----------
+const RE_PERGUNTA = /\?|^\s*(como|quanto|quantos|quantas|qual|quais|o que|que horas|ser[áa] que|posso|devo|d[áa] pra|tem como|me (diz|fala|conta|explica|mostra)|cad[êe]|quando|onde|por ?qu[eê]|pq)\b/i;
+/** Texto que pergunta ou pede algo (sem relato de consumo): candidato a resposta com ferramentas. */
+export function parecePergunta(texto) {
+  const t = String(texto || '').trim();
+  if (t.length < 8 || t.startsWith('!')) return false;
+  if (/\b(comi|tomei|almocei|jantei|lanchei|bebi|acabei de)\b/i.test(t)) return false;
+  return RE_PERGUNTA.test(t);
+}

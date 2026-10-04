@@ -28,6 +28,7 @@ import { despensaZap, ajustarItem, extrairChave, interpretarQr, blocoDespensa, l
 import { pensamentosZap, pensarSobre } from './pensamentos.js';
 import { linhaDeTendencia } from './previsao.js';
 import { tendenciaCompleta } from './tendencia.js';
+import { resumoProatividade } from './proatividade.js';
 import { metaBalancoPara, tendenciaGordura } from './resumo.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
@@ -526,6 +527,16 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     return true;
   }
 
+  if (cmd === '!proativa' || cmd === '!proatividade') {
+    const r = await resumoProatividade(14).catch(() => null);
+    if (!r) {
+      await enviar(jidGrupo, 'Não consegui ler o histórico agora.', msg, { rapido: true });
+      return true;
+    }
+    const linhas = r.ultimas.map((i) => `- ${i.dia.slice(8, 10)}/${i.dia.slice(5, 7)} ${i.hora} · ${i.nome.split(' ')[0]} · ${i.assunto || '(sem assunto)'}${i.respondida ? ' · respondida' : ' · sem resposta'}`);
+    await enviar(jidGrupo, `🗣️ *Quando eu falei por conta própria (14 dias)*\n${r.total} no total · ${r.respondidas} respondida(s) · ${r.ignoradas} sem resposta\nFreio: 1 por dia, só entre 8h e 21h, só assunto novo, e pausa de 3 dias se 3 seguidas forem ignoradas.${linhas.length ? `\n\n${linhas.join('\n')}` : ''}`, msg, { rapido: true });
+    return true;
+  }
   if (cmd === '!tendencia' || cmd === '!tendência') {
     const perfil = await buscarPerfil(jids);
     if (!perfil?.onboarded) {

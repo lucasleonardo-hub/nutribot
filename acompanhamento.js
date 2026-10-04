@@ -6,6 +6,7 @@ import { refeicoesDesde, pesagensDesde } from './mongo.js';
 import { visaoPeriodo,  metaBalancoPara, tendenciaGordura } from './resumo.js';
 import { linhaDeTendencia } from './previsao.js';
 import { projecaoAteMeta } from './tendencia.js';
+import { blocoCalibracao } from './calibracao.js';
 import { diasAnteriores } from './util.js';
 
 const DIAS = 30;
@@ -34,7 +35,8 @@ export async function visaoDe(perfil, dia, { formato = 'prompt' } = {}) {
       const tend = proj || linhaDeTendencia({ pesagens, perfil, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null, semanas: 4 });
       if (tend) {
         if (formato === 'zap') return `${base}\n\n*Ritmo real x etapa*\n${proj ? proj.resumoZap : `• ${tend.veredito[0].toUpperCase()}${tend.veredito.slice(1)}`}`;
-        return `${base}\n${proj ? proj.textoCurto : tend.texto}`;
+        const calib = await blocoCalibracao(perfil).catch(() => '');
+        return `${base}\n${proj ? proj.textoCurto : tend.texto}${calib ? `\n${calib}` : ''}`;
       }
     } catch (e) {
       console.warn('[acompanhamento] tendência:', e.message);

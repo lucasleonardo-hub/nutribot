@@ -1,0 +1,55 @@
+# Suíte comportamental COM modelo (avaliacao/): roda toda segunda de manhã e quando alguém pede (Actions -> Run workflow).
+# Usa só a cota gratuita do Gemini. Precisa do secret AVALIACAO_GEMINI_API_KEY (chave de um projeto Google separado, grátis,
+# pra não gastar a cota diária Flash do bot em produção); sem o secret o job termina em verde sem rodar nada.
+# O relatório JSON fica como artefato do workflow por 30 dias. Falha de cenário NÃO bloqueia deploy (é alerta, não gate):
+# o deploy continua passando só pelo npm test (deploy.yml).
+name: avaliacao-comportamental
+on:
+  schedule:
+    - cron: '0 10 * * 1' # segunda 07:00 em Brasília (depois do reset diário da cota, 04:00)
+  workflow_dispatch:
+    inputs:
+      so:
+        description: 'ids separados por vírgula (vazio = todos)'
+        required: false
+        default: ''
+      modelo:
+        description: 'flash (fila principal) ou lite'
+        required: false
+        default: 'flash'
+jobs:
+  avaliar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: rodar cenários
+        env:
+          AVALIACAO_GEMINI_API_KEY: ${{ secrets.AVALIACAO_GEMINI_API_KEY }}
+          SO: ${{ github.event.inputs.so }}
+          MODELO: ${{ github.event.inputs.modelo }}
+        run: |
+          if [ -z "$AVALIACAO_GEMINI_API_KEY" ]; then
+            echo "sem secret AVALIACAO_GEMINI_API_KEY: nada a rodar (crie uma chave grátis num projeto Google separado e salve como secret)"
+            exit 0
+          fi
+          args="--modelo ${MODELO:-flash}"
+          if [ -n "$SO" ]; then args="$args --so $SO"; fi
+          node avaliacao/rodar.mjs $args --sem-falhar | tee avaliacao/saida.txt
+          # o código de saída fica verde; o resumo vai pro painel do job
+          { echo '### Avaliação comportamental'; echo; echo '```'; grep -E '^(✅|🟡|❌|⚠️|Resultado|Falharam|Só pela guarda)' avaliacao/saida.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: guardar relatório
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-avaliacao
+          path: |
+            avaliacao/relatorios/*.json
+            avaliacao/saida.txt
+          if-no-files-found: ignore
+          retention-days: 30

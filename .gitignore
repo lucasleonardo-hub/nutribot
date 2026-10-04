@@ -5,3 +5,6 @@ service-account.json
 drive-oauth.json
 oauth-client.json
 .render-service.json
+
+# relatórios da suíte comportamental (gerados localmente)
+avaliacao/relatorios/

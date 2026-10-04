@@ -14,6 +14,7 @@ import { agora, fusoDe, diasAnteriores } from './util.js';
 import { estado } from './estado.js';
 import * as ia from './gemini.js';
 import { ferramentasPara } from './ferramentas.js';
+import { considerarIntervencao } from './proatividade.js';
 
 const MAX_SINAIS_POR_HIPOTESE = 14;
 
@@ -52,7 +53,7 @@ async function retratoDoDia(perfil, dia) {
 }
 
 /** Um pensamento sobre uma pessoa, se houver novidade. Devolve o pensamento salvo ou null. */
-export async function pensarSobre(perfil, { dia, persona, forcar = false } = {}) {
+export async function pensarSobre(perfil, { dia, persona, forcar = false, lembrar = null } = {}) {
   const retrato = await retratoDoDia(perfil, dia);
   const ultimo = await colecao('pensamentos').find({ jid: perfil.jids?.[0] }).sort({ criadoEm: -1 }).limit(1).next().catch(() => null);
   if (!forcar && ultimo?.dia === dia && ultimo.assinatura === retrato.assinatura) {
@@ -61,7 +62,7 @@ export async function pensarSobre(perfil, { dia, persona, forcar = false } = {})
   }
   const abertas = (perfil.hipoteses || []).filter((h) => h.status === 'aberta');
   // function calling (fase 1): antes de pensar, ela investiga o que quiser nos dados (refeições, treino, relógio, lugares, lembranças...)
-  const ferramentas = ferramentasPara(retrato.comExtras || perfil, { dia });
+  const ferramentas = ferramentasPara(retrato.comExtras || perfil, { dia, escrita: 'anotar' });
   const investigacao = await ia
     .investigarPessoa({ perfil: retrato.comExtras || perfil, retrato: retrato.texto, sintese: perfil.reflexao?.sintese || '', persona, dia, ferramentas })
     .catch((e) => (console.warn('[pensamentos] investigação falhou:', e.message), ''));
@@ -77,7 +78,7 @@ export async function pensarSobre(perfil, { dia, persona, forcar = false } = {})
   });
   if (!r?.pensamento) return null;
   const hora = agora(fusoDe(perfil)).hora;
-  const doc = { jid: perfil.jids?.[0], nome: perfil.nome, dia, hora, consultas: [...new Set(ferramentas.usadas)], investigacao: String(investigacao || '').slice(0, 1500), texto: String(r.pensamento).slice(0, 1200), notar: (r.notar || []).slice(0, 4), sinais: (r.sinais || []).slice(0, 8), valeFalar: Boolean(r.vale_falar), assinatura: retrato.assinatura, criadoEm: new Date() };
+  const doc = { jid: perfil.jids?.[0], nome: perfil.nome, dia, hora, consultas: [...new Set(ferramentas.usadas)], assunto: r.assunto || null, confianca: typeof r.confianca === 'number' ? r.confianca : null, investigacao: String(investigacao || '').slice(0, 1500), texto: String(r.pensamento).slice(0, 1200), notar: (r.notar || []).slice(0, 4), sinais: (r.sinais || []).slice(0, 8), valeFalar: Boolean(r.vale_falar), assinatura: retrato.assinatura, criadoEm: new Date() };
   await colecao('pensamentos').insertOne(doc);
   // sinais entram nas hipóteses abertas (evidência acumulada pra conferência de domingo)
   let hipoteses = perfil.hipoteses || [];
@@ -90,16 +91,18 @@ export async function pensarSobre(perfil, { dia, persona, forcar = false } = {})
   }
   await salvarPerfil({ jids: perfil.jids, pensamento: { dia, hora, texto: doc.texto, notar: doc.notar }, hipoteses }).catch(() => {});
   console.log(`[pensamentos] ${perfil.nome.split(' ')[0]} ${hora}: ${doc.texto.slice(0, 100)}${doc.sinais.length ? ` · ${doc.sinais.length} sinal(is)` : ''}`);
+  // proatividade com freio: o pensamento disse que vale falar; podeIntervir decide (1 por dia, horário, assunto novo, confiança)
+  await considerarIntervencao({ perfil, pensamento: { texto: doc.texto, valeFalar: doc.valeFalar, assunto: r.assunto, confianca: typeof r.confianca === 'number' ? r.confianca : null, valeFalarPor: r.vale_falar_por }, dia, persona, lembrar }).catch(() => null);
   return doc;
 }
 
 /** Cron (11:30, 17:30, 21:30): pensa sobre cada pessoa com cadastro, uma chamada por pessoa, só se houver novidade. */
-export async function pensarTodos({ forcar = false } = {}) {
+export async function pensarTodos({ forcar = false, lembrar = null } = {}) {
   if (estado.statusConexao !== 'conectado' && !forcar) return;
   const dia = agora().dia;
   for (const p of (await listarPerfis().catch(() => [])).filter((x) => x.onboarded)) {
     try {
-      await pensarSobre(p, { dia, persona: estado.persona, forcar });
+      await pensarSobre(p, { dia, persona: estado.persona, forcar, lembrar });
     } catch (e) {
       console.error(`[pensamentos] ${p.nome}:`, e.message);
     }

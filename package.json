@@ -12,7 +12,8 @@
     "dev": "node --watch index.js",
     "drive-auth": "node drive-auth.js",
     "logout": "node logout.js",
-    "test": "node --test \"test/**/*.test.mjs\""
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "avaliar": "node avaliacao/rodar.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.23.0",
