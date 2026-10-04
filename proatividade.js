@@ -78,7 +78,7 @@ export async function considerarIntervencao({ perfil, pensamento, dia, persona, 
     const ultimas = await col.find({}).sort({ criadoEm: -1 }).limit(10).toArray().catch(() => []);
     const msgs = estado.memoria.mensagens || [];
     const mensagensBotHoje = msgs.filter((m) => m.tipo === 'bot').map((m) => m.texto || '');
-    const horasPessoa = msgs.filter((m) => m.jid && (perfil.jids || []).includes(m.jid)).map((m) => m.hora).filter(Boolean);
+    const horasPessoa = msgs.filter((m) => m.tipo !== 'bot' && m.jid && (perfil.jids || []).includes(m.jid)).map((m) => m.hora).filter(Boolean);
     const ultimaHora = horasPessoa[horasPessoa.length - 1];
     const minutosDesdeMsgPessoa = ultimaHora ? minutosDe(hora) - minutosDe(ultimaHora) : Infinity;
     const assunto = pensamento.assunto || pensamento.texto;
