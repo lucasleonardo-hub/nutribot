@@ -11,7 +11,7 @@ import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
 import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot, acharRegistro } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
-import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores } from './util.js';
+import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores, ultimaDoChat } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir, estaDigitando } from './whatsapp.js';
 import { sintetizar } from './voz.js';
@@ -42,6 +42,10 @@ const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood a
 // Pedido de desculpas pela demora: uma vez por "volta" (não em cada mensagem atrasada do mesmo lote)
 let ultimaDesculpaEm = 0;
 const DESCULPA_INTERVALO_MS = 30 * 60_000;
+/** A bot acabou de pedir desculpas por outro caminho (aviso de volta): as próximas respostas atrasadas não repetem. */
+export function marcarDesculpaDada() {
+  ultimaDesculpaEm = Date.now();
+}
 const PAPO_INTERVALO_MIN = Number(process.env.PAPO_INTERVALO_MIN) || 10; // papo aleatório: ela entra no máximo 1x a cada N min
 
 const gruposIgnoradosLogados = new Set();
@@ -278,14 +282,16 @@ async function drenar() {
       continue;
     }
     // parece só um pedaço de informação e vem mais? segura e junta (uma vez por mensagem; a liberada não volta a esperar)
-    if (!msg._liberada && !extrasDoLote.length && (await deveEsperarFragmento(msg))) {
+    // com limite de tempo: 04/10 13:11 a fila ficou 8 min parada antes do cão de guarda da mensagem (que só cerca o processar)
+    if (!msg._liberada && !extrasDoLote.length && (await comTempo(deveEsperarFragmento(msg), 25_000, 'espera de fragmento').catch((e) => (console.warn('[fragmento]', e.message), false)))) {
       iniciarEsperaFragmento(msg);
       continue;
     }
     const extras = [...(msg._fragmentos || []), ...extrasDoLote];
     processando = msg;
     processandoExtras = extras;
-    const ultimo = i === grupos.length - 1;
+    // "última do lote" é por conversa: uma mensagem de outro chat no fim do lote não pode roubar a resposta do grupo
+    const ultimo = ultimaDoChat(grupos.map((g) => g.msg), i);
     try {
       // cão de guarda: nenhuma mensagem pode prender a fila por mais de 4 min (IA, Drive, Mongo e reservas somados)
       // mensagem resgatada do histórico (volta de queda de sessão) é respondida uma a uma: cada uma foi um chamado dela

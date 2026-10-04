@@ -187,6 +187,17 @@ export function mencionaNome(texto, nome) {
   return partes.some((p) => new RegExp(`(?<![\\p{L}\\p{N}])${escapar(p)}(?![\\p{L}\\p{N}])`, 'u').test(t));
 }
 
+/**
+ * A mensagem na posição i é a última do SEU chat dentro do lote? (o lote mistura grupo, privado do admin etc.; a resposta
+ * do lote vai na última de cada conversa, não na última da lista)
+ * @param {Array<{key?: {remoteJid?: string}}>} lista
+ */
+export function ultimaDoChat(lista, i) {
+  const chat = lista[i]?.key?.remoteJid;
+  for (let k = i + 1; k < lista.length; k++) if (lista[k]?.key?.remoteJid === chat) return false;
+  return true;
+}
+
 // ============================================================
 // Limite de tempo pra qualquer promessa (chamada externa que pode pendurar)
 // ============================================================

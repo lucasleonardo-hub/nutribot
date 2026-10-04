@@ -244,7 +244,8 @@ export async function iniciarWhatsApp(handlers) {
   const { aoMensagem, aoEntrarNoGrupo, aoNovoMembro, aoConectar, aoHistorico, aoHistoricoCompleto } = handlers;
   handlersAtuais = handlers;
   const { state, saveCreds, limparSessao } = await useMongoAuthState();
-  semSessao = !state.creds?.registered;
+  // sem `me` = nunca pareou (ou a sessão foi limpa): vai pedir QR. (creds.registered não serve: o Baileys 7 nunca o liga.)
+  semSessao = !state.creds?.me?.id;
   // sem credenciais = vai pedir QR; se ninguém anotou quando a sessão caiu (processo reiniciou no meio), a marca é agora
   if (semSessao) marcarQueda('sem sessão ao iniciar (esperando QR)').catch(() => {});
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
@@ -379,8 +380,15 @@ export async function iniciarWhatsApp(handlers) {
         else aoNovoMembro?.(msg.key.remoteJid, adicionados);
         continue;
       }
-      // 'notify' = mensagem nova de outra pessoa; 'append' + fromMe = digitada no celular do próprio bot
-      if (type === 'notify' || (msg.key.fromMe && !enviadosPeloBot.has(msg.key.id))) aoMensagem(msg);
+      // status de contatos e mensagens de protocolo (chaves, sincronização) não são conversa: fora da fila. Dentro dela,
+      // elas roubavam o lugar de "última do lote" e a menção de verdade virava só histórico (04/10 13:11, sem resposta).
+      if (msg.key.remoteJid === 'status@broadcast') continue;
+      const tipoConteudo = getContentType(msg.message);
+      if (tipoConteudo && /^(protocolMessage|senderKeyDistributionMessage|reactionMessage|pollUpdateMessage|keepInChatMessage)$/.test(tipoConteudo)) continue;
+      // 'notify' = mensagem nova (de outra pessoa, ou digitada no celular do próprio bot: fromMe sem estar em enviadosPeloBot).
+      // 'append' é mensagem antiga (histórico/offline): depois de um pareamento novo o WhatsApp despeja as falas antigas
+      // da própria bot como append+fromMe, e tratá-las como "digitadas agora" faria ela se cadastrar e responder a si mesma.
+      if (type === 'notify' && (!msg.key.fromMe || !enviadosPeloBot.has(msg.key.id))) aoMensagem(msg);
     }
   });
 }

@@ -78,6 +78,15 @@ test('selecionarResgate: passou do teto, ficam as mais recentes; histórico sem 
   assert.equal(vazio.resgatadas.length, 0);
 });
 
+test('selecionarResgate: no histórico o remetente vem em msg.participant (não em key.participant); passa pra key', () => {
+  const m = texto('2026-10-04T10:00:00Z', '@Benta oi', { mencionar: [BOT_PN] });
+  delete m.key.participant;
+  m.participant = '209826399420424@lid';
+  const r = selecionarResgate([m], { desdeMs: QUEDA, agoraMs: AGORA, grupo: GRUPO, meusJids: MEUS, nomeBot: NOME_BOT });
+  assert.equal(r.resgatadas.length, 1);
+  assert.equal(r.resgatadas[0].key.participant, '209826399420424@lid');
+});
+
 test('selecionarResgate: o que chegou DEPOIS de religar não é resgate (já veio ao vivo), mesmo estando no histórico', () => {
   const religou = Date.parse('2026-10-04T12:40:00Z');
   const antes = texto('2026-10-04T12:30:00Z', '@Benta oi', { mencionar: [BOT_PN] });
@@ -144,7 +153,7 @@ test('criarRetomada: religada -> espera o histórico -> enfileira o que era pra 
   r.aoHistorico({ messages: [texto('2026-10-04T11:30:00Z', 'Benta? sumiu?', { de: '554891616867@s.whatsapp.net' })] });
   r.aoHistoricoCompleto({ syncType: 0, status: 'complete' }); // INITIAL_BOOTSTRAP não fecha: ainda pode vir o RECENT
   assert.equal(r.aberta(), true);
-  r.aoHistoricoCompleto({ syncType: 2, status: 'complete' });
+  r.aoHistoricoCompleto({ syncType: 3, status: 'complete' }); // RECENT = 3 no proto
   await new Promise((res) => setTimeout(res, 10));
   assert.equal(r.aberta(), false);
   assert.equal(enfileiradas.length, 2);

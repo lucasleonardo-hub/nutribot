@@ -34,7 +34,7 @@ import { paginaInicial, paginaPrivacidade } from './paginas.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { revisarPendentes } from './revisao.js';
 import { garantirIndiceVetorial } from './memoria_semantica.js';
-import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente, enfileirarResgatadas } from './mensagens.js';
+import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente, enfileirarResgatadas, marcarDesculpaDada } from './mensagens.js';
 import { oferecerPlano } from './comandos.js';
 import { verificarAtividades } from './atividades.js';
 import { perguntarValidades, receberNotaDoApp } from './despensa.js';
@@ -267,6 +267,7 @@ async function checarDrive() {
       nomeBot: () => ia.nomeDaBot(),
       enfileirar: enfileirarResgatadas,
       enviar: (jid, texto) => enviarZap(jid, texto),
+      aoAvisar: marcarDesculpaDada,
       limparMarca: async () => {
         estado.config = await salvarConfig({ desconectadoEm: null, desconectadoMotivo: null });
         estado.config.apresentadoEm ||= {};

@@ -19,7 +19,19 @@ import {
   mencionaNome,
   parecePedidoOuPlano,
   pareceCorrecao,
+  ultimaDoChat,
 } from '../util.js';
+
+test('ultimaDoChat: a resposta do lote vai na última mensagem de CADA conversa, não na última da lista', () => {
+  const g = (id) => ({ key: { remoteJid: '1@g.us', id } });
+  const p = (id) => ({ key: { remoteJid: '55@s.whatsapp.net', id } });
+  const lote = [g('a'), p('b'), g('c'), p('d')];
+  assert.equal(ultimaDoChat(lote, 0), false);
+  assert.equal(ultimaDoChat(lote, 2), true, 'c é a última do grupo mesmo com d (privado) depois');
+  assert.equal(ultimaDoChat(lote, 1), false);
+  assert.equal(ultimaDoChat(lote, 3), true);
+  assert.equal(ultimaDoChat([g('x')], 0), true);
+});
 
 test('agora respeita o fuso pedido', () => {
   const instante = new Date('2026-09-20T02:30:00Z'); // 23:30 do dia 19 em São Paulo, 02:30 do dia 20 em Lisboa (UTC+1)

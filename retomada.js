@@ -83,6 +83,9 @@ export function selecionarResgate(mensagens, { desdeMs, ateMs = Infinity, agoraM
     if (!m?.key || m.key.remoteJid !== grupo) continue;
     if (m.key.fromMe) continue;
     if (!m.message) continue; // stub de sistema (entrou/saiu), apagada, etc.
+    // no histórico o remetente vem no campo `participant` da própria mensagem, não em key.participant (ao vivo é o
+    // contrário); sem isto a bot não acha o cadastro de quem mandou e descarta (04/10: as 2 resgatadas caíram aqui)
+    if (!m.key.participant && m.participant) m.key.participant = m.participant;
     const id = m.key.id || '';
     if (id && vistos.has(id)) continue;
     const s = segundosDaMensagem(m);
@@ -158,7 +161,7 @@ export function avisoDeVolta(minutosFora) {
 
 export const RESGATE_ESPERA_MS = Number(process.env.RESGATE_ESPERA_MS) || 60_000; // quanto esperar o histórico depois de religar
 export const AVISO_VOLTA_MIN = Number(process.env.AVISO_VOLTA_MIN) || 30; // fora por menos que isso: volta em silêncio
-const TIPO_RECENT = 2; // proto.HistorySync.HistorySyncType.RECENT (INITIAL_BOOTSTRAP = 0)
+const TIPO_RECENT = 3; // proto.HistorySync.HistorySyncType: INITIAL_BOOTSTRAP = 0, FULL = 2, RECENT = 3
 
 /**
  * Orquestra a volta: abre uma janela ao religar, junta o histórico que chegar, e ao fechar (RECENT completo ou
@@ -172,7 +175,7 @@ const TIPO_RECENT = 2; // proto.HistorySync.HistorySyncType.RECENT (INITIAL_BOOT
  * @param {() => Promise} deps.limparMarca     apaga config.desconectadoEm (a queda foi tratada)
  * @param {() => number} [deps.agora]
  */
-export function criarRetomada({ grupo, meusJids, nomeBot, enfileirar, enviar, limparMarca, agora = Date.now }) {
+export function criarRetomada({ grupo, meusJids, nomeBot, enfileirar, enviar, limparMarca, aoAvisar = null, agora = Date.now }) {
   let janela = null; // { desdeMs, ateMs, buffer, timer }
 
   async function concluir(porque) {
@@ -193,6 +196,7 @@ export function criarRetomada({ grupo, meusJids, nomeBot, enfileirar, enviar, li
       // o celular não mandou o histórico do grupo: ela não sabe se foi chamada, então avisa que voltou e pede pra repetirem
       await enviar(jidGrupo, avisoDeVolta(minutosFora)).catch((e) => console.error('[retomada] aviso de volta falhou:', e.message));
       acao = 'aviso';
+      aoAvisar?.(); // ela já pediu desculpas: a resposta atrasada que vier em seguida não pede de novo
     }
     await limparMarca().catch((e) => console.error('[retomada] não consegui apagar a marca da queda:', e.message));
     return { ...r, minutosFora, acao };
