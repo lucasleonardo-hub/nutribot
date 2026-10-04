@@ -837,7 +837,8 @@ export function separarAtualizacao(resposta) {
   }
   // linha oculta REFEICAO: {"tipo": "almoco", "itens": "...", "kcal": 930, ...} -> registro estruturado (não depende de regex no texto)
   let refeicao = null;
-  const rf = texto.match(/\n?\s*REFEICAO:\s*(\{[^\n]*\})\s*/i);
+  // aceita REFEIÇÃO/REFEICÃO: 04/10 10:32 o modelo escreveu com cedilha e a linha inteira (JSON) vazou pro grupo
+  const rf = texto.match(/\n?\s*REFEI[CÇ][AÃ]O:\s*(\{[^\n]*\})\s*/i);
   if (rf) {
     try {
       const j = JSON.parse(rf[1]);

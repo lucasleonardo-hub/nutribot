@@ -118,6 +118,10 @@ test('mencionaNome: palavra inteira, sem acento, nomes curtos', () => {
 
 test('parecePedidoOuPlano e pareceCorrecao', () => {
   assert.equal(parecePedidoOuPlano('N é fácil mas irei tentar comer algo as 18h, terei que comprar algo'), true);
+  // hora sozinha não é plano: "meu primeiro café da manhã as 8h" (04/10) é relato, e virou "se for isso" sem registro
+  assert.equal(parecePedidoOuPlano('meu primeiro cafe da manhã as 8h'), false);
+  assert.equal(parecePedidoOuPlano('@202563576148209 meu primeiro cafe da manhã as 8h'), false);
+  assert.equal(parecePedidoOuPlano('vou almoçar às 13h'), true);
   assert.equal(parecePedidoOuPlano('Eu nao to em casa tem algo q consiga comprar?'), true);
   assert.equal(parecePedidoOuPlano('comi 2 ovos e uma banana'), false);
   assert.equal(parecePedidoOuPlano('Infelizmente isso foi meu cafe da tarde agr'), false);

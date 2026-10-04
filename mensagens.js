@@ -443,14 +443,21 @@ export function citacaoDe(conteudo, perfis) {
   return trecho ? { autor, texto: trecho.slice(0, 300) } : null;
 }
 
-/** A mensagem marca (@) ou responde outra pessoa do grupo, sem marcar a bot? */
-export function dirigidaAOutro(conteudo) {
+/**
+ * A mensagem marca (@) ou responde OUTRA pessoa do grupo, sem marcar a bot? Responder à própria mensagem ("Esse foi às
+ * 10h" citando a própria foto) não é falar com outro: 04/10 10:33 isso virou silêncio e a correção da hora se perdeu.
+ */
+export function dirigidaAOutro(conteudo, jidsRemetente = []) {
   const ctx = conteudo?.extendedTextMessage?.contextInfo || conteudo?.imageMessage?.contextInfo;
   const meus = meusJids();
+  const proprios = (jidsRemetente || []).map((j) => jidNormalizedUser(j));
   const mencionados = (ctx?.mentionedJid || []).map((j) => jidNormalizedUser(j));
   if (mencionados.some((j) => meus.includes(j))) return false;
-  if (mencionados.length) return true;
-  if (ctx?.participant && !meus.includes(jidNormalizedUser(ctx.participant)) && !(ctx?.stanzaId && enviadosPeloBot.has(ctx.stanzaId))) return true;
+  if (mencionados.some((j) => !proprios.includes(j))) return true;
+  if (ctx?.participant) {
+    const autor = jidNormalizedUser(ctx.participant);
+    if (!meus.includes(autor) && !proprios.includes(autor) && !(ctx?.stanzaId && enviadosPeloBot.has(ctx.stanzaId))) return true;
+  }
   return false;
 }
 
@@ -771,7 +778,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
 
   const motivo = prioridade({ texto, temImagem, temAudio, conteudo });
   // Conversa entre eles (marca ou responde outro membro, sem chamar a bot): ela só ouve, salvo foto
-  if (dirigidaAOutro(conteudo) && motivo !== 'midia' && motivo !== 'mencao' && motivo !== 'resposta-a-ela') {
+  if (dirigidaAOutro(conteudo, jids) && motivo !== 'midia' && motivo !== 'mencao' && motivo !== 'resposta-a-ela') {
     await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
     return;
   }
@@ -827,6 +834,9 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const registradas = registradasHojeParaPrompt(refeicoesHoje, perfis, dia);
   const minhaUltima = refeicoesHoje.filter((r) => jids.includes(r.jid)).sort((a, b) => b.minutos - a.minutos)[0];
   const citada = citacaoDe(conteudo, perfis);
+  // Decidir se é relato ou plano olhando TAMBÉM a própria mensagem citada: "meu primeiro café da manhã às 8h" citando
+  // "tomei meu whey com creatina..." é relato (04/10: virou "se for isso", nada registrado, e ela disse que registrou)
+  const textoDecisao = citada && citada.autor === perfil.nome ? `${citada.texto} ${texto}` : texto;
   const marcaCitacao = citada ? `(respondendo a ${citada.autor}: "${citada.texto.slice(0, 80)}${citada.texto.length > 80 ? '…' : ''}") ` : '';
   const rotuloFoto = imagens.length > 1 ? `📷 [${imagens.length} fotos]` : '📷 [foto]';
   const entradaTexto = `${marcaCitacao}${temImagem ? `${rotuloFoto}${texto ? ` ${texto}` : ''}` : temAudio ? '🎤 [áudio]' : texto}`;
@@ -874,10 +884,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // não é parte da mesma: conversa sobre o sistema, ou mensagem que nomeia OUTRA refeição ("o café da tarde eu tomei agora")
   const parteDaMesma =
     minhaUltima && minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30 && !temAudio && !metaConversa && !mencionaOutraRefeicao(texto, minhaUltima.slot) &&
-    ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(texto)));
+    ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(textoDecisao)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(texto), forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao), forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -895,7 +905,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
     // ferramentas na conversa (fase 2): pergunta ou pedido em texto, sem foto, pelo modelo principal, teto de 2 rodadas; falhou, caminho normal
     let r1 = null;
-    const ferramentasConversa = FERRAMENTAS_CONVERSA_ON && !temImagem && !temAudio && motivo && !contestacao && !metaConversa && (parecePergunta(texto) || parecePedidoOuPlano(texto)) ? ferramentasPara(eu, { dia, escrita: true }) : null;
+    const ferramentasConversa = FERRAMENTAS_CONVERSA_ON && !temImagem && !temAudio && motivo && !contestacao && !metaConversa && (parecePergunta(texto) || parecePedidoOuPlano(textoDecisao)) ? ferramentasPara(eu, { dia, escrita: true }) : null;
     if (ferramentasConversa) {
       try {
         r1 = await ia.responder({ ...base, despensa: '', lugares: '', forca: '', conhecimento, leve: false, ferramentas: ferramentasConversa, maxRodadas: 2 });
@@ -1018,7 +1028,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   }
 
   // Plano/pedido de opinião: se a IA ainda assim montou bloco de refeição, ele sai ("🕐 Refeição", "O que eu vi", Veredito); a estimativa vira "se comer isso"
-  if (!temImagem && !temAudio && parecePedidoOuPlano(texto) && /Refei[cç][aã]o:|O que eu vi/i.test(resposta || '')) {
+  if (!temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && /Refei[cç][aã]o:|O que eu vi/i.test(resposta || '')) {
     const antes = resposta;
     resposta = String(resposta || '')
       .split('\n')
@@ -1070,7 +1080,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const naoEhComida = RE_NAO_COMIDA.test(resposta || '');
   const blocoDeSugestao = /O que eu vi:\*?[^\n]*sugest|Estimativa[^:\n]*:[^\n]*sugest/i.test(resposta || '');
   // Texto sem foto que é pedido de sugestão ou plano futuro NUNCA vira refeição, mesmo que a IA tenha posto o bloco
-  const ehPedido = !temImagem && !temAudio && parecePedidoOuPlano(texto);
+  const ehPedido = !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao);
   // Correção de uma análise recente ("não é picanha, é fígado") com estimativa nova: atualiza o registro anterior
   // Vale também COM foto: o rótulo/tabela mandado minutos depois do shake ("segue a tabela, dá uma ajustada") corrige o
   // registro do shake, não vira uma segunda refeição de 800 kcal
