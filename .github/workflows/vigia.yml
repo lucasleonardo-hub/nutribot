@@ -1,0 +1,54 @@
+# Vigia do WhatsApp: o /ping diz que o PROCESSO está vivo, mas não diz se a bot está no WhatsApp (04/10/2026 ela ficou
+# 5 h gerando QR com o /ping respondendo 200). A cada 10 min este workflow lê o /estado; se o status não for "conectado"
+# em duas leituras seguidas (90 s entre elas, pra ignorar a troca de instância do deploy), abre UMA issue no repositório
+# (o GitHub manda e-mail pro dono) com o link do /qr. Quando ela volta, a issue é fechada sozinha. Não exige segredo
+# nenhum: usa o GITHUB_TOKEN do próprio workflow.
+name: vigia-whatsapp
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+permissions:
+  issues: write
+  contents: read
+jobs:
+  vigiar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      URL: https://nutribot-5gwk.onrender.com
+      TITULO: '🔴 NutriBot fora do WhatsApp'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: ler /estado (duas vezes, se a primeira não estiver conectada)
+        id: estado
+        run: |
+          ler() { curl -s --max-time 60 "$URL/estado" | python3 -c 'import sys,json
+          try: print(json.load(sys.stdin).get("status","sem resposta"))
+          except Exception: print("sem resposta")'; }
+          s1=$(ler); echo "leitura 1: $s1"
+          if [ "$s1" = "conectado" ]; then echo "status=conectado" >> "$GITHUB_OUTPUT"; exit 0; fi
+          sleep 90
+          s2=$(ler); echo "leitura 2: $s2"
+          echo "status=$s2" >> "$GITHUB_OUTPUT"
+      - name: abrir ou fechar a issue de alerta
+        run: |
+          status="${{ steps.estado.outputs.status }}"
+          aberta=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITULO\"" --json number --jq '.[0].number // empty')
+          if [ "$status" = "conectado" ]; then
+            if [ -n "$aberta" ]; then
+              gh issue comment "$aberta" --repo "$GITHUB_REPOSITORY" --body "✅ Voltou: a bot está conectada ao WhatsApp de novo ($(date -u +'%Y-%m-%d %H:%M UTC'))."
+              gh issue close "$aberta" --repo "$GITHUB_REPOSITORY"
+              echo "issue #$aberta fechada"
+            fi
+            exit 0
+          fi
+          if [ -n "$aberta" ]; then echo "alerta já aberto (#$aberta), status atual: $status"; exit 0; fi
+          corpo="A bot não está conectada ao WhatsApp. Status do serviço: **$status** ($(date -u +'%Y-%m-%d %H:%M UTC')).
+
+          O que fazer:
+          1. Se o status for *aguardando QR* ou *gerando QR novo*: a sessão caiu (aparelho removido/deslogado). Abra $URL/qr no computador e, no celular da bot, WhatsApp → ⋮ → Dispositivos conectados → Conectar dispositivo → escaneie. Ao religar, ela resgata do histórico o que ficou sem resposta e pede desculpas pela demora.
+          2. Se for *desconectado (código)* ou *iniciando*: o cão de guarda reinicia o processo sozinho em até 15 min; se não voltar, veja os logs no Render.
+
+          Esta issue fecha sozinha quando ela voltar (o vigia roda a cada 10 min)."
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITULO" --body "$corpo"

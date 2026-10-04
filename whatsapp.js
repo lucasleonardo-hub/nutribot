@@ -15,11 +15,14 @@ import makeWASocket, {
   WAMessageStubType,
 } from '@whiskeysockets/baileys';
 
-import { useMongoAuthState } from './mongo.js';
+import { useMongoAuthState, salvarConfig } from './mongo.js';
 import { paraWhatsApp, semLinhaAtualizar } from './util.js';
 import { estado } from './estado.js';
 
 const ALERTA_DESCONEXAO_MIN = Number(process.env.ALERTA_DESCONEXAO_MIN) || 10; // sem WhatsApp por mais que isso = alerta no log e no /status
+// Cão de guarda: com sessão válida mas sem conseguir conectar por mais que isso, o processo se encerra e o Render sobe outro
+// (estado novo em folha). Esperando QR não conta: aí só uma pessoa escaneando resolve.
+const REINICIO_SEM_WHATSAPP_MIN = Number(process.env.REINICIO_SEM_WHATSAPP_MIN) || 15;
 const URL_PUBLICA = (process.env.KEEPALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/$/, '');
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -159,8 +162,41 @@ let quedasSeguidas = 0; // pra reconectar com espera crescente (3 s, 6 s, 12 s..
 let encerrando = false;
 let desconectadoDesde = Date.now(); // quando o WhatsApp caiu (ou o processo subiu) e ainda não conectou
 let ultimoAlertaDesconexao = 0;
+let semSessao = false; // sem credenciais registradas = esperando alguém escanear o QR (reiniciar o processo não resolve)
+let handlersAtuais = null; // os handlers da última chamada, pra reconectar e pro cão de guarda
 
 export const desconectadoHaMin = () => (desconectadoDesde ? Math.round((Date.now() - desconectadoDesde) / 60_000) : 0);
+export const aguardandoQR = () => semSessao;
+
+/**
+ * Marca no Mongo QUANDO a sessão caiu de verdade (deslogada / aparelho removido). Sobrevive ao restart: quando alguém
+ * escanear o QR de novo, retomada.js usa esta hora pra achar no histórico o que ficou sem resposta. Só grava se ainda
+ * não houver uma marca (a primeira queda é a que vale).
+ */
+async function marcarQueda(motivo) {
+  if (estado.config?.desconectadoEm) return;
+  const iso = new Date().toISOString();
+  try {
+    estado.config = await salvarConfig({ desconectadoEm: iso, desconectadoMotivo: motivo });
+    estado.config.apresentadoEm ||= {};
+    console.log(`[wa] queda da sessão anotada em ${iso} (${motivo}); ao religar, as mensagens perdidas serão resgatadas do histórico`);
+  } catch (e) {
+    estado.config = { ...(estado.config || {}), desconectadoEm: iso, desconectadoMotivo: motivo };
+    console.warn('[wa] não consegui anotar a queda no Mongo (fica só na memória):', e.message);
+  }
+}
+
+// Reconecta e, se a própria tentativa falhar (Mongo fora na hora, DNS), tenta de novo em 30 s em vez de desistir em silêncio:
+// antes, um erro em iniciarWhatsApp() durante a reconexão deixava o bot sem WhatsApp até o próximo deploy.
+function reconectar(espera) {
+  setTimeout(() => {
+    if (encerrando || !handlersAtuais) return;
+    iniciarWhatsApp(handlersAtuais).catch((e) => {
+      console.error('[wa] falha ao reconectar, tento de novo em 30 s:', e.message);
+      reconectar(30_000);
+    });
+  }, espera);
+}
 
 // Alerta de desconexão: a cada minuto, se está fora há mais de ALERTA_DESCONEXAO_MIN, grita no log (a cada 30 min) e aparece no /status
 setInterval(() => {
@@ -173,14 +209,44 @@ setInterval(() => {
 }, 60_000).unref();
 
 /**
+ * Cão de guarda da conexão. Chame uma vez no boot. A cada minuto: se há sessão (não é espera de QR) e o WhatsApp está
+ * fora há REINICIO_SEM_WHATSAPP_MIN ou mais, chama `aoReiniciar(motivo)` (o index.js salva o que está pendente e encerra
+ * o processo com código 1; o Render sobe outro). Socket zumbi, reconexão que nunca completa, estado 'iniciando' preso:
+ * tudo cai aqui. Esperando QR nunca reinicia: só uma pessoa escaneando resolve, e o /qr precisa continuar de pé.
+ */
+export function vigiarConexao({ aoReiniciar }) {
+  let disparado = false;
+  setInterval(() => {
+    if (disparado || encerrando) return;
+    if (estado.statusConexao === 'conectado' || !desconectadoDesde) return;
+    if (semSessao) return;
+    const min = desconectadoHaMin();
+    if (min < REINICIO_SEM_WHATSAPP_MIN) return;
+    disparado = true;
+    const motivo = `WhatsApp fora há ${min} min com sessão válida (estado: ${estado.statusConexao}); reiniciando o processo pra começar limpo`;
+    console.error(`[alerta] 🔁 ${motivo}`);
+    Promise.resolve(aoReiniciar?.(motivo)).catch((e) => console.error('[alerta] reinício falhou:', e.message));
+  }, 60_000).unref();
+  console.log(`[wa] cão de guarda ligado: reinicia o processo se ficar ${REINICIO_SEM_WHATSAPP_MIN} min sem WhatsApp com sessão válida`);
+}
+
+/**
  * Conecta (e reconecta sozinho). Handlers:
  *  - aoMensagem(msg): mensagem nova a processar
  *  - aoEntrarNoGrupo(jidGrupo, motivo): o bot foi adicionado a um grupo
  *  - aoNovoMembro(jidGrupo, participantes): outra pessoa foi adicionada ao grupo (lista de {id, phoneNumber, lid})
- *  - aoConectar(): conexão aberta
+ *  - aoConectar({ foraPorMin, relogada, desdeMs }): conexão aberta; `relogada` = primeira conexão depois de uma queda de
+ *    sessão anotada (QR escaneado de novo), `desdeMs` = quando a sessão caiu
+ *  - aoHistorico({ messages, syncType, progress }): lote do histórico que o celular manda depois do pareamento
+ *  - aoHistoricoCompleto({ syncType, status }): o histórico de um tipo terminou (ou travou)
  */
-export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoNovoMembro, aoConectar }) {
+export async function iniciarWhatsApp(handlers) {
+  const { aoMensagem, aoEntrarNoGrupo, aoNovoMembro, aoConectar, aoHistorico, aoHistoricoCompleto } = handlers;
+  handlersAtuais = handlers;
   const { state, saveCreds, limparSessao } = await useMongoAuthState();
+  semSessao = !state.creds?.registered;
+  // sem credenciais = vai pedir QR; se ninguém anotou quando a sessão caiu (processo reiniciou no meio), a marca é agora
+  if (semSessao) marcarQueda('sem sessão ao iniciar (esperando QR)').catch(() => {});
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
 
   const sock = makeWASocket({
@@ -220,25 +286,34 @@ export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoNovoMembr
     if (connection === 'open') {
       estado.ultimoQR = null;
       quedasSeguidas = 0;
+      semSessao = false;
       const foraPorMin = desconectadoDesde ? desconectadoHaMin() : 0;
       if (foraPorMin > ALERTA_DESCONEXAO_MIN) console.warn(`[alerta] WhatsApp voltou depois de ${foraPorMin} min fora`);
       desconectadoDesde = null;
       estado.statusConexao = 'conectado';
       console.log('[wa] conectado como', sock.user?.id, sock.user?.name ? `(${sock.user.name})` : '');
-      Promise.resolve(aoConectar?.({ foraPorMin })).catch((e) => console.error('[wa] erro ao conectar:', e.message));
+      // primeira conexão depois de uma queda de sessão anotada: a retomada vai procurar no histórico o que ficou sem resposta
+      const desdeMs = estado.config?.desconectadoEm ? Date.parse(estado.config.desconectadoEm) : 0;
+      const relogada = Number.isFinite(desdeMs) && desdeMs > 0;
+      if (relogada) console.log(`[wa] religada depois de queda de sessão em ${estado.config.desconectadoEm} (${estado.config.desconectadoMotivo || 'motivo não anotado'})`);
+      Promise.resolve(aoConectar?.({ foraPorMin, relogada, desdeMs: relogada ? desdeMs : 0 })).catch((e) => console.error('[wa] erro ao conectar:', e.message));
     }
     if (connection === 'close') {
       const codigo = lastDisconnect?.error?.output?.statusCode;
       const aguardavaQR = estado.statusConexao === 'aguardando QR' || estado.statusConexao === 'gerando QR novo';
       desconectadoDesde ||= Date.now();
       estado.ultimoQR = null; // QR antigo não vale mais; /qr mostra "gerando" até vir outro
-      estado.statusConexao = codigo === DisconnectReason.timedOut ? 'gerando QR novo' : `desconectado (${codigo})`;
+      // 408 só é "QR expirou" quando estava esperando QR; com sessão válida, 408 é queda de rede como qualquer outra
+      estado.statusConexao = codigo === DisconnectReason.timedOut && aguardavaQR ? 'gerando QR novo' : `desconectado (${codigo})`;
       if (encerrando) return;
       let espera = 3000;
       if (codigo === DisconnectReason.loggedOut) {
-        console.log('[wa] sessão deslogada. Limpando sessão no Mongo e gerando novo QR...');
+        const detalhe = lastDisconnect?.error?.data?.content?.[0]?.attrs?.type || lastDisconnect?.error?.message || '';
+        console.log(`[wa] sessão deslogada${detalhe ? ` (${detalhe})` : ''}. Limpando sessão no Mongo e gerando novo QR...`);
         await limparSessao();
+        semSessao = true;
         quedasSeguidas = 0;
+        await marcarQueda(`sessão deslogada pelo WhatsApp${detalhe ? ` (${detalhe})` : ''}`).catch(() => {});
       } else if (codigo === DisconnectReason.restartRequired || (codigo === DisconnectReason.timedOut && aguardavaQR)) {
         // 515 = reinício normal logo depois de parear; 408 esperando QR = o QR expirou. Nada de backoff aqui.
         espera = 1500;
@@ -249,7 +324,29 @@ export async function iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoNovoMembr
         quedasSeguidas++;
         console.log(`[wa] conexão caiu (${codigo}), reconectando em ${Math.round(espera / 1000)}s...`);
       }
-      setTimeout(() => iniciarWhatsApp({ aoMensagem, aoEntrarNoGrupo, aoNovoMembro, aoConectar }).catch((e) => console.error('[wa] falha ao reconectar:', e.message)), espera);
+      reconectar(espera);
+    }
+  });
+
+  // Histórico que o celular manda depois de um pareamento novo (INITIAL_BOOTSTRAP e RECENT): é por aqui que a bot vê
+  // o que foi dito no grupo enquanto a sessão estava derrubada (retomada.js decide o que responder).
+  sock.ev.on('messaging-history.set', ({ messages, syncType, progress, isLatest }) => {
+    const n = messages?.length || 0;
+    if (n) console.log(`[wa] histórico recebido: ${n} mensagem(ns) (tipo ${syncType ?? '?'}, progresso ${progress ?? '?'}${isLatest ? ', mais recente' : ''})`);
+    if (n && aoHistorico) {
+      try {
+        aoHistorico({ messages, syncType, progress, isLatest });
+      } catch (e) {
+        console.error('[wa] erro ao tratar histórico:', e.message);
+      }
+    }
+  });
+  sock.ev.on('messaging-history.status', (s) => {
+    console.log(`[wa] histórico tipo ${s?.syncType ?? '?'}: ${s?.status}${s?.explicit === false ? ' (por tempo)' : ''}`);
+    try {
+      aoHistoricoCompleto?.(s || {});
+    } catch (e) {
+      console.error('[wa] erro ao fechar histórico:', e.message);
     }
   });
 

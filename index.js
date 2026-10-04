@@ -26,14 +26,15 @@ import { receberEnvio } from './relogio.js';
 import { reservasDisponiveis } from './reservas.js';
 import { TZ, agora, comTempo } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
-import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca } from './whatsapp.js';
+import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca, vigiarConexao, meusJids } from './whatsapp.js';
+import { criarRetomada } from './retomada.js';
 import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes, falaProgramada } from './dia.js';
 import { avisarAdmin } from './avisos.js';
 import { paginaInicial, paginaPrivacidade } from './paginas.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { revisarPendentes } from './revisao.js';
 import { garantirIndiceVetorial } from './memoria_semantica.js';
-import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente } from './mensagens.js';
+import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente, enfileirarResgatadas } from './mensagens.js';
 import { oferecerPlano } from './comandos.js';
 import { verificarAtividades } from './atividades.js';
 import { perguntarValidades, receberNotaDoApp } from './despensa.js';
@@ -258,14 +259,31 @@ async function checarDrive() {
     }
 
     let restaurou = false;
+    // Volta depois de queda de sessão (aparelho removido, QR escaneado de novo): o que foi dito no grupo nesse meio tempo
+    // só chega pelo histórico do celular; a retomada separa o que era pra ela e responde pedindo desculpas pela demora.
+    const retomada = criarRetomada({
+      grupo: () => estado.memoria.grupo || GRUPO_PERMITIDO || '',
+      meusJids,
+      nomeBot: () => ia.nomeDaBot(),
+      enfileirar: enfileirarResgatadas,
+      enviar: (jid, texto) => enviarZap(jid, texto),
+      limparMarca: async () => {
+        estado.config = await salvarConfig({ desconectadoEm: null, desconectadoMotivo: null });
+        estado.config.apresentadoEm ||= {};
+      },
+    });
     await iniciarWhatsApp({
       aoMensagem: enfileirarMensagem,
       aoEntrarNoGrupo: apresentarNaFila,
       aoNovoMembro: receberNovoMembro,
-      aoConectar: async ({ foraPorMin = 0 } = {}) => {
+      aoHistorico: (lote) => retomada.aoHistorico(lote),
+      aoHistoricoCompleto: (s) => retomada.aoHistoricoCompleto(s),
+      aoConectar: async ({ foraPorMin = 0, relogada = false, desdeMs = 0 } = {}) => {
+        // a janela da retomada abre ANTES de qualquer await: o histórico pode chegar segundos depois do 'open'
+        retomada.aoConectar({ relogada, desdeMs });
         // presença do grupo: saber quem está digitando pra responder a refeição em partes de uma vez só
         if (estado.memoria.grupo) assinarPresenca(estado.memoria.grupo).catch(() => {});
-        if (foraPorMin > 10) avisarAdmin('reconexao', `WhatsApp voltou depois de ${foraPorMin} min desconectado (uptime do processo: ${Math.round(process.uptime() / 60)} min).`).catch(() => {});
+        if (foraPorMin > 10 || relogada) avisarAdmin('reconexao', relogada ? `WhatsApp religado depois de queda de sessão em ${new Date(desdeMs).toISOString()} (${Math.round((Date.now() - desdeMs) / 60_000)} min fora). Vou resgatar do histórico o que ficou sem resposta.` : `WhatsApp voltou depois de ${foraPorMin} min desconectado (uptime do processo: ${Math.round(process.uptime() / 60)} min).`).catch(() => {});
         await garantirDiaAtual().catch((e) => console.error('[bot] erro na virada de dia:', e.message));
         if (!restaurou) {
           restaurou = true;
@@ -273,6 +291,8 @@ async function checarDrive() {
         }
       },
     });
+    // Cão de guarda: 15 min sem WhatsApp com sessão válida = o processo se encerra (salvando a fila) e o Render sobe outro
+    vigiarConexao({ aoReiniciar: (motivo) => encerrar(`cão de guarda: ${motivo}`, 1) });
 
     // Tudo que mexe na memória do dia passa pela mesma fila das mensagens: fechamento e cobrança nunca rodam no meio de uma resposta.
     // 23:59 todo dia (fuso TZ). Domingo o fecharDia também dispara o semanal.
@@ -317,13 +337,14 @@ async function checarDrive() {
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));
 process.on('uncaughtException', (e) => console.error('[uncaughtException]', e));
 
-// Render manda SIGTERM a cada deploy: salva o que está pendente e fecha as conexões em vez de morrer no meio de uma escrita
+// Render manda SIGTERM a cada deploy: salva o que está pendente e fecha as conexões em vez de morrer no meio de uma escrita.
+// O cão de guarda da conexão usa o mesmo caminho com código 1 (o Render reinicia o processo que sai).
 let encerrando = false;
-async function encerrar(sinal) {
+async function encerrar(sinal, codigo = 0) {
   if (encerrando) return;
   encerrando = true;
-  console.log(`[boot] ${sinal} recebido, encerrando...`);
-  const limite = setTimeout(() => process.exit(0), 8000).unref();
+  console.log(`[boot] ${sinal} recebido, encerrando (código ${codigo})...`);
+  const limite = setTimeout(() => process.exit(codigo), 8000).unref();
   try {
     await salvarFilaPendente().catch((e) => console.error('[bot] falha ao salvar pendentes:', e.message));
     await persistirMemoria(estado.memoria).catch(() => {});
@@ -332,7 +353,7 @@ async function encerrar(sinal) {
     await fecharMongo();
   } finally {
     clearTimeout(limite);
-    process.exit(0);
+    process.exit(codigo);
   }
 }
 process.on('SIGTERM', () => encerrar('SIGTERM'));

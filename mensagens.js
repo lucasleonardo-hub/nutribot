@@ -36,8 +36,12 @@ const RE_TREINO = /\b(treino|treinei|treinar|academia|carga|peso (no|na|do) (sup
 export const falaDeTreino = (t) => RE_TREINO.test(String(t || ''));
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
+import { notaDeAtraso, atrasoEmMinutos, ATRASO_DESCULPAS_MIN, RESGATE_IDADE_MAX_H } from './retomada.js';
 
 const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood após o bot voltar do sleep)
+// Pedido de desculpas pela demora: uma vez por "volta" (não em cada mensagem atrasada do mesmo lote)
+let ultimaDesculpaEm = 0;
+const DESCULPA_INTERVALO_MS = 30 * 60_000;
 const PAPO_INTERVALO_MIN = Number(process.env.PAPO_INTERVALO_MIN) || 10; // papo aleatório: ela entra no máximo 1x a cada N min
 
 const gruposIgnoradosLogados = new Set();
@@ -284,8 +288,9 @@ async function drenar() {
     const ultimo = i === grupos.length - 1;
     try {
       // cão de guarda: nenhuma mensagem pode prender a fila por mais de 4 min (IA, Drive, Mongo e reservas somados)
+      // mensagem resgatada do histórico (volta de queda de sessão) é respondida uma a uma: cada uma foi um chamado dela
       await comTempo(
-        processar(msg, { emLote: !ultimo, atrasadas: ultimo ? grupos.length - 1 + (msg._fragmentos?.length || 0) : msg._fragmentos?.length || 0, fotosExtras: extras }),
+        processar(msg, { emLote: !ultimo && !msg._resgatada, atrasadas: ultimo && !msg._resgatada ? grupos.length - 1 + (msg._fragmentos?.length || 0) : msg._fragmentos?.length || 0, fotosExtras: extras }),
         4 * 60_000,
         'processamento da mensagem'
       );
@@ -332,6 +337,28 @@ export async function restaurarFilaPendente() {
     console.log(`[bot] ${n} mensagem(ns) do processo anterior reenfileirada(s)`);
     naFila('bot', drenar);
   }
+}
+
+/**
+ * Mensagens resgatadas do histórico depois de uma queda de sessão (retomada.js já filtrou e marcou `_resgatada`):
+ * entram na fila e são respondidas uma a uma, a primeira com pedido de desculpas pela demora.
+ */
+export async function enfileirarResgatadas(msgs) {
+  let lista = (msgs || []).filter((m) => m?.key && m.message);
+  if (!lista.length) return 0;
+  // só de quem já tem cadastro: uma resgatada de jid desconhecido não pode virar pedido de cadastro horas depois
+  const perfis = await listarPerfis().catch(() => null);
+  if (perfis) {
+    const conhecidos = new Set(perfis.flatMap((p) => p.jids || []));
+    const antes = lista.length;
+    lista = lista.filter((m) => jidsDoRemetente(m.key).some((j) => conhecidos.has(j)));
+    if (lista.length < antes) console.log(`[retomada] ${antes - lista.length} mensagem(ns) de quem não tem cadastro ficaram de fora do resgate`);
+    if (!lista.length) return 0;
+  }
+  pendentes.push(...lista);
+  console.log(`[retomada] ${lista.length} mensagem(ns) resgatada(s) do histórico entram na fila: ${lista.map((m) => m._motivoResgate || '?').join(', ')}`);
+  naFila('bot', drenar);
+  return lista.length;
 }
 
 export function apresentarNaFila(jidGrupo, motivo) {
@@ -528,8 +555,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     return;
   }
 
-  const ts = Number(msg.messageTimestamp) || 0;
-  if (ts && Date.now() / 1000 - ts > IDADE_MAX_MSG_S) return;
+  // mensagem resgatada do histórico depois de uma queda de sessão pode ter horas; o teto dela é outro (retomada.js)
+  const idadeMaxS = msg._resgatada ? RESGATE_IDADE_MAX_H * 3600 : IDADE_MAX_MSG_S;
+  const atrasoMin = atrasoEmMinutos(msg);
+  if (atrasoMin * 60 > idadeMaxS) return;
 
   const conteudo = extractMessageContent(msg.message);
   if (!conteudo) return;
@@ -766,13 +795,23 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
   // estação do ano e tempo agora na cidade da pessoa (Open-Meteo, grátis; cache de 30 min; só na via completa)
   const clima = motivo ? await comTempo(climaParaPrompt(eu, dia), 5_000, 'clima').catch(() => '') : '';
+  // A mensagem é de muito tempo atrás (bot fora do ar: sessão derrubada, processo parado)? Ela pede desculpas pela demora
+  // na primeira resposta depois da volta e não finge que a mensagem acabou de chegar nas seguintes.
+  let notaAtraso = '';
+  if (atrasoMin >= ATRASO_DESCULPAS_MIN) {
+    const primeira = Date.now() - ultimaDesculpaEm > DESCULPA_INTERVALO_MS;
+    notaAtraso = notaDeAtraso(atrasoMin, { primeira, motivo: msg._resgatada ? 'seu WhatsApp foi desconectado e precisou ser religado' : 'você estava fora do ar' });
+    if (primeira) ultimaDesculpaEm = Date.now();
+    console.log(`[retomada] ${perfil.nome}: mensagem de ${Math.round(atrasoMin)} min atrás${msg._resgatada ? ` (resgatada do histórico: ${msg._motivoResgate})` : ''}; ${primeira ? 'pedindo desculpas pela demora' : 'desculpas já pedidas'}`);
+  }
   const contextoHorario =
     `hora local de ${perfil.nome}: ${horaLocal}${eu.cidade ? ` em ${eu.cidade}` : ' (cidade/fuso ainda não informados, pode estar errada)'}; ` +
     `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}` +
     (clima ? `; ${clima}` : '') +
     (atrasadas
       ? `. ATENÇÃO: as últimas ${atrasadas + 1} mensagens do histórico (esta incluída) chegaram juntas, em sequência. Trate como UMA fala só (mesmo contexto, mesma refeição se for comida, mesma pergunta se for dúvida): responda uma vez, considerando tudo, e não responda mensagem por mensagem`
-      : '');
+      : '') +
+    (notaAtraso ? `. ${notaAtraso}` : '');
   // Papo aleatório não leva dossiê nem base de conhecimento (só persona, perfis e histórico): metade dos tokens
   // Drive e Mongo com limite de tempo: se o Google/Atlas pendurar, ela responde sem o dossiê em vez de travar a fila
   const dossie = motivo ? await comTempo(dossieDe(eu), 20_000, 'leitura da pasta no Drive').catch((e) => (console.error('[pessoas]', e.message), '')) : '';

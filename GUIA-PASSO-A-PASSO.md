@@ -119,6 +119,10 @@ O plano Free do Render desliga o serviço após 15 min sem tráfego. O bot resol
 
 **Camada 3 - opcional (UptimeRobot):** https://dashboard.uptimerobot.com/monitors → **+ New Monitor** → HTTP(s) · URL `https://nutribot-5gwk.onrender.com/ping` · 5 minutes.
 
+**Camada 4 - vigia do WhatsApp (já configurada, desde 04/10/2026):** o `/ping` só diz que o processo está vivo; ele respondeu 200 durante as 5 horas em que a bot ficou gerando QR depois que o WhatsApp removeu o aparelho vinculado (04/10, 04:21). O arquivo `.github/workflows/vigia.yml` lê o `/estado` a cada 10 min e, se o status não for `conectado` em duas leituras seguidas, abre UMA issue no repositório (o GitHub manda e-mail) com o que fazer; quando ela volta, a issue fecha sozinha. Junto com isso, dentro do bot:
+- **cão de guarda** (`whatsapp.js`): com sessão válida mas 15 min sem conseguir conectar (socket zumbi, reconexão presa), o processo salva a fila e se encerra com código 1; o Render sobe outro. Esperando QR não reinicia (só escanear resolve).
+- **retomada** (`retomada.js`): quando a sessão cai (deslogada/aparelho removido) a hora fica anotada no Mongo (`config.desconectadoEm`). Ao escanear o QR de novo, ela lê o histórico que o celular manda, responde o que foi dirigido a ela nesse período (menção, resposta a uma fala dela, nome dela, foto ou áudio; até 6, as mais recentes) pedindo desculpas pela demora na primeira, e se o celular não mandar o histórico do grupo ela avisa que voltou e pede pra repetirem. Qualquer mensagem respondida com 15 min+ de atraso também leva o pedido de desculpas (uma vez a cada 30 min).
+
 Limites do Free que você precisa saber:
 - 750 horas/mês de instância grátis. Um serviço 24/7 gasta ~744. Ou seja: **só pode ter ESSE serviço** rodando na conta Free do Render.
 - O Render reinicia o serviço em todo deploy e de vez em quando por manutenção. A sessão do WhatsApp fica no Mongo, então ele volta sozinho em ~30 s sem QR novo.
@@ -255,7 +259,7 @@ O QR aparece no terminal e também em http://localhost:3000/qr
 
 - **`storageQuotaExceeded` ao salvar no Drive:** você está usando Service Account em Drive pessoal. Use a credencial OAuth da sua conta (passo 3.2 ou 3.3).
 - **`invalid_grant` no Drive:** a credencial OAuth expirou ou foi revogada. Refaça o passo 3.2 (ou 3.3) e atualize `GOOGLE_SERVICE_ACCOUNT_JSON` no Render.
-- **Bot deslogou (`loggedOut`):** ele limpa a sessão no Mongo sozinho. Abra `/qr` de novo e escaneie com o celular do eSIM.
+- **Bot deslogou (`loggedOut` / `401 conflict device_removed`):** o WhatsApp (ou o celular da bot, em Aparelhos conectados) removeu o aparelho vinculado; aconteceu em 04/10/2026 às 04:21 sem ninguém mexer. Ele limpa a sessão no Mongo sozinho e anota a hora da queda. Abra `/qr` e escaneie com o celular do eSIM: ao religar ela resgata do histórico o que ficou sem resposta e pede desculpas pela demora (seção 4.4, camada 4). O vigia do GitHub abre uma issue (e-mail) quando isso acontece.
 - **Número do bot foi banido:** peça revisão dentro do próprio WhatsApp (geralmente libera em horas quando é a primeira vez). Se não liberar, novo eSIM → passo 0 → `/logout?token=` → `/qr`.
 - **Quer trocar o número do bot:** `https://nutribot-5gwk.onrender.com/logout?token=ADMIN_TOKEN` → depois `/qr`. Localmente: `npm run logout`.
 - **`/status` diz `keepalive: desligado` no Render:** a variável `RENDER_EXTERNAL_URL` não veio. Adicione `KEEPALIVE_URL=https://nutribot-5gwk.onrender.com` no Environment.
