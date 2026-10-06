@@ -152,6 +152,7 @@ export function enfileirarMensagem(msg) {
 // junto, até ESPERA_FRAGMENTO_MS de silêncio (teto ESPERA_FRAGMENTO_MAX_MS). Aí sai UMA resposta.
 const ESPERA_FRAGMENTO_MS = Number(process.env.ESPERA_FRAGMENTO_MS) || 45_000;
 const ESPERA_FRAGMENTO_MAX_MS = Number(process.env.ESPERA_FRAGMENTO_MAX_MS) || 90_000;
+const ESPERA_FOTO_SEM_LEGENDA_MS = Number(process.env.ESPERA_FOTO_SEM_LEGENDA_MS) || 20_000; // foto solta: a legenda costuma vir atrás
 const esperaFragmentos = new Map(); // jid da pessoa -> { msgs, desde, timer }
 
 // ferramentas na conversa (fase 2): FERRAMENTAS_CONVERSA=off desliga; o caminho normal continua sendo a reserva
@@ -200,6 +201,9 @@ async function deveEsperarFragmento(msg) {
     const refs = await refeicoesDoDia(dia).catch(() => []);
     const ultima = refs.filter((r) => jids.includes(r.jid)).sort((a, b) => b.minutos - a.minutos)[0];
     const minutosDesdeUltima = ultima ? minutosDe(horaLocal) - ultima.minutos : Infinity;
+    // foto SEM legenda e sem refeição em andamento: a descrição ("torradas com ricota...") e a foto do pacote costumam vir
+    // nos segundos seguintes. Espera um pouco (👀) e responde tudo de uma vez (Ale, 06/10: 3 respostas pra 1 café).
+    if (temImagem && !texto && !(ultima && minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30)) return { ms: ESPERA_FOTO_SEM_LEGENDA_MS };
     if (!candidatoAFragmento({ texto, temImagem, temAudio, minutosDesdeUltima })) return false;
     if (ultima && mencionaOutraRefeicao(texto, ultima.slot)) return false; // "o café da tarde eu tomei agora" não é pedaço do café da manhã
     const ultimas = estado.memoria.mensagens.slice(-4);
@@ -215,7 +219,7 @@ async function deveEsperarFragmento(msg) {
       'julgamento de fragmento'
     );
     console.log(`[fragmento] ${perfil.nome.split(' ')[0]} "${texto.slice(0, 40)}"${temImagem ? ' (foto)' : ''}: fragmento=${j.fragmento} esperar=${j.esperar} (${j.motivo})`);
-    return j.fragmento && j.esperar;
+    return j.fragmento && j.esperar ? { ms: ESPERA_FRAGMENTO_MS } : false;
   } catch (e) {
     console.warn('[fragmento] não julgado:', String(e.message).slice(0, 100));
     return false;
@@ -239,12 +243,12 @@ function liberarFragmentos(dono) {
   naFila('bot', drenar);
 }
 
-function iniciarEsperaFragmento(msg, { porDigitacao = false } = {}) {
+function iniciarEsperaFragmento(msg, { porDigitacao = false, esperaMs = ESPERA_FRAGMENTO_MS } = {}) {
   const dono = remetenteDe(msg);
   const jids = jidsDoRemetente(msg.key);
-  // por digitação: confere a cada 3 s; solta assim que ela para de digitar (ou no teto). Por fragmento: 45 s de silêncio.
-  const primeiraEspera = porDigitacao ? 3000 : ESPERA_FRAGMENTO_MS;
-  esperaFragmentos.set(dono, { msgs: [msg], jids, desde: Date.now(), porDigitacao, timer: setTimeout(() => liberarFragmentos(dono), primeiraEspera) });
+  // por digitação: confere a cada 3 s; solta assim que ela para de digitar (ou no teto). Por fragmento: esperaMs de silêncio.
+  const primeiraEspera = porDigitacao ? 3000 : esperaMs;
+  esperaFragmentos.set(dono, { msgs: [msg], jids, desde: Date.now(), porDigitacao, base: esperaMs, timer: setTimeout(() => liberarFragmentos(dono), primeiraEspera) });
   // o 👀 avisa que ela viu e está esperando o resto; na espera por digitação só se passar de 8 s (senão é ruído)
   if (!porDigitacao) reagir(msg.key.remoteJid, msg.key, '👀').catch(() => {});
   else setTimeout(() => { if (esperaFragmentos.get(dono)?.msgs?.[0] === msg) reagir(msg.key.remoteJid, msg.key, '👀').catch(() => {}); }, 8000);
@@ -255,7 +259,7 @@ function juntarFragmento(dono, msg) {
   e.msgs.push(msg);
   clearTimeout(e.timer);
   // chegou mais uma parte: espera de novo (por digitação, 6 s de silêncio; por fragmento, 45 s), sempre dentro do teto
-  const base = e.porDigitacao ? 6000 : ESPERA_FRAGMENTO_MS;
+  const base = e.porDigitacao ? 6000 : e.base || ESPERA_FRAGMENTO_MS;
   const restante = Math.max(1000, Math.min(base, e.desde + ESPERA_FRAGMENTO_MAX_MS - Date.now()));
   e.timer = setTimeout(() => liberarFragmentos(dono), restante);
 }
@@ -283,8 +287,9 @@ async function drenar() {
     }
     // parece só um pedaço de informação e vem mais? segura e junta (uma vez por mensagem; a liberada não volta a esperar)
     // com limite de tempo: 04/10 13:11 a fila ficou 8 min parada antes do cão de guarda da mensagem (que só cerca o processar)
-    if (!msg._liberada && !extrasDoLote.length && (await comTempo(deveEsperarFragmento(msg), 25_000, 'espera de fragmento').catch((e) => (console.warn('[fragmento]', e.message), false)))) {
-      iniciarEsperaFragmento(msg);
+    const espera = !msg._liberada && !extrasDoLote.length ? await comTempo(deveEsperarFragmento(msg), 25_000, 'espera de fragmento').catch((e) => (console.warn('[fragmento]', e.message), false)) : false;
+    if (espera) {
+      iniciarEsperaFragmento(msg, { esperaMs: espera.ms });
       continue;
     }
     const extras = [...(msg._fragmentos || []), ...extrasDoLote];
@@ -883,7 +888,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const minutosDesdeUltima = minhaUltima ? minutosDe(horaLocal) - minhaUltima.minutos : Infinity;
   // não é parte da mesma: conversa sobre o sistema, ou mensagem que nomeia OUTRA refeição ("o café da tarde eu tomei agora")
   const parteDaMesma =
-    minhaUltima && minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30 && !temAudio && !metaConversa && !mencionaOutraRefeicao(texto, minhaUltima.slot) &&
+    minhaUltima && minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30 && !temAudio && !metaConversa && !contestacao && !mencionaOutraRefeicao(texto, minhaUltima.slot) &&
     ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(textoDecisao)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);

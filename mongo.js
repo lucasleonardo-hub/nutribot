@@ -3,6 +3,7 @@
 
 import { MongoClient } from 'mongodb';
 import { initAuthCreds, BufferJSON, proto } from '@whiskeysockets/baileys';
+import { pareceMesmaDescricao } from './util.js';
 
 let client;
 let db;
@@ -191,12 +192,32 @@ export async function registrarRefeicao(entrada) {
   // O ÚLTIMO registro da pessoa, de qualquer tipo: rótulo mandado 4 min depois do shake (que a IA chamou de "jantar")
   // e a sobremesa 7 min depois da janta (que ela chamou de "ceia") são a MESMA refeição, não uma segunda.
   // Só o registro manual (!refeicao) com tipo diferente fica separado, porque ali a pessoa disse o tipo de propósito.
+  // Refeição "retroativa" na MESMA hora de um registro que já existe é correção dele, não refeição nova: Lucas, 06/10 15:27,
+  // "não teve chocolate, é pasta de amendoim com avelã" sobre o café das 08:28 veio com hora 08:28 e virou um segundo café
+  // de 1215 kcal. Com uma hora igual (±10 min) a de um registro da pessoa, a estimativa e a descrição novas SUBSTITUEM.
+  if (r.manual && Number.isFinite(r.minutos)) {
+    const naMesmaHora = await col.find({ jid: r.jid, dia: r.dia, minutos: { $gte: r.minutos - 10, $lte: r.minutos + 10 } }).sort({ minutos: 1 }).limit(1).next();
+    if (naMesmaHora) {
+      const set = { atualizadoEm: new Date() };
+      if (r.estimativa) set.estimativa = r.estimativa;
+      if (r.descricao) set.descricao = r.descricao.slice(0, 220);
+      set.resumo = `${naMesmaHora.resumo || ''} (corrigido)`.slice(0, 200);
+      await col.updateOne({ _id: naMesmaHora._id }, { $set: set });
+      return;
+    }
+  }
   const ultima = await col.find({ jid: r.jid, dia: r.dia }).sort({ minutos: -1 }).limit(1).next();
   // mesma refeição: mesmo tipo em até 30 min; tipo diferente só funde quando não foi dito de propósito (sobremesa 7 min
   // depois da janta funde; "lanche" nomeado 1 min depois do almoço não funde, nem o registro manual)
   const mesmaRefeicao = ultima && Math.abs(r.minutos - ultima.minutos) <= 30 && (ultima.slot === r.slot || (!r.manual && !slotExplicito));
   if (mesmaRefeicao) {
     const set = { atualizadoEm: new Date() };
+    // a pessoa descreveu em texto a comida que já tinha mandado em foto (ou mandou a foto do que já descreveu): é a mesma
+    // refeição contada de novo, não um item a mais. Substitui em vez de somar (Ale, 06/10: 290 + 290 virou 580 kcal).
+    if (!r.correcao && r.estimativa && ultima.estimativa?.kcal && pareceMesmaDescricao(ultima.descricao || ultima.resumo, r.descricao || r.resumo)) {
+      r.correcao = true;
+      console.log(`[refeicoes] ${r.nome}: descrição repete a refeição das ${ultima.horaLocal || ultima.hora}; estimativa substituída em vez de somada`);
+    }
     // correção ("eram 2 pães", rótulo): a estimativa nova é da refeição inteira e SUBSTITUI a anterior.
     // complemento (a sobremesa 18 min depois da janta): a estimativa nova é só do item novo e SOMA na anterior.
     // (em 28/09 o brownie de 160 kcal substituiu os 420 kcal da janta do Heitor por falta desta distinção)

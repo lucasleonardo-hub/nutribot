@@ -20,7 +20,18 @@ import {
   parecePedidoOuPlano,
   pareceCorrecao,
   ultimaDoChat,
+  pareceMesmaDescricao,
 } from '../util.js';
+
+test('pareceMesmaDescricao: texto que descreve a comida da foto é a MESMA refeição; item novo não é', () => {
+  const foto = 'torradinhas integrais com requeijão light e sementes de gergum, rodelas de banana com canela e farelo de aveia, e uma caneca de café preto';
+  const texto = 'torradinhas integrais com creme de ricota e gergelim, banana com canela e farelo de aveia, e café preto';
+  assert.equal(pareceMesmaDescricao(foto, texto), true);
+  assert.equal(pareceMesmaDescricao('arroz, feijão, frango grelhado e salada', 'brownie de chocolate'), false);
+  assert.equal(pareceMesmaDescricao('pão francês com manteiga e café com leite', '1 ovo mexido'), false);
+  assert.equal(pareceMesmaDescricao('300 ml de leite integral, 1 scoop de whey e creatina', 'whey com creatina e 300ml de leite'), true);
+  assert.equal(pareceMesmaDescricao('[foto]', 'banana'), false);
+});
 
 test('ultimaDoChat: a resposta do lote vai na última mensagem de CADA conversa, não na última da lista', () => {
   const g = (id) => ({ key: { remoteJid: '1@g.us', id } });

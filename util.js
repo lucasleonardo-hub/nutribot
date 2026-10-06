@@ -187,6 +187,31 @@ export function mencionaNome(texto, nome) {
   return partes.some((p) => new RegExp(`(?<![\\p{L}\\p{N}])${escapar(p)}(?![\\p{L}\\p{N}])`, 'u').test(t));
 }
 
+const PALAVRAS_VAZIAS = new Set(['com', 'uma', 'umas', 'uns', 'dois', 'duas', 'tres', 'para', 'pra', 'sem', 'mais', 'menos', 'light', 'integral', 'integrais', 'pequeno', 'pequena', 'grande', 'fatia', 'fatias', 'unidade', 'unidades', 'copo', 'caneca', 'xicara', 'colher', 'colheres', 'porcao', 'pedaco', 'pedacos', 'gramas', 'rodelas', 'sementes', 'creme', 'molho', 'tipo', 'meio', 'meia', 'natural', 'caseiro', 'caseira', 'cozido', 'cozida', 'assado', 'assada', 'grelhado', 'grelhada', 'mexido', 'mexidos', 'frito', 'frita', 'cheio', 'preto', 'branco', 'quente']);
+/** Palavras de comida de uma descrição (sem acento, sem quantidade, sem palavra genérica), pra comparar duas descrições. */
+export function palavrasDeComida(descricao) {
+  return new Set(
+    semAcento(descricao)
+      .replace(/\d+([.,]\d+)?\s*(ml|g|kg|l|un|und|unid|fatias?|colheres?|copos?)?/g, ' ')
+      .split(/[^a-z]+/)
+      .map((p) => p.replace(/(inhas?|inhos?|zinhas?|zinhos?)$/, '').replace(/s$/, ''))
+      .filter((p) => p.length >= 4 && !PALAVRAS_VAZIAS.has(p))
+  );
+}
+/**
+ * As duas descrições falam da MESMA comida (a pessoa descreveu em texto o que já mandou em foto), e não de um item a mais?
+ * Ale, 06/10: foto das torradas (290 kcal) e, 50 s depois, o texto "Torradas com creme de ricota, café e banana..." viraram
+ * 290 + 290 = 580 kcal porque o texto entrou como complemento. Metade ou mais das palavras de comida em comum = mesma.
+ */
+export function pareceMesmaDescricao(a, b) {
+  const A = palavrasDeComida(a);
+  const B = palavrasDeComida(b);
+  if (A.size < 2 || B.size < 2) return false;
+  let comum = 0;
+  for (const p of A) if (B.has(p)) comum++;
+  return comum / Math.min(A.size, B.size) >= 0.5;
+}
+
 /**
  * A mensagem na posição i é a última do SEU chat dentro do lote? (o lote mistura grupo, privado do admin etc.; a resposta
  * do lote vai na última de cada conversa, não na última da lista)
