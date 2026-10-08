@@ -769,13 +769,27 @@ export async function contextoLugares(perfil) {
     .slice(0, 10)
     .map((l) => `- ${comRua(l, rotuloLugar(l))}: ${l.padrao || 'sem padrão ainda'} · ${l.visitas} visita(s) em ${l.dias} dia(s)${l.ultimaVez ? `, última ${l.ultimaVez}` : ''}`);
   const semana = ultimos7(visitas, lugares);
+  const mora = ondeMora(perfil);
   const bloco =
     `LUGARES DE ${perfil.nome.split(' ')[0]} (localização do celular DELA(E); só existe pra falar COM ELA(E); a rua aparece só em lugar público e pode ser citada pra identificar, ex.: "o mercado da Lauro Linhares"; casa de ninguém tem rua):\n` +
+    (mora ? `- ${mora}\n` : '') +
     `- Agora: ${descreverSituacao(situacao)}${companhia.length ? `, junto de ${companhia.join(' e ')} (do grupo; pode comentar com naturalidade, sem virar vigilância)` : ''}\n` +
     (hoje.length ? `- Hoje passou em: ${hoje.map((v) => `${v.rotulo} ${v.inicio}–${v.fim}${lugarDeCompra(v.lugar) ? (notasHoje ? ' (nota de compra lida ✓)' : ' (nenhuma nota de compra lida hoje: se couber, pergunte UMA vez se comprou algo pra despensa)') : ''}`).join(' · ')}\n` : '') +
     (linhas.length ? `Lugares que frequenta:\n${linhas.join('\n')}\n` : 'Ainda não há lugares com padrão (poucos dias de dados).\n') +
     (semana.length ? `Últimos 7 dias fora de casa: ${semana.join(' · ')}` : '');
   return { bloco, situacao, semana };
+}
+
+/**
+ * Onde a pessoa mora, pela localização do celular (a casa aprendida, com bairro e noites dormidas). É FATO e vale sobre o
+ * dossiê e as notas: o PDF do Lucas (setembro) dizia Córrego Grande e a bot repetia isso com 70 noites na Costeira do
+ * Pirajubaé registradas. Devolve a linha pronta pro prompt, ou null sem casa com bairro e 3+ noites.
+ */
+export function ondeMora(perfil) {
+  const casa = (perfil?.lugares || []).find((l) => l.papel === 'casa' && l.bairro);
+  if (!casa || (casa.noites || 0) < 3) return null;
+  const onde = `${casa.bairro}${casa.cidade ? `, ${casa.cidade}` : ''}`;
+  return `Onde mora (FATO, pela localização: ${casa.noites} noite(s) dormidas lá): ${onde}. Se o dossiê, as notas ou a conversa antiga disserem outro bairro, este é o certo; não repita o antigo.`;
 }
 
 /** Linha pro resumo de domingo (só tipos, nada de nome nem endereço): "academia 3x, faculdade 2x, almoço fora 1x". */

@@ -11,7 +11,7 @@ import { atualizarConhecimento, docsPara } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
 import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo, placarSemana } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
-import { linhaSemanaLugares } from './lugares.js';
+import { linhaSemanaLugares, ondeMora } from './lugares.js';
 import { refletirTodos } from './reflexao.js';
 import { fecharPendentes } from './atividades.js';
 import { contextoDoDia, contextoDoDiaDeTodos, analiseForca, gerarSugestoesCarga, textoSugestoesCarga } from './contexto.js';
@@ -206,7 +206,8 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
         try {
           const notasAtuais = await notasDe(p);
           const dossieDocs = (await dossieDe(p)).split('--- Suas notas sobre')[0];
-          const notas = await ia.atualizarNotas({ perfil: p, notasAtuais, dossieDocs, historico, dia, refeicoes: compilado.texto, contexto: await contextoDoDia(p, dia).catch(() => '') });
+          // o bairro de casa pela localização entra no contexto: a reescrita noturna não pode voltar a copiar o do PDF antigo
+          const notas = await ia.atualizarNotas({ perfil: p, notasAtuais, dossieDocs, historico, dia, refeicoes: compilado.texto, contexto: [await contextoDoDia(p, dia).catch(() => ''), ondeMora(p)].filter(Boolean).join('\n') });
           const encolheuDemais = notasAtuais.trim().length > 300 && (notas?.trim().length || 0) < notasAtuais.trim().length * 0.4;
           if (encolheuDemais) console.warn(`[pessoas] notas de ${p.nome} descartadas: reescrita perdeu mais de 60% do conteúdo`);
           if (notas?.trim() && !encolheuDemais && notas.trim() !== notasAtuais.trim()) {

@@ -1,6 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { distanciaM, localDe, agruparVisitas, estatisticasDosLugares, tipoDeTags, escolherElemento, lerTimeline, descreverSituacao, RAIO_LUGAR_M } from '../lugares.js';
+import { distanciaM, localDe, agruparVisitas, estatisticasDosLugares, tipoDeTags, escolherElemento, lerTimeline, descreverSituacao, RAIO_LUGAR_M, ondeMora } from '../lugares.js';
+
+test('ondeMora: casa com bairro e 3+ noites vira fato que vale sobre o dossiê; sem casa, sem bairro ou poucas noites, nada', () => {
+  const lucas = { lugares: [{ papel: 'casa', bairro: 'Costeira do Pirajubaé', cidade: 'Florianópolis', noites: 70 }, { tipo: 'academia', bairro: 'Trindade' }] };
+  const linha = ondeMora(lucas);
+  assert.match(linha, /Costeira do Pirajubaé, Florianópolis/);
+  assert.match(linha, /70 noite/);
+  assert.match(linha, /não repita o antigo/);
+  assert.equal(ondeMora({ lugares: [{ papel: 'casa', bairro: 'Centro', noites: 1 }] }), null);
+  assert.equal(ondeMora({ lugares: [{ papel: 'casa', noites: 20 }] }), null);
+  assert.equal(ondeMora({}), null);
+});
 
 const CASA = { lat: -27.5969, lon: -48.5495 }; // Florianópolis
 const ACAD = { lat: -27.6010, lon: -48.5200 }; // ~3 km
