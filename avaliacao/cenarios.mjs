@@ -292,6 +292,16 @@ export const CENARIOS = [
     naoDeve: [/refei[çc][ãa]o (esquecida|sem registro)|esqueceu de registrar/i, /d[ée]ficit cal/i, /comendo al[ée]m do objetivo/i],
   },
   {
+    id: 'P05', categoria: 'progresso', titulo: '"parece que meu peso tá caindo": mostra de qual janela vem a sensação e liga à comida da semana', quem: 'lucas', hora: '19:00',
+    texto: 'parece que meu peso ta caindo mesmo comendo muito, ta errado isso?',
+    progresso: analiseFormaReal,
+    perfil: PERFIL_FORMA,
+    semContradicao: true,
+    semBlocoRefeicao: true,
+    deve: [/(3 semanas|tr[êe]s semanas|[úu]ltimas semanas|21 dias)/i, /(4 semanas|quatro semanas|m[êe]s|28 dias)/i],
+    naoDeve: [/comendo al[ée]m do objetivo/i, /d[ée]ficit cal/i, /refei[çc][ãa]o (esquecida|sem registro)/i],
+  },
+  {
     id: 'P03', categoria: 'progresso', titulo: 'poucas pesagens: não crava ritmo', quem: 'lucas', hora: '09:00',
     texto: 'to ganhando peso no ritmo certo?',
     progresso: analisePoucasPesagens,

@@ -139,7 +139,7 @@ export function validarPesagens(pesagens = [], { dia = null } = {}) {
     else if (!Number.isFinite(peso) || peso < PESO_MIN || peso > PESO_MAX) descartadas.push({ dia: d, peso: p?.peso ?? null, motivo: 'peso fora do possível' });
     else {
       const g = Number(p?.gordura);
-      brutos.push({ dia: d, peso, gordura: p?.gordura != null && Number.isFinite(g) && g > 2 && g < 70 ? g : null, fonte: p?.fonte || null });
+      brutos.push({ dia: d, peso, gordura: p?.gordura != null && Number.isFinite(g) && g > 2 && g < 70 ? g : null, fonte: p?.fonte || null, hora: typeof p?.hora === 'string' && /^\d{2}:\d{2}$/.test(p.hora) ? p.hora : null });
     }
   }
   const med = brutos.length >= 3 ? mediana(brutos.map((b) => b.peso)) : null;
@@ -175,7 +175,7 @@ export function validarPesagens(pesagens = [], { dia = null } = {}) {
       const pesos = lista.map((x) => x.peso);
       const gs = lista.map((x) => x.gordura).filter((x) => x != null);
       if (lista.length > 1 && Math.max(...pesos) - Math.min(...pesos) > 1) avisos.push(`${lista.length} pesagens em ${dm(d)} diferindo ${virgula(Math.max(...pesos) - Math.min(...pesos), 1)} kg (horários ou balanças diferentes?): usei a média`);
-      return { dia: d, peso: media(pesos), gordura: gs.length ? media(gs) : null, n: lista.length };
+      return { dia: d, peso: media(pesos), gordura: gs.length ? media(gs) : null, n: lista.length, hora: lista.length === 1 ? lista[0].hora : null };
     });
   for (let i = 1; i < pontos.length; i++) {
     const dd = distDias(pontos[i - 1].dia, pontos[i].dia);
@@ -308,6 +308,139 @@ export function oscilacaoCurta(pontos = [], tend = null, { dia } = {}) {
   const esperada = (ref.kgSemana * dias) / 7;
   if (Math.abs(variacao - esperada) < Math.max(0.6, 1.96 * Math.SQRT2 * (ref.dpResiduo || 0))) return null;
   return { de: ult[0], ate: ult[ult.length - 1], dias, variacao, esperada, sentido: variacao > 0 ? 'subiu' : 'caiu' };
+}
+
+// ---------- 2b. leitura do gráfico (o que uma pessoa leria olhando as pesagens) ----------
+const ehManha = (h) => typeof h === 'string' && h >= '04:00' && h < '11:00';
+const resumoJanela = (t, dias) => ({ dias, n: t.n, suficiente: t.suficiente, kgSemana: t.suficiente ? t.kgSemana : null, ic95: t.suficiente ? t.ic95 : null, direcao: t.direcao });
+const comoAndou = (k) => (Math.abs(k) < 0.1 ? 'ficou praticamente parado' : k > 0 ? 'subiu' : 'caiu');
+const SEMANAS_TXT = { 14: 'nas últimas 2 semanas', 21: 'nas últimas 3 semanas' };
+
+/**
+ * Puro. A leitura que uma pessoa faria olhando o gráfico, além da tendência de 4 semanas: a tendência em 7, 14 e 21 dias, as
+ * médias por semana, a média móvel (pico, vale e onde está agora, contados em ordem), se a janela recente conta outra história
+ * que a de 4 semanas, e a tendência sem as pesagens fora da manhã. Números prontos pra IA contar a história do período sem
+ * recalcular. 09/10: o Lucas sentia o peso caindo; as 4 semanas davam +0,20 kg/semana, mas as últimas 3 estavam paradas
+ * (−0,04) e a média móvel tinha ido de 75,9 (22/09) a 75,3 (04/10) — a sensação tinha base, e nenhum texto do bot dizia isso.
+ */
+export function leituraDoGrafico(pontos = [], tend = null, { dia } = {}) {
+  if (!tend?.suficiente || !dia) return null;
+  const doPeriodo = pontos.filter((p) => p.dia >= tend.janela.de && p.dia <= dia);
+  // tendências em janelas menores (pisos menores: são leitura, não veredito; 7 dias é só referência, oscila muito)
+  const janelas = [
+    resumoJanela(tendenciaPeso(pontos, { dia, janelaDias: 7, minPesagens: 4, minSpan: 4 }), 7),
+    resumoJanela(tendenciaPeso(pontos, { dia, janelaDias: 14, minPesagens: 5, minSpan: 9 }), 14),
+    resumoJanela(tendenciaPeso(pontos, { dia, janelaDias: 21, minPesagens: 6, minSpan: 14 }), 21),
+    resumoJanela(tend, JANELA_DIAS),
+  ];
+  // médias por semana: 4 blocos de 7 dias terminando em `dia`, do mais antigo pro mais novo
+  const semanas = [];
+  for (let k = 3; k >= 0; k--) {
+    const ate = somarDias(dia, -7 * k);
+    const de = somarDias(ate, -6);
+    const ps = doPeriodo.filter((p) => p.dia >= de && p.dia <= ate);
+    if (ps.length) semanas.push({ de, ate, media: media(ps.map((p) => p.peso)), n: ps.length });
+  }
+  // média móvel de 7 dias CENTRADA, só onde há 3 dias dos dois lados (nas pontas a janela fica pela metade e inventa pico
+  // ou vale: no começo só pesagens de depois, no fim só de antes); o "agora" é a média dos últimos 7 dias
+  const primeiroDia = doPeriodo[0]?.dia;
+  const ultimoDia = doPeriodo[doPeriodo.length - 1]?.dia;
+  const movel = doPeriodo
+    .filter((p) => distDias(primeiroDia, p.dia) >= 3 && distDias(p.dia, ultimoDia) >= 3)
+    .map((p) => {
+      const viz = doPeriodo.filter((o) => Math.abs(distDias(o.dia, p.dia)) <= 3);
+      return viz.length >= 4 ? { dia: p.dia, valor: media(viz.map((o) => o.peso)) } : null;
+    })
+    .filter(Boolean);
+  const ultimos7 = doPeriodo.filter((p) => distDias(p.dia, dia) <= 6);
+  const agora = ultimos7.length >= 3 ? media(ultimos7.map((p) => p.peso)) : null;
+  let historia = null;
+  let pico = null;
+  let vale = null;
+  if (movel.length >= 3) {
+    pico = movel.reduce((m, x) => (x.valor > m.valor ? x : m));
+    vale = movel.reduce((m, x) => (x.valor < m.valor ? x : m));
+    // como se lê o gráfico: de onde partiu, o ponto mais longe disso e a virada depois dele
+    const ini = movel[0];
+    const ext1 = movel.reduce((m, x) => (Math.abs(x.valor - ini.valor) > Math.abs(m.valor - ini.valor) ? x : m));
+    const subiu1 = ext1.valor > ini.valor;
+    const depois = movel.filter((x) => x.dia > ext1.dia);
+    const ext2 = depois.length ? depois.reduce((m, x) => ((subiu1 ? x.valor < m.valor : x.valor > m.valor) ? x : m)) : null;
+    const agoraTxt = agora != null ? `; a média dos últimos 7 dias está em ${kg1(agora)}` : '';
+    if (Math.abs(ext1.valor - ini.valor) < 0.4 && (!ext2 || Math.abs(ext2.valor - ext1.valor) < 0.4)) historia = `a média móvel de 7 dias andou dentro de ${kg1(pico.valor - vale.valor)} no período (sem pico nem vale que mereçam leitura)${agoraTxt}`;
+    else {
+      const volta = ext2 && Math.abs(ext2.valor - ext1.valor) >= 0.3 ? `, ${subiu1 ? 'desceu' : 'subiu'} até ${kg1(ext2.valor)} em ${dm(ext2.dia)}` : '';
+      historia = `a média móvel de 7 dias começou em ${kg1(ini.valor)} (${dm(ini.dia)}), ${subiu1 ? 'subiu' : 'desceu'} até ${kg1(ext1.valor)} em ${dm(ext1.dia)}${volta}${agoraTxt}`;
+    }
+  }
+  // a janela recente conta outra história? 21 dias (ou 14, se a de 21 não tem base) contra os 28
+  const t28 = janelas[3];
+  const recente = [janelas[2], janelas[1]].find((j) => j.suficiente) || null;
+  let divergencia = null;
+  if (recente && t28.kgSemana != null) {
+    const dif = recente.kgSemana - t28.kgSemana;
+    if (Math.abs(dif) >= (recente.dias === 21 ? 0.15 : 0.2)) {
+      const quando = SEMANAS_TXT[recente.dias];
+      const r = recente.kgSemana;
+      const t = t28.kgSemana;
+      let leitura;
+      if (dif < 0) leitura = t > 0.1 ? `a subida do período ficou mais no começo; ${quando} ${r > 0.1 ? 'o ritmo diminuiu' : r < -0.1 ? 'virou queda' : 'parou'}` : `${quando} ${r < -0.1 ? 'a queda está mais rápida que no período todo' : 'o peso desceu um pouco'}`;
+      else leitura = t < -0.1 ? `a queda do período ficou mais no começo; ${quando} ${r < -0.1 ? 'ela desacelerou' : r > 0.1 ? 'virou subida' : 'parou'}` : `${quando} ${r > 0.1 ? 'o peso sobe mais rápido que no período todo' : 'o peso subiu um pouco'}`;
+      divergencia = {
+        dias: recente.dias,
+        dif,
+        texto: `${quando} o peso ${comoAndou(recente.kgSemana)} (${kgS(recente.kgSemana)}/semana, IC ${ic(recente.ic95)}), enquanto as 4 semanas dão ${kgS(t28.kgSemana)}/semana: ${leitura}. Janela menor tem margem maior; as duas leituras são verdadeiras ao mesmo tempo`,
+      };
+    }
+  }
+  // sem as pesagens fora da manhã (as antigas do relógio guardavam a última do dia, às vezes às 22h)
+  const fora = doPeriodo.filter((p) => p.hora && !ehManha(p.hora));
+  let semForaDaManha = null;
+  if (fora.length) {
+    const t = tendenciaPeso(doPeriodo.filter((p) => !(p.hora && !ehManha(p.hora))), { dia });
+    semForaDaManha = {
+      n: fora.length,
+      dias: fora.map((p) => `${dm(p.dia)} ${p.hora}`),
+      kgSemana: t.suficiente ? t.kgSemana : null,
+      relevante: t.suficiente && Math.abs(t.kgSemana - tend.kgSemana) >= 0.05,
+      texto: `${fora.length} pesagem(ns) fora da manhã no período (${fora.map((p) => `${dm(p.dia)} às ${p.hora}`).join(', ')}; depois de comer o peso sai 0,5 a 1,5 kg mais alto)${t.suficiente ? `: sem elas a tendência seria ${kgS(t.kgSemana)}/semana` : ''}`,
+    };
+  }
+  // os últimos 3 dias (a resposta mais recente da balança, que a média da semana inteira dilui)
+  const ultimos3 = doPeriodo.filter((p) => distDias(p.dia, dia) <= 2);
+  const recente3 = ultimos3.length >= 2 ? media(ultimos3.map((p) => p.peso)) : null;
+  return { janelas, semanas, movel, pico, vale, agora, recente3, historia, divergencia, semForaDaManha };
+}
+
+/**
+ * Puro. A comida da última semana contra a das semanas anteriores, e o que isso deve fazer no peso (o que eu fiz à mão em
+ * 09/10: a última semana teve ~4.000 kcal/dia contra ~3.400 antes, e a subida recente da balança vinha daí). A diferença é na
+ * régua das fotos dos dois lados, então o viés do registro quase se cancela. Mudança de comida aparece primeiro como água e
+ * glicogênio e só depois como tendência. null sem dias completos bastantes nos dois trechos.
+ */
+export function comidaRecenteXPeso({ comida = null, dia, leitura = null } = {}) {
+  const completos = comida?.completos || [];
+  const rec = completos.filter((c) => distDias(c.dia, dia) <= 7);
+  const ant = completos.filter((c) => distDias(c.dia, dia) > 7);
+  if (rec.length < 3 || ant.length < 5) return null;
+  const kRec = media(rec.map((c) => c.kcal));
+  const kAnt = media(ant.map((c) => c.kcal));
+  const delta = kRec - kAnt;
+  const efeitoKgSemana = (delta * 7) / KCAL_POR_KG;
+  // peso: os últimos 3 dias contra a média da semana ANTERIOR à mudança (a média da semana inteira dilui uma subida que
+  // aconteceu dentro dela: em 09/10, 75,0 em 03/10 e 76,1 em 08/10 davam "−0,1 kg" de semana pra semana)
+  const sem = leitura?.semanas || [];
+  const pen = sem[sem.length - 2];
+  const dPeso = leitura?.recente3 != null && pen ? leitura.recente3 - pen.media : null;
+  const relevante = Math.abs(delta) >= 250;
+  let texto;
+  if (!relevante) texto = `a comida da última semana (${kcal(kRec)}/dia registradas, ${rec.length} dias completos) ficou parecida com a das semanas anteriores (${kcal(kAnt)}/dia): a balança não deve mudar de rumo por causa da comida`;
+  else {
+    const mesmoLado = dPeso != null && Math.abs(dPeso) >= 0.3 && Math.sign(dPeso) === Math.sign(delta);
+    const peso = dPeso == null ? '' : `; a média dos últimos 3 dias está em ${kg1(leitura.recente3)}, ${kgS(dPeso, 1)} contra a semana anterior (${dm(pen.de)}–${dm(pen.ate)}, ${kg1(pen.media)}): ${mesmoLado ? 'coincide com a mudança da comida, e nos primeiros dias boa parte disso é água e glicogênio, não tecido' : 'a balança ainda não mostrou a mudança; leva 1 a 3 semanas pra virar tendência'}`;
+    texto = `a última semana teve ${kcal(kRec)}/dia registradas (${rec.length} dias completos), ${kcal(Math.abs(delta))} ${delta > 0 ? 'a mais' : 'a menos'} que as semanas anteriores (${kcal(kAnt)}/dia); pela régua de 7.700 kcal/kg isso puxa o peso uns ${kgS(efeitoKgSemana)}/semana se continuar${peso}`;
+  }
+  return { kcalRecente: kRec, kcalAntes: kAnt, delta, efeitoKgSemana, dPesoSemana: dPeso, relevante, texto };
 }
 
 // ---------- 3. comida e energia ----------
@@ -509,11 +642,13 @@ export function analisarProgresso({ perfil = {}, dia, pesagens = [], refeicoes =
   const val = validarPesagens(pesagens, { dia });
   const { tend, direcao, alvo, limite, veredito } = vereditoRitmo({ pontos: val.pontos, dia, faixa, objetivo: perfil.objetivo, pesoPerfil: perfil.peso, janelaDias });
   const curto = oscilacaoCurta(val.pontos, tend, { dia });
+  const leitura = leituraDoGrafico(val.pontos, tend, { dia });
   const pesoEsperadoHoje = tend.suficiente && alvo != null ? tend.pesoTendenciaInicio + (alvo * distDias(tend.inicio, dia)) / 7 : null;
   const desvioKg = pesoEsperadoHoje != null ? tend.pesoTendenciaFim - pesoEsperadoHoje : null;
 
   // comida: os 28 dias fechados antes de hoje (mesma janela da meta adaptativa) e os 7 mais recentes
   const comida = diasDeComida(refeicoes, { dia, de: somarDias(dia, -janelaDias) });
+  const comidaRecente = comidaRecenteXPeso({ comida, dia, leitura });
   const energia = calibrarEnergia({ pontos: val.pontos, completos: comida.completos, gastos });
   const recentes = comida.completos.filter((c) => distDias(c.dia, dia) <= 7);
   const ingestaoRecente = recentes.length ? { kcal: media(recentes.map((c) => c.kcal)), dias: recentes.length, de: recentes[0].dia, ate: recentes[recentes.length - 1].dia } : null;
@@ -564,6 +699,7 @@ export function analisarProgresso({ perfil = {}, dia, pesagens = [], refeicoes =
       texto: `OSCILAÇÃO CURTA: de ${dm(curto.de.dia)} a ${dm(curto.ate.dia)} o peso ${curto.sentido} ${kgS(Math.abs(curto.variacao), 1).replace(/^[+−]/, '')} (${kg1(curto.de.peso)} -> ${kg1(curto.ate.peso)}), quando a tendência de 4 semanas explicaria ${kgS(curto.esperada, 1)}. Ainda não é tendência: água, sal, carboidrato, creatina e horário da pesagem mexem 0,5 a 1,5 kg em poucos dias; vale se repetir por 1 a 2 semanas.`,
     });
   }
+  if (leitura?.divergencia) alertas.push({ tipo: 'janelas_divergem', texto: `JANELAS CONTAM HISTÓRIAS DIFERENTES: ${leitura.divergencia.texto}. O veredito usa as 4 semanas; se a pessoa sente o peso ${leitura.divergencia.dif < 0 ? 'parado ou caindo' : 'subindo'}, é desta janela que vem a sensação.` });
   if (!tend.suficiente) alertas.push({ tipo: 'dados_insuficientes', texto: `POUCAS PESAGENS: ${tend.motivo}. Sem isso, nada de veredito sobre o ritmo.` });
   else if (!tend.robustoConcorda) alertas.push({ tipo: 'tendencia_fragil', texto: `TENDÊNCIA FRÁGIL: a regressão (${kgS(tend.kgSemana)}/semana) e a mediana das inclinações (Theil-Sen, ${kgS(tend.theilSenKgSemana)}/semana) discordam; poucas pesagens extremas estão puxando o resultado.` });
   const mudancas = ['metaPeso', 'metaPrazo', 'objetivo', 'ritmo', 'metaModo'].map((k) => [k, perfil.atualizacoes?.[k]]).filter(([, d]) => diaValido(d) && tend.janela.de && d > tend.janela.de && d <= dia);
@@ -579,6 +715,7 @@ export function analisarProgresso({ perfil = {}, dia, pesagens = [], refeicoes =
     'calorias são estimativas das fotos e descrições e o gasto é estimativa do relógio; 7.700 kcal por kg é aproximação',
     comida.incompletos.length ? `${comida.incompletos.length} dia(s) com registro incompleto ficaram fora das médias de comida` : null,
     tend.suficiente && tend.span < 21 ? `período curto (${tend.span + 1} dias): a incerteza ainda é grande` : null,
+    leitura?.semForaDaManha?.relevante ? leitura.semForaDaManha.texto : null,
   ].filter(Boolean);
 
   // ---- conclusão (uma frase direta, sustentada pelos números)
@@ -587,7 +724,7 @@ export function analisarProgresso({ perfil = {}, dia, pesagens = [], refeicoes =
   else if (veredito.status === 'neutro') conclusao = `O peso está ${descreverDirecao(tend)} no período.`;
   else conclusao = `${veredito.texto[0].toUpperCase()}${veredito.texto.slice(1)}.${conselhoDeComida({ veredito, direcao, metaKcal, ingestaoRecente, situacaoIngestao, naFaixa, energia, tend })}`;
 
-  const analise = { dia, periodo: tend.janela, pesagens: val, tendencia: tend, curto, direcao, alvo: { kgSemana: alvo, limite, pesoEsperadoHoje, desvioKg, rotulo: faixa?.rotulo || null }, veredito, comida, energia, metaKcal, ingestaoRecente, situacaoIngestao, naFaixa, alertas, limitacoes, conclusao };
+  const analise = { dia, periodo: tend.janela, pesagens: val, tendencia: tend, curto, leitura, comidaRecente, direcao, alvo: { kgSemana: alvo, limite, pesoEsperadoHoje, desvioKg, rotulo: faixa?.rotulo || null }, veredito, comida, energia, metaKcal, ingestaoRecente, situacaoIngestao, naFaixa, alertas, limitacoes, conclusao };
   analise.vereditoCurto = vereditoCurto(analise);
   analise.texto = textoPrompt(analise);
   analise.zap = textoZap(analise);
@@ -600,6 +737,13 @@ export function analisarProgresso({ perfil = {}, dia, pesagens = [], refeicoes =
 function situacaoTxt(a) {
   if (a.situacaoIngestao !== 'dentro') return a.situacaoIngestao;
   return a.naFaixa ? 'dentro' : `compatível, dentro da incerteza de ±${kcal(a.metaKcal.folga)}`;
+}
+/** Janelas da leitura numa linha: "7 dias +1,90 (só referência) · 14 dias +0,18 · 21 dias −0,04 · 28 dias +0,20". */
+function janelasTxt(l) {
+  return l.janelas.map((j) => `${j.dias} dias ${j.suficiente ? `${kgS(j.kgSemana)}/sem` : 'sem base'}${j.dias === 7 && j.suficiente ? ' (só referência, oscila muito)' : ''}`).join(' · ');
+}
+function semanasTxt(l) {
+  return l.semanas.map((s) => `${dm(s.de)}–${dm(s.ate)} ${kg1(s.media)}`).join(' → ');
 }
 function linhaTendencia(t) {
   return `${kgS(t.kgSemana)}/semana (${gDia(t.kgSemana)}), IC 95% ${ic(t.ic95)}${t.theilSenKgSemana != null ? `; Theil-Sen ${kgS(t.theilSenKgSemana)}/semana` : ''}`;
@@ -625,6 +769,13 @@ export function textoPrompt(a) {
       linhas.push(`- Tendência (regressão linear nas pesagens, intervalo de 95% já corrigido pela oscilação): ${linhaTendencia(t)}. Direção: ${descreverDirecao(t)}. Peso de tendência hoje ~${kg1(t.pesoTendenciaFim)}.`);
     } else linhas.push(`- Tendência: ${t.motivo}.`);
   }
+  const l = a.leitura;
+  if (l) {
+    linhas.push(
+      `- LEITURA DO GRÁFICO (a história do período, pra explicar como a pessoa vê a balança): tendência por janela: ${janelasTxt(l)}. Médias por semana: ${semanasTxt(l)}.${l.historia ? ` ${l.historia[0].toUpperCase()}${l.historia.slice(1)}.` : ''}${l.divergencia ? ' A janela recente conta outra história que as 4 semanas (ver ALERTAS).' : ' As janelas contam a mesma história.'}${l.semForaDaManha ? ` ${l.semForaDaManha.texto[0].toUpperCase()}${l.semForaDaManha.texto.slice(1)}.` : ''}`,
+    );
+  }
+  if (a.comidaRecente) linhas.push(`- COMIDA DA SEMANA x PESO: ${a.comidaRecente.texto[0].toUpperCase()}${a.comidaRecente.texto.slice(1)}.`);
   if (a.alvo.kgSemana != null) {
     linhas.push(`- Alvo: ${kgS(a.alvo.kgSemana)}/semana (${gDia(a.alvo.kgSemana)}), o mesmo ritmo de onde sai a meta de calorias${a.alvo.rotulo ? ` (${a.alvo.rotulo})` : ''}.${a.alvo.pesoEsperadoHoje != null ? ` Pela linha do alvo, hoje estaria em ~${kg1(a.alvo.pesoEsperadoHoje)}; pela tendência está em ~${kg1(t.pesoTendenciaFim)} (${kgS(a.alvo.desvioKg, 1)}).` : ''}`);
   }
@@ -647,7 +798,7 @@ export function textoPrompt(a) {
   linhas.push(`- LIMITES: ${a.limitacoes.join('; ')}.`);
   linhas.push(`- CONCLUSÃO: ${a.conclusao}`);
   linhas.push(
-    '- COMO RESPONDER SOBRE PROGRESSO: diga o período, quantas pesagens, o peso inicial e final, a tendência com a incerteza, o alvo e o veredito; havendo ALERTA, explique o que cada indicador mostra e por que discordam, sem escolher um número no chute; veredito incerto ou poucos dados = não crave. Nunca diga que a pessoa está comendo além do objetivo pelo relógio quando a balança não acompanha o registro.',
+    '- COMO RESPONDER SOBRE PROGRESSO: as contas e a leitura já estão feitas aqui; o seu papel é contar isso como gente, pensando na pessoa (o que ela perguntou, o que ela acha que está acontecendo, o objetivo dela, como ela vai se sentir com a resposta). Diga o período, quantas pesagens, o peso inicial e final, a tendência com a incerteza, o alvo e o veredito; use a LEITURA DO GRÁFICO pra contar a história do período (onde subiu, onde parou, de onde vem a sensação dela) e a COMIDA DA SEMANA x PESO pra ligar o que ela comeu ao que a balança fez. Havendo ALERTA, explique o que cada indicador mostra e por que discordam, sem escolher um número no chute; veredito incerto ou poucos dados = não crave. Nunca diga que a pessoa está comendo além do objetivo pelo relógio quando a balança não acompanha o registro. Não recalcule e não invente número que não esteja aqui.',
   );
   return linhas.join('\n');
 }
@@ -680,6 +831,22 @@ export function textoZap(a) {
         .join('\n'),
     );
   } else partes.push(`*Tendência*\n• ${t.motivo}`);
+  const l = a.leitura;
+  if (l) {
+    partes.push(
+      [
+        '*Leitura do gráfico*',
+        `• Por janela: ${janelasTxt(l)}`,
+        l.semanas.length >= 2 ? `• Médias por semana: ${semanasTxt(l)}` : null,
+        l.historia ? `• ${l.historia[0].toUpperCase()}${l.historia.slice(1)}` : null,
+        l.divergencia ? `• ⚠️ ${l.divergencia.texto[0].toUpperCase()}${l.divergencia.texto.slice(1)}` : '• As janelas contam a mesma história',
+        l.semForaDaManha ? `• ${l.semForaDaManha.texto[0].toUpperCase()}${l.semForaDaManha.texto.slice(1)}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+  if (a.comidaRecente) partes.push(`*Comida da semana x peso*\n• ${a.comidaRecente.texto[0].toUpperCase()}${a.comidaRecente.texto.slice(1)}`);
   if (a.alvo.kgSemana != null) {
     partes.push(
       [
@@ -719,7 +886,9 @@ export function textoZap(a) {
         .join('\n'),
     );
   }
-  if (a.alertas.length) partes.push(`*Alertas*\n${a.alertas.map((x) => `• ${x.texto}`).join('\n')}`);
+  // a divergência entre janelas já aparece na Leitura do gráfico
+  const alertasZap = a.alertas.filter((x) => x.tipo !== 'janelas_divergem');
+  if (alertasZap.length) partes.push(`*Alertas*\n${alertasZap.map((x) => `• ${x.texto}`).join('\n')}`);
   partes.push(`*Limites*\n${a.limitacoes.map((l) => `• ${l[0].toUpperCase()}${l.slice(1)}`).join('\n')}`);
   partes.push(`*Conclusão*\n${a.conclusao}`);
   return partes.join('\n\n');
@@ -737,6 +906,8 @@ export function resumoZap(a) {
   if (a.metaKcal) linhas.push(`• Meta ${a.metaKcal.base === 'balanca' ? 'pela balança' : 'provisória (relógio)'}: ${kcal(a.metaKcal.min)} a ${kcal(a.metaKcal.max)}/dia${a.ingestaoRecente ? ` · últimos ${a.ingestaoRecente.dias} dias: ${kcal(a.ingestaoRecente.kcal)} (${situacaoTxt(a)})` : ''}`);
   const principais = a.alertas.filter((x) => ['registro_acima_da_balanca', 'registro_abaixo_da_balanca', 'curto_vs_longo'].includes(x.tipo));
   for (const x of principais) linhas.push(`• ⚠️ ${x.tipo === 'curto_vs_longo' ? 'Oscilação curta' : 'Registro x balança não batem'}: ${x.tipo === 'curto_vs_longo' ? `${x.texto.replace(/^OSCILAÇÃO CURTA: /, '').split('. ')[0]}` : `diferença de ~${kcal(Math.abs(a.energia.vies))}/dia; a meta acima já desconta`}`);
+  if (a.leitura?.divergencia) linhas.push(`• 📉 Janela recente: ${a.leitura.divergencia.texto.split(': ')[0]}`);
+  if (a.comidaRecente?.relevante) linhas.push(`• 🍽️ Comida da semana: ${kcal(a.comidaRecente.kcalRecente)}/dia, ${kcalS(a.comidaRecente.delta)} contra as semanas anteriores (puxa ~${kgS(a.comidaRecente.efeitoKgSemana)}/semana se continuar)`);
   linhas.push('• Contas completas: !progresso');
   return linhas.join('\n');
 }
@@ -800,8 +971,11 @@ export const pareceProgresso = (texto) => {
  * andamento: aí o registro manda ("comi 2 ovos e pão, ritmo tá bom?" perdia o registro, revisão de 09/10).
  */
 export function rotaPerguntaProgresso({ texto, temImagem = false, temAudio = false, metaConversa = false, contestacao = false, emAndamento = null } = {}) {
-  return !temImagem && !temAudio && !metaConversa && !contestacao && !emAndamento && pareceProgresso(texto) && !pareceConsumo(texto) && !pareceCorrecao(texto);
+  return !temImagem && !temAudio && !metaConversa && !contestacao && !emAndamento && pareceProgresso(texto) && !relataRefeicao(texto) && !pareceCorrecao(texto);
 }
+// "mesmo comendo muito", "tô comendo pouco": falam do hábito, não contam uma refeição (pareceConsumo pega o "comendo" sozinho)
+const RE_HABITO_COMIDA = rx(String.raw`\b(mesmo |apesar de |sem )?(t[ôo] |to |estou |eu )?comendo (muito|bastante|pouco|demais|bem|mal|mais|menos|certinho|direito|tudo|acima|abaixo)\b`, 'giu');
+const relataRefeicao = (t) => pareceConsumo(String(t || '').replace(RE_HABITO_COMIDA, ' '));
 
 // ---------- 8. conferência do texto da IA ----------
 // Fica fora da checagem (revisão de 09/10: explicar o ALERTA do próprio bloco ou analisar um prato não é contradizer a
@@ -814,19 +988,27 @@ const NUM_EXTENSO = { um: 1, uma: 1, dois: 2, duas: 2, tres: 3, três: 3, quatro
 const RE_N_DIAS = rx(String.raw`\b(\d+|um|uma|dois|duas|tr[êe]s|quatro|cinco|seis|sete|dez|quinze)\s+(dias?|semanas?)\b`, 'giu');
 const RE_DATA_DM = /(?<![\p{N}\/])(\d{1,2})\/(\d{1,2})(?![\p{N}\/])/gu;
 /** O trecho fala de uma janela de menos de 3 semanas (não da tendência de 4)? */
-function janelaCurta(trecho) {
+function janelaCurta(trecho, { ignorarJanelas = false } = {}) {
   if (RE_CURTO_PRAZO.test(trecho)) return true;
+  if (ignorarJanelas) return false; // a janela dita na frase vai ser conferida contra a leitura da mesma janela
+  const n = diasDaJanela(trecho);
+  return n != null && n < 21;
+}
+/** Quantos dias a frase diz que olhou ("nas últimas 3 semanas" = 21, "nos últimos 10 dias", "de 18/09 a 08/10"); null se não diz. */
+function diasDaJanela(trecho) {
   for (const m of trecho.matchAll(RE_N_DIAS)) {
     const n = NUM_EXTENSO[m[1].toLowerCase()] ?? Number(m[1]);
-    if ((/^semana/i.test(m[2]) ? n * 7 : n) < 21) return true;
+    return /^semana/i.test(m[2]) ? n * 7 : n;
   }
   const datas = [...trecho.matchAll(RE_DATA_DM)].map((m) => Date.UTC(2000, Number(m[2]) - 1, Number(m[1])));
   if (datas.length >= 2) {
     const dias = (datas[1] - datas[0]) / 86400000;
-    if ((dias < 0 ? dias + 366 : dias) < 21) return true;
+    return dias < 0 ? dias + 366 : dias;
   }
-  return false;
+  if (RE_MES.test(trecho)) return 30; // "no mês", "esse mês": a janela das 4 semanas
+  return null;
 }
+const RE_MES = rx(String.raw`\bm[êe]s\b`);
 const RE_PRATO = rx(String.raw`⚖|💡|🍽|\b(prato|almo[çc]o|jantar|janta|caf[ée] da manh[ãa]|lanche|refei[çc][ãa]o|refei[çc][õo]es|por[çc][ãa]o|marmita|ceia|foto|concha|colher(es)?|card[áa]pio)\b`);
 const RE_COMIDA = rx(String.raw`\b(calorias|kcal|prote[íi]na|carbo\p{L}*|comida|comeu|comendo|ingest[ãa]o|macros?|fibras?)\b`);
 // a frase fala de peso/ritmo? (sem "kg" solto: "130 kg na flexora" é carga de treino); alvo/objetivo só quando não é de comida
@@ -862,7 +1044,11 @@ const RE_COMENDO_DEMAIS = rx(String.raw`\b(comendo|come|comeu)\b[^.!?\n]{0,30}?\
  * trecho casado ("Seu peso não está parado: subiu" afirma a subida; "isso não significa que você come demais" não afirma o
  * excesso). Janela curta conta na oração inteira e numa abertura curta da frase ("Hoje, ...", "Nos últimos 5 dias, ...").
  */
-function afirma(re, f, { propria = null, prato = false } = {}) {
+function afirma(re, f, opts = {}) {
+  return afirmaOnde(re, f, opts) != null;
+}
+/** Igual a afirma, mas devolve o alcance da oração afirmada (pra saber de que janela ela fala) ou null. */
+function afirmaOnde(re, f, { propria = null, prato = false, ignorarJanelas = false } = {}) {
   const seps = [...f.matchAll(RE_SEPARADOR)].map((s) => ({ ini: s.index, fim: s.index + s[0].length }));
   const abertura = seps.length ? f.slice(0, seps[0].ini) : '';
   const aberturaCurta = abertura && abertura.trim().split(/\s+/).length <= 4 ? abertura : '';
@@ -873,10 +1059,10 @@ function afirma(re, f, { propria = null, prato = false } = {}) {
     const oracao = f.slice(comeco, fimTrecho);
     if (RE_NAO_AFIRMA.test(propria ? oracao.replace(propria, ' ') : oracao)) continue;
     const alcance = `${aberturaCurta} ${f.slice(comeco, proximo ? proximo.ini : f.length)}`;
-    if (janelaCurta(alcance) || (prato && RE_PRATO.test(alcance))) continue;
-    return true;
+    if (janelaCurta(alcance, { ignorarJanelas }) || (prato && RE_PRATO.test(alcance))) continue;
+    return alcance;
   }
-  return false;
+  return null;
 }
 
 /**
@@ -895,15 +1081,43 @@ export function conferirTextoProgresso(texto, a) {
   const add = (tipo, f) => {
     if (!achados.some((x) => x.tipo === tipo && x.frase === f)) achados.push({ tipo, trecho: f.slice(0, 160), frase: f, correto: certo });
   };
-  const contraQueda = () => t.direcao === 'subindo' || t.direcao === 'estavel' || (t.direcao === 'indefinida' && t.kgSemana >= 0.1);
-  const contraSubida = () => t.direcao === 'caindo' || t.direcao === 'estavel' || (t.direcao === 'indefinida' && t.kgSemana <= -0.1);
+  const contraQueda = (x = t) => x.direcao === 'subindo' || x.direcao === 'estavel' || (x.direcao === 'indefinida' && x.kgSemana >= 0.1);
+  const contraSubida = (x = t) => x.direcao === 'caindo' || x.direcao === 'estavel' || (x.direcao === 'indefinida' && x.kgSemana <= -0.1);
   const registroAcima = a.alertas?.some((x) => x.tipo === 'registro_acima_da_balanca');
   for (const f of frases) {
     // pergunta ("Tá no ritmo da etapa? Ainda não: ...") e hipótese/finalidade não afirmam nada
     if (/\?[^\p{L}\p{N}]*$/u.test(f) || RE_HIPOTESE.test(f.replace(/^[^\p{L}\p{N}]+/u, ''))) continue;
     const semProteina = !/prote[íi]na/iu.test(f);
     const treino = (RE_EXERCICIO.test(f) || RE_TREINO.test(f)) && !RE_PESO_DO_CORPO.test(f);
-    if (!treino) {
+    // com a leitura do gráfico, cada afirmação é conferida contra a janela que a PRÓPRIA oração diz: "nas últimas 3 semanas
+    // ficou parado" contra a de 21 dias, "no mês subiu" contra as 4 semanas; as duas podem ser verdadeiras ao mesmo tempo
+    if (!treino && a.leitura) {
+      const opts = { ignorarJanelas: true };
+      const ondeCai = afirmaOnde(RE_CAINDO, f, opts);
+      const ondeSobe = afirmaOnde(RE_SUBINDO, f, opts);
+      const ondeParado = ondeCai == null && ondeSobe == null ? afirmaOnde(RE_ESTAVEL, f, { ...opts, propria: RE_ESTAVEL_PROPRIA }) : null;
+      // janela da oração: 10 a 24 dias = a da leitura (14 ou 21); menos de 10 = curta demais, não confere; nada dito ou 25+ = 4 semanas
+      const refDe = (onde) => {
+        const n = diasDaJanela(onde);
+        if (n == null || n >= 25) return t;
+        return n < 10 ? null : a.leitura.janelas.find((j) => j.dias === (n < 18 ? 14 : 21)) || null;
+      };
+      for (const [onde, contra] of [
+        [ondeCai, contraQueda],
+        [ondeSobe, contraSubida],
+      ]) {
+        if (onde == null) continue;
+        const ref = refDe(onde);
+        if (!ref) continue;
+        if (ref === t && !t.suficiente) {
+          if (!RE_PROVISORIO.test(f)) add('direcao_sem_base', f);
+        } else if (ref.suficiente && contra(ref)) add('direcao_oposta', f);
+      }
+      if (ondeParado != null) {
+        const ref = refDe(ondeParado);
+        if (ref?.suficiente && (ref.direcao === 'subindo' || ref.direcao === 'caindo')) add('direcao_oposta', f);
+      }
+    } else if (!treino) {
       const caindo = afirma(RE_CAINDO, f);
       const subindo = afirma(RE_SUBINDO, f);
       const estavel = afirma(RE_ESTAVEL, f, { propria: RE_ESTAVEL_PROPRIA });

@@ -668,6 +668,8 @@ test('pergunta de progresso: o que é do peso de quem mandou entra; papo alheio,
   // caminho de sempre, pra refeição não deixar de ser registrada
   assert.equal(rotaPerguntaProgresso({ texto: 'tô engordando?' }), true);
   assert.equal(rotaPerguntaProgresso({ texto: 'comi 2 ovos e pão, tô engordando?' }), false);
+  // "mesmo comendo muito" é hábito, não refeição: continua sendo pergunta de progresso
+  assert.equal(rotaPerguntaProgresso({ texto: 'parece que meu peso ta caindo mesmo comendo muito, ta errado isso?' }), true);
   assert.equal(rotaPerguntaProgresso({ texto: 'tô engordando?', emAndamento: { hora: '12:00' } }), false);
   assert.equal(rotaPerguntaProgresso({ texto: 'tô engordando?', temImagem: true }), false);
   assert.equal(rotaPerguntaProgresso({ texto: 'tô engordando?', metaConversa: true }), false);
@@ -819,6 +821,87 @@ test('poucas pesagens: sem veredito, também sem "meta pela balança", sem julga
   assert.doesNotMatch(a.zap, /calibrada pela balança/);
   const proj = projecaoAteMeta({ perfil: perfilGanho, dia: DIA, pesagens, refeicoes, gastos: {}, faixa: ganho });
   assert.equal(proj?.chegada ?? null, null);
+});
+
+// ---------- 12. leitura do gráfico (o que uma pessoa leria olhando as pesagens) ----------
+test('leitura do gráfico, caso real: as últimas 3 semanas paradas contra +0,20 em 4 semanas, e a média móvel com pico e vale', () => {
+  const { pesagens, refeicoes, gastos, dia } = cenarioReal();
+  const a = analisarProgresso({ perfil: perfilReal, dia, pesagens, refeicoes, gastos, faixa: faixaDaMeta(perfilReal, dia, pesagens) });
+  const l = a.leitura;
+  assert.deepEqual(l.janelas.map((j) => j.dias), [7, 14, 21, 28]);
+  const j21 = l.janelas.find((j) => j.dias === 21);
+  assert.ok(Math.abs(j21.kgSemana) < 0.1, `21 dias ${j21.kgSemana}`); // parado nas últimas 3 semanas
+  assert.ok(a.tendencia.kgSemana > 0.15); // e subindo nas 4
+  assert.match(l.divergencia.texto, /^nas últimas 3 semanas o peso ficou praticamente parado .*enquanto as 4 semanas dão \+0,\d\d kg\/semana: a subida do período ficou mais no começo/);
+  assert.ok(a.alertas.some((x) => x.tipo === 'janelas_divergem'));
+  // a média móvel: sobe até o pico (~"22/09") e desce até o vale (~"04/10"), sem pico ou vale inventado nas pontas
+  assert.match(l.historia, /^a média móvel de 7 dias começou em [\d,]+ kg \(\d\d\/\d\d\), subiu até [\d,]+ kg em \d\d\/\d\d, desceu até [\d,]+ kg em \d\d\/\d\d; a média dos últimos 7 dias está em/);
+  assert.equal(l.semanas.length, 4);
+  // vai pros três lugares: prompt, !progresso e !hoje
+  assert.match(a.texto, /LEITURA DO GRÁFICO .*tendência por janela: 7 dias .* 21 dias .* 28 dias/);
+  assert.match(a.zap, /\*Leitura do gráfico\*\n• Por janela:/);
+  assert.match(a.resumoZap, /📉 Janela recente: nas últimas 3 semanas/);
+});
+
+test('leitura do gráfico: quem perde peso tem a divergência dita no sentido certo; série sem virada não ganha pico inventado', () => {
+  // perda: caindo ~1,4 kg na primeira semana e parado nas últimas 3
+  const pesagens = Array.from({ length: 28 }, (_, i) => ({ dia: somarDias(DIA, -27 + i), peso: Math.round((i < 7 ? 80 - 0.2 * i : 78.6 + (i % 2 ? 0.1 : -0.1)) * 10) / 10 }));
+  const perda = analisarProgresso({ perfil: { objetivo: 'emagrecer' }, dia: DIA, pesagens, faixa: { ritmoKgSemana: -0.5, min: -600, max: -300, fonte: 'meta' } });
+  assert.ok(perda.leitura.divergencia, JSON.stringify(perda.leitura.janelas));
+  assert.match(perda.leitura.divergencia.texto, /a queda do período ficou mais no começo; nas últimas 3 semanas parou/);
+  // subida reta: a média móvel só sobe (sem "desceu até")
+  const reta = analisarProgresso({ perfil: perfilGanho, dia: DIA, pesagens: serie({ kgSemana: 0.4, ruido: 0.05 }), faixa: ganho });
+  assert.match(reta.leitura.historia, /subiu até/);
+  assert.doesNotMatch(reta.leitura.historia, /desceu até/);
+  assert.equal(reta.leitura.divergencia, null);
+});
+
+test('comida da semana x peso: semana comendo +700 kcal liga com a subida dos últimos dias (régua das fotos dos dois lados)', () => {
+  const pesagens = serie({ kgSemana: 0, ruido: 0.1 });
+  for (const p of pesagens.slice(-3)) p.peso = Math.round((p.peso + 0.8) * 10) / 10; // a balança respondeu nos últimos dias
+  const refeicoes = [];
+  for (let i = 1; i <= 27; i++) {
+    const kcalDia = i <= 7 ? 3700 : 3000;
+    refeicoes.push({ dia: somarDias(DIA, -i), estimativa: { kcal: kcalDia / 2, p: 70 } }, { dia: somarDias(DIA, -i), estimativa: { kcal: kcalDia / 2, p: 70 } });
+  }
+  const a = analisarProgresso({ perfil: perfilGanho, dia: DIA, pesagens, refeicoes, faixa: ganho });
+  const c = a.comidaRecente;
+  assert.equal(c.relevante, true);
+  assert.ok(Math.abs(c.delta - 700) < 1, `delta ${c.delta}`);
+  assert.ok(Math.abs(c.efeitoKgSemana - (700 * 7) / 7700) < 0.01);
+  assert.match(c.texto, /700 kcal a mais que as semanas anteriores .*isso puxa o peso uns \+0,64 kg\/semana se continuar; a média dos últimos 3 dias está em .*: coincide com a mudança da comida/);
+  assert.match(a.texto, /COMIDA DA SEMANA x PESO: A última semana teve 3\.700 kcal\/dia/);
+  // comida parecida: diz que não muda o rumo
+  const igual = analisarProgresso({ perfil: perfilGanho, dia: DIA, pesagens, refeicoes: comida({ kcal: 3000 }).refeicoes, faixa: ganho });
+  assert.equal(igual.comidaRecente.relevante, false);
+  assert.match(igual.comidaRecente.texto, /ficou parecida com a das semanas anteriores/);
+});
+
+test('pesagens fora da manhã: a hora vem junto e a leitura dá a tendência sem elas', () => {
+  const pesagens = serie({ kgSemana: 0.2, ruido: 0.1 }).map((p, i) => ({ ...p, hora: '07:10' }));
+  // as 6 primeiras foram à noite (regra antiga do relógio: a última do dia), ~1 kg mais altas
+  for (const p of pesagens.slice(0, 6)) Object.assign(p, { hora: '22:15', peso: Math.round((p.peso + 1) * 10) / 10 });
+  assert.equal(validarPesagens(pesagens, { dia: DIA }).pontos[0].hora, '22:15');
+  const a = analisarProgresso({ perfil: perfilGanho, dia: DIA, pesagens, faixa: ganho });
+  const s = a.leitura.semForaDaManha;
+  assert.equal(s.n, 6);
+  assert.ok(s.kgSemana > a.tendencia.kgSemana + 0.2, `${s.kgSemana} x ${a.tendencia.kgSemana}`); // as da noite no começo achatavam a subida
+  assert.equal(s.relevante, true);
+  assert.ok(a.limitacoes.some((x) => /6 pesagem\(ns\) fora da manhã .*sem elas a tendência seria/.test(x)));
+});
+
+test('conferência: frase com a própria janela é conferida contra a leitura daquela janela, não contra as 4 semanas', () => {
+  const a = {
+    vereditoCurto: 'X',
+    alertas: [],
+    tendencia: { suficiente: true, direcao: 'subindo', kgSemana: 0.3 },
+    veredito: { status: 'no_alvo', confianca: 'alta' },
+    leitura: { janelas: [{ dias: 7 }, { dias: 14, suficiente: true, direcao: 'indefinida', kgSemana: 0.05 }, { dias: 21, suficiente: true, direcao: 'estavel', kgSemana: 0.01 }, { dias: 28, suficiente: true, direcao: 'subindo', kgSemana: 0.3 }] },
+  };
+  const tipos = (t) => conferirTextoProgresso(t, a).map((x) => x.tipo);
+  assert.deepEqual(tipos('Nas últimas 3 semanas o peso ficou parado, mas no mês ele subiu.'), []); // verdade nas duas janelas
+  assert.deepEqual(tipos('Nas últimas 3 semanas o peso subiu.'), ['direcao_oposta']); // a de 21 dias está parada
+  assert.deepEqual(tipos('O peso ficou parado.'), ['direcao_oposta']); // sem janela dita: vale a de 4 semanas
 });
 
 test('atividade sem relógio: o gasto do dia recebe o LÍQUIDO do repouso, no registro e na sincronização', async () => {

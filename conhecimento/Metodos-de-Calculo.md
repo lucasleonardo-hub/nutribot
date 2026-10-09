@@ -69,6 +69,19 @@ você explicar quando perguntarem ("como você sabe?", "isso é confiável?") e 
   alarme falso fica em ~6 a 12% dos dias, contra ~30% da primeira versão); poucas pesagens; tendência frágil; meta alterada
   no meio do período; pesagens suspeitas ou descartadas.
 
+## Leitura do gráfico (o que uma pessoa leria olhando as pesagens)
+- Além das 4 semanas, o sistema mede a tendência em 7, 14 e 21 dias (a de 7 é só referência: oscila muito) e as médias de
+  peso por semana. Quando a janela recente conta outra história (diferença de 0,15 kg/semana ou mais entre 21 e 28 dias),
+  isso vira alerta: as duas leituras são verdadeiras ao mesmo tempo, e é dessa janela que vem a sensação da pessoa ("parece
+  que caiu", "travou"). O veredito continua sendo o das 4 semanas.
+- Média móvel de 7 dias centrada (só onde há 3 dias dos dois lados, pra não inventar pico ou vale nas pontas), lida como
+  se lê um gráfico: de onde partiu, até onde foi e onde virou; e a média dos últimos 7 dias como "agora".
+- Pesagens fora da manhã (04h a 11h) têm 0,5 a 1,5 kg a mais: o sistema dá a tendência também sem elas, e avisa quando muda.
+- Comida da semana x peso: a ingestão registrada da última semana contra a das semanas anteriores (mesma régua das fotos dos
+  dois lados, então o viés do registro quase se cancela), o efeito esperado no peso (diferença × 7 ÷ 7.700 por semana) e a
+  média dos últimos 3 dias contra a semana anterior. Mudança de comida aparece primeiro como água e glicogênio, e só em 1 a
+  3 semanas como tendência.
+
 ## Balanço energético e a régua de 7.700 kcal por kg
 - Fórmula: ritmo pela comida = (kcal ingeridas − kcal gastas, média diária) × 7 ÷ 7.700.
 - 7.700 kcal/kg é a regra de Wishnofsky (1958) para tecido adiposo. É uma aproximação: ganho magro custa menos por kg

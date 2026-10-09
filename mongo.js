@@ -299,11 +299,13 @@ export async function refeicoesDoDia(dia) {
 
 // ---------- Pesagens (peso com data, pra evolução) ----------
 
-export async function registrarPesagem({ jid, nome, dia, peso, gordura, fonte }) {
+export async function registrarPesagem({ jid, nome, dia, peso, gordura, fonte, hora }) {
   // uma por pessoa por dia: a última vale. fonte 'relogio' = veio da planilha do Galaxy Watch (saude.js)
   const doc = { jid, nome, dia, peso, criadoEm: new Date() };
   if (gordura != null) doc.gordura = gordura;
   if (fonte) doc.fonte = fonte;
+  // hora da medição (HH:MM, quando o relógio manda): a leitura do progresso confere a tendência sem as pesagens fora da manhã
+  if (typeof hora === 'string' && /^\d{2}:\d{2}$/.test(hora)) doc.hora = hora;
   await colecao('pesagens').replaceOne({ jid, dia }, doc, { upsert: true });
 }
 

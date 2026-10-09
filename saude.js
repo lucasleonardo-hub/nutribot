@@ -425,7 +425,7 @@ export async function aplicarDadosSaude(perfil, dados, { hoje, fonteNome = 'rel�
     const ultimo = dados.pesos[dados.pesos.length - 1];
     const desde = diasAtras(ultimo.dia, DIAS_PESAGENS);
     for (const p of dados.pesos.filter((x) => x.dia >= desde)) {
-      await registrarPesagem({ jid, nome: perfil.nome, dia: p.dia, peso: p.peso, gordura: p.gordura ?? undefined, fonte: 'relogio' }).catch((e) => console.error('[saude] pesagem:', e.message));
+      await registrarPesagem({ jid, nome: perfil.nome, dia: p.dia, peso: p.peso, gordura: p.gordura ?? undefined, fonte: 'relogio', hora: p.hora }).catch((e) => console.error('[saude] pesagem:', e.message));
     }
     // peso do perfil acompanha o relógio quando a medição é mais nova que o último dado informado na conversa
     const dataPerfil = perfil.atualizacoes?.peso || '';
