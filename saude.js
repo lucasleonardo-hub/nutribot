@@ -10,6 +10,7 @@ import { somarGastosExtras } from './atividades.js';
 import { autenticacaoGoogle, salvarEmPasta } from './drive.js';
 import { colecao, registrarPesagem, salvarPerfil } from './mongo.js';
 import { semanaISO } from './util.js';
+import { preferirPesagem } from './progresso.js';
 import { temHevy } from './treino.js';
 
 const DIAS_DETALHE = 14; // dias listados um a um (peso) / noites (sono)
@@ -65,7 +66,7 @@ export function interpretarAbas(abas) {
   const sono = acharAba(/sleep|sono/i);
   const atividade = acharAba(/activity|atividade/i);
 
-  // ---- peso e composição: uma medição por dia (a última do dia; prefere Samsung Health)
+  // ---- peso e composição: uma medição por dia (a primeira da manhã; prefere Samsung Health: progresso.preferirPesagem)
   const pesos = new Map();
   if (corpo.length > 1) {
     const cab = corpo[0];
@@ -79,9 +80,7 @@ export function interpretarAbas(abas) {
       const dia = diaDe(l[iData]);
       const peso = iPeso >= 0 ? num(l[iPeso]) : null;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dia) || !peso) continue;
-      const atual = pesos.get(dia);
-      if (atual && ehSamsung(atual.fonte) && !ehSamsung(l[iFonte])) continue;
-      pesos.set(dia, {
+      const nova = {
         dia,
         hora: horaDe(l[iData]),
         peso,
@@ -89,7 +88,8 @@ export function interpretarAbas(abas) {
         altura: iAlt >= 0 ? num(l[iAlt]) : null,
         magra: iMagra >= 0 ? num(l[iMagra]) : null,
         fonte: l[iFonte] || '',
-      });
+      };
+      pesos.set(dia, preferirPesagem(pesos.get(dia), nova, ehSamsung));
     }
   }
 
@@ -227,9 +227,11 @@ export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha =
   // ---- peso e composição
   if (pesos.length) {
     const recentes = pesos.filter((p) => p.dia >= diasAtras(hoje, DIAS_DETALHE - 1)).slice().reverse();
-    linhas.push('', 'PESO E COMPOSIÇÃO (medição da manhã; mais recente primeiro):');
+    linhas.push('', 'PESO E COMPOSIÇÃO (uma por dia: a primeira da manhã quando há; mais recente primeiro; o ritmo de verdade está no PROGRESSO DE PESO, não na diferença entre dois dias):');
     for (const p of recentes) {
-      let l = `- ${dm(p.dia)}: ${kg(p.peso)}`;
+      // pesagem fora da manhã sai marcada: depois de comer e beber o peso sobe 0,5 a 1,5 kg
+      const foraDaManha = p.hora && !(p.hora >= '04:00' && p.hora < '11:00');
+      let l = `- ${dm(p.dia)}: ${kg(p.peso)}${foraDaManha ? ` (às ${p.hora}, fora da manhã: tende a sair mais alto)` : ''}`;
       if (p.gordura) l += ` · gordura ${pct(p.gordura)} (massa gorda ~${kg((p.peso * p.gordura) / 100)}, magra ~${kg(p.peso * (1 - p.gordura / 100))})`;
       linhas.push(l);
     }

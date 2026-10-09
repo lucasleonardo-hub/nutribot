@@ -32,7 +32,8 @@ export function atualizarCalibracaoEnergia(calibracaoAtual, { semanas = [], ritm
   const fechadas = semanas.filter((s) => s.idx >= 1 && s.balanco != null && s.diasBalanco >= MIN_DIAS_SEMANA);
   const ultima = fechadas[fechadas.length - 1];
   if (!ultima || ritmoReal == null) return atual;
-  if (atual?.ultimaSemana === ultima.fim) return atual;
+  // semana já contada (ou mais velha que a última contada, quando faltam dados nas recentes) não entra de novo
+  if (atual?.ultimaSemana && ultima.fim <= atual.ultimaSemana) return atual;
   const vies = viesDaSemana(ultima, ritmoReal);
   if (vies == null) return atual;
   const n = (atual?.semanas || 0) + 1;
@@ -59,7 +60,7 @@ export function descreverCalibracaoEnergia(calibracao) {
   const e = calibracao?.energia;
   if (!e || !(e.semanas >= 1)) return '';
   const direcao = e.viesKcalDia > 60 ? 'ACIMA' : e.viesKcalDia < -60 ? 'ABAIXO' : 'perto';
-  if (direcao === 'perto') return `CALIBRAÇÃO DO BALANÇO (${e.semanas} semana(s), confiança ${nivelConfianca(e.confianca)}): comida registrada e relógio batem com a balança (viés ${kcalS(e.viesKcalDia)}/dia). Pode confiar nos totais do dia.`;
+  if (direcao === 'perto') return `CALIBRAÇÃO DO BALANÇO (${e.semanas} semana(s), confiança ${nivelConfianca(e.confianca)}): comida registrada e relógio batem com a balança (viés ${kcalS(e.viesKcalDia)}/dia).${e.confianca >= 0.5 ? ' Pode confiar nos totais do dia.' : ' Ainda com poucas semanas: confirme antes de confiar.'}`;
   return (
     `CALIBRAÇÃO DO BALANÇO (${e.semanas} semana(s), confiança ${nivelConfianca(e.confianca)}): o balanço registrado (comida − relógio) tende a ficar ${kcalS(e.viesKcalDia)}/dia ${direcao} do que a balança mostra. ` +
     (direcao === 'ACIMA' ? 'Ou a comida registrada sai alta na estimativa, ou o relógio subestima o gasto: ao ler totais e ritmo, desconte isso em vez de cobrar superávit que não aparece no peso.' : 'Ou tem refeição sem registro, ou o relógio superestima o gasto: ao ler totais, considere que a pessoa come mais do que registra.') +
@@ -139,11 +140,14 @@ export async function correcoesEstimativaDe(jids, limite = 40) {
   return colecao('correcoes_estimativa').find({ jid: { $in: jids } }).sort({ criadoEm: -1 }).limit(limite).toArray().catch(() => []);
 }
 
-/** Bloco completo pro prompt (energia + correções). '' sem nada útil. */
-export async function blocoCalibracao(perfil) {
+/**
+ * Bloco completo pro prompt (energia + correções). '' sem nada útil. `energia: false` deixa só as correções de foto: o
+ * acompanhamento já leva o viés medido agora pelo progresso.js (com intervalo), e dois números pro mesmo viés confundem.
+ */
+export async function blocoCalibracao(perfil, { energia: comEnergia = true } = {}) {
   if (!perfil) return '';
   const partes = [];
-  const energia = descreverCalibracaoEnergia(perfil.calibracao);
+  const energia = comEnergia ? descreverCalibracaoEnergia(perfil.calibracao) : '';
   if (energia) partes.push(energia);
   const stats = estatisticasCorrecoes(await correcoesEstimativaDe(perfil.jids));
   const corr = descreverCorrecoes(perfil.nome, stats);

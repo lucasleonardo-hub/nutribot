@@ -53,12 +53,19 @@ export function avaliarPresenca({ pontos = [], lugar, casa = null, duracao = 60 
   return { estado: 'incerto', minutosNoLugar: 0, pontos: pontos.length, motivo: 'pontos perto mas fora do raio, ou poucos pontos' };
 }
 
+/**
+ * Puro. O que a atividade soma ao gasto do relógio: o relógio já conta o TOTAL do dia (inclui o metabolismo de repouso das
+ * 24 h), então da atividade só entra o que passa do repouso, ~1 kcal por kg por hora (1 MET). Somar o MET bruto contava o
+ * basal dessas horas duas vezes (~150 kcal em 2 h de vôlei com 75 kg). Sem duração conhecida, vai o valor como veio.
+ */
+export const kcalLiquida = (kcal, minutos, peso) => Math.max(0, (Number(kcal) || 0) - (Number(minutos) > 0 ? ((Number(peso) > 0 ? Number(peso) : 70) * Number(minutos)) / 60 : 0));
+
 /** Puro. Soma o gasto das atividades feitas ao mapa de gastos do relógio (dia -> kcal); devolve o mesmo objeto relogio. */
 export function somarGastosExtras(relogio, feitas) {
   if (!relogio || !feitas) return relogio;
   relogio.gastos = { ...(relogio.gastos || {}) };
   for (const [dia, lista] of Object.entries(feitas)) {
-    const extra = (lista || []).reduce((a, f) => a + (f.kcal || 0), 0);
+    const extra = (lista || []).reduce((a, f) => a + kcalLiquida(f.kcal, f.minutos, relogio.peso), 0);
     if (extra > 0 && relogio.gastos[dia] != null) relogio.gastos[dia] = Math.round(relogio.gastos[dia] + extra);
   }
   return relogio;
@@ -91,14 +98,17 @@ async function registrar(perfil, dia, a, { feita, kcal = 0, minutos = 0, como, d
   for (const d of Object.keys(feitas)) if (d < agora().dia.slice(0, 8) + '01' && Object.keys(feitas).length > 60) delete feitas[d];
   const pendentes = (perfil.atividadesPendentes || []).filter((p) => !(p.id === a.id && p.dia === dia));
   const patch = { jids: perfil.jids, atividadesFeitas: feitas, atividadesPendentes: pendentes };
-  if (feita && kcal > 0 && perfil.relogio?.gastos) {
+  // no gasto do dia entra o LÍQUIDO (o que passa do repouso), o mesmo que somarGastosExtras soma quando o relógio sincroniza
+  // de novo: antes entrava o bruto aqui e o líquido depois da sincronização, e o mesmo dia mudava de gasto sozinho
+  const somadas = feita ? Math.round(kcalLiquida(kcal, minutos, perfil.relogio?.peso)) : 0;
+  if (somadas > 0 && perfil.relogio?.gastos) {
     const relogio = { ...perfil.relogio, gastos: { ...perfil.relogio.gastos } };
-    relogio.gastos[dia] = Math.round((relogio.gastos[dia] || 0) + kcal);
+    relogio.gastos[dia] = Math.round((relogio.gastos[dia] || 0) + somadas);
     patch.relogio = relogio;
   }
   await salvarPerfil(patch);
-  console.log(`[atividades] ${perfil.nome}: ${a.nome} ${dia} ${feita ? `FEITA (+${kcal} kcal, ${como})` : `não feita (${como})`}${detalhe ? ` — ${detalhe}` : ''}`);
-  return { feita, kcal };
+  console.log(`[atividades] ${perfil.nome}: ${a.nome} ${dia} ${feita ? `FEITA (${kcal} kcal, +${somadas} no gasto, ${como})` : `não feita (${como})`}${detalhe ? ` — ${detalhe}` : ''}`);
+  return { feita, kcal, somadas };
 }
 
 /**
@@ -154,7 +164,7 @@ export async function responderPendente(perfil, texto) {
   if (!a) return null;
   const minutos = duracaoMin(a);
   const r = await registrar(perfil, p.dia, a, { feita: resposta, kcal: kcalAtividade(a.met, perfil.peso, minutos), minutos, como: 'resposta' });
-  return r.feita ? `Anotado: ${a.nome} feito, somei uns *${r.kcal} kcal* no teu gasto de ${p.dia === agora(fusoDe(perfil)).dia ? 'hoje' : p.dia.slice(8, 10) + '/' + p.dia.slice(5, 7)}. 🏐` : `Anotado: sem ${a.nome} ${p.dia === agora(fusoDe(perfil)).dia ? 'hoje' : 'nesse dia'}. Gasto fica só o do relógio.`;
+  return r.feita ? `Anotado: ${a.nome} feito, somei uns *${r.somadas} kcal* no teu gasto de ${p.dia === agora(fusoDe(perfil)).dia ? 'hoje' : p.dia.slice(8, 10) + '/' + p.dia.slice(5, 7)} (o que passa do repouso, que o relógio já conta). 🏐` : `Anotado: sem ${a.nome} ${p.dia === agora(fusoDe(perfil)).dia ? 'hoje' : 'nesse dia'}. Gasto fica só o do relógio.`;
 }
 
 /**
@@ -174,13 +184,14 @@ export async function registrarRelato(perfil, relato, diaHoje) {
   // já estava registrada pela localização com valor diferente? o relato da pessoa manda: desfaz o anterior no gasto
   const anterior = (perfil.atividadesFeitas?.[dia] || []).find((f) => f.id === a.id);
   if (anterior?.kcal && perfil.relogio?.gastos?.[dia] != null) {
+    // desfaz o que tinha sido SOMADO (o líquido), não o bruto da atividade
     const relogio = { ...perfil.relogio, gastos: { ...perfil.relogio.gastos } };
-    relogio.gastos[dia] = Math.round(relogio.gastos[dia] - anterior.kcal);
+    relogio.gastos[dia] = Math.round(relogio.gastos[dia] - kcalLiquida(anterior.kcal, anterior.minutos, perfil.relogio.peso));
     await salvarPerfil({ jids: perfil.jids, relogio });
     perfil = { ...perfil, relogio };
   }
-  await registrar(perfil, dia, a, { feita, kcal, minutos, como: 'relato', detalhe: relato.inicio ? `disse que foi ${relato.inicio}–${relato.fim || '?'}` : 'disse na conversa' });
-  return feita ? `(${a.nome}: +${kcal} kcal no gasto de ${dia === diaHoje ? 'hoje' : dia})` : `(${a.nome}: sem ${dia === diaHoje ? 'hoje' : dia}, gasto só do relógio)`;
+  const r = await registrar(perfil, dia, a, { feita, kcal, minutos, como: 'relato', detalhe: relato.inicio ? `disse que foi ${relato.inicio}–${relato.fim || '?'}` : 'disse na conversa' });
+  return feita ? `(${a.nome}: +${r.somadas} kcal no gasto de ${dia === diaHoje ? 'hoje' : dia}, o que passa do repouso)` : `(${a.nome}: sem ${dia === diaHoje ? 'hoje' : dia}, gasto só do relógio)`;
 }
 
 /** No fechamento do dia: pergunta sem resposta vira "não feita (sem resposta)", pra não inflar o gasto. */
@@ -205,7 +216,7 @@ export function blocoAtividades(perfil, { dia, dow } = {}) {
   const pend = (perfil.atividadesPendentes || []).filter((p) => p.dia === dia);
   const st = (a) => {
     const f = feitas.find((x) => x.id === a.id);
-    if (f) return f.feita ? `FEITA hoje (+${f.kcal} kcal já somados no gasto)` : `NÃO houve hoje (${f.como === 'sem_resposta' ? 'sem resposta' : f.como === 'resposta' ? 'ela(e) disse' : 'pela localização'})`;
+    if (f) return f.feita ? `FEITA hoje (~${f.kcal} kcal da atividade; +${Math.round(kcalLiquida(f.kcal, f.minutos, perfil.relogio?.peso))} já somados no gasto, o que passa do repouso que o relógio já conta)` : `NÃO houve hoje (${f.como === 'sem_resposta' ? 'sem resposta' : f.como === 'resposta' ? 'ela(e) disse' : 'pela localização'})`;
     if (pend.some((p) => p.id === a.id)) return 'em dúvida, já perguntei; se ela(e) responder, o sistema anota';
     return 'ainda vai acontecer / ainda não conferi';
   };

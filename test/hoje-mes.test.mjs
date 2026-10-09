@@ -154,11 +154,20 @@ test('visaoPeriodo: 7/30 dias, peso e balanço energético contra o objetivo', (
   const pesagens = [{ dia: '2026-09-17', peso: 75.2 }, { dia: '2026-09-23', peso: 77 }];
   const gastos = { '2026-09-22': 2618, '2026-09-23': 2030 };
   const v = visaoPeriodo({ refeicoes, pesagens, perfil, dia: '2026-09-24', gastos });
-  assert.match(v, /ÚLTIMOS 7 DIAS: 3 de 7 dias com registro · média nos dias registrados 1\.490 kcal e proteína 79 g\/dia \(meta 123 a 169 g\) · peso 77 kg \(23\/09\)/);
-  assert.match(v, /ÚLTIMOS 30 DIAS: 4 de 30 dias com registro .* · peso 75,2 kg \(17\/09\) -> 77 kg \(23\/09\)/);
+  // a média de comida é dos dias FECHADOS (17 a 23/09): os 620 kcal de hoje, dia em andamento, ficam à parte. Antes entravam
+  // e a média dava 1.490; o certo é (2.200 + 1.650) / 2 = 1.925 kcal e (130 + 90) / 2 = 110 g de proteína
+  assert.match(v, /ÚLTIMOS 7 DIAS \(17\/09 a 23\/09, dias fechados; hoje fica à parte\): 2 de 7 dias com registro · média nos dias registrados 1\.925 kcal e proteína 110 g\/dia \(meta 123 a 169 g\) · peso 77 kg \(23\/09\)/);
+  assert.match(v, /ÚLTIMOS 30 DIAS \(25\/08 a 23\/09, dias fechados; hoje fica à parte\): 3 de 30 dias com registro .* · peso 75,2 kg \(17\/09\) -> 77 kg \(23\/09\)/);
   assert.match(v, /hoje até agora comeu 620 kcal no DIA INTEIRO \(soma de 1 refeição\(ões\), não o valor de uma delas\) \(o gasto de hoje só chega quando o relógio sincronizar\)/);
-  assert.match(v, /último dia completo \(23\/09\): comeu 1\.650 kcal, gastou 2\.030 kcal -> −380 kcal/);
-  assert.match(v, /média dos últimos 2 dias com os dois dados: −399 kcal\/dia; objetivo "hipertrofia" pede superávit de 250 a 500 kcal\/dia -> ABAIXO do alvo/);
+  // "último dia completo" é completo de verdade: 23/09 teve um registro só (1.650 kcal) e não é; fica 22/09 (revisão de 09/10:
+  // antes saía "último dia completo (23/09)" na mesma frase em que a média excluía 23/09 por estar incompleto)
+  assert.match(v, /último dia completo \(22\/09\): comeu 2\.200 kcal, gastou 2\.618 kcal -> −418 kcal/);
+  assert.doesNotMatch(v, /último dia completo \(23\/09\)/);
+  // balanço só com dias COMPLETOS (2+ registros): 23/09 teve um registro só e sai; fica 22/09: 2.200 − 2.618 = −418
+  assert.match(v, /média de 1 dia\(s\) completo\(s\) recente\(s\) com os dois dados: −418 kcal\/dia/);
+  // e o julgamento é o do !progresso com a meta provisória (comida contra gasto do relógio em 28 dias + objetivo), não o saldo
+  // do dia a dia contra a faixa sem margem: 2.200 contra 2.570 a 2.820 -> abaixo
+  assert.match(v, /JULGAMENTO pela meta provisória .*superávit de 250 a 500 kcal\/dia.*: últimos 1 dia\(s\) completo\(s\) com 2\.200 kcal\/dia contra 2\.570 kcal a 2\.820 kcal -> ABAIXO do alvo/);
   assert.equal(visaoPeriodo({ refeicoes: [], pesagens: [], perfil, dia: '2026-09-24' }), '');
   assert.deepEqual(metaBalanco('emagrecer e reduzir medidas').rotulo, 'déficit de 300 a 600 kcal/dia');
 });
@@ -204,6 +213,13 @@ test('gastoAdaptativo: calibrado com 10 dias completos e peso em queda', () => {
     for (let k = 0; k < 3; k++) refeicoes.push({ dia: d, estimativa: { kcal: 2000 / 3, p: 40 } });
     pesagens.push({ dia: d, peso: 80 - (0.5 / 7) * i });
   }
+  // revisão de 09/10: a calibração exige as mesmas pesagens que o veredito (6+ cobrindo 14+ dias). As 14 pesagens de 10 a
+  // 23/09 cobrem 13 dias: ainda não calibra, e o texto diz o que falta; com a pesagem da manhã de 24/09 (que fecha o dia 23)
+  // passa a cobrir 14 e calibra
+  const antes = gastoAdaptativo({ refeicoes, pesagens, perfil, dia: '2026-09-24' });
+  assert.notEqual(antes.status, 'calibrado');
+  assert.match(antes.texto, /precisa de 6\+ pesagens cobrindo 14\+ dias/);
+  pesagens.push({ dia: '2026-09-24', peso: 80 - (0.5 / 7) * 14 });
   const g = gastoAdaptativo({ refeicoes, pesagens, perfil, dia: '2026-09-24' });
   assert.equal(g.status, 'calibrado');
   assert.ok(Math.abs(g.gasto - 2550) <= 5, `gasto ${g.gasto}`); // 2000 + 0,5/7*7700 ≈ 2550
@@ -220,7 +236,8 @@ test('sequenciaDe e placarSemana', () => {
   assert.equal(sequenciaDe(refs, '2026-09-24'), 4);
   refs.push({ jid: 'b@s', dia: '2026-09-23', estimativa: { kcal: 400, p: 30 } });
   const placar = placarSemana(refs, perfis, ['2026-09-18', '2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24']);
-  assert.match(placar, /🥇 Lucas: 4 de 7 dias registrados por completo · proteína batida em 4 dia\(s\) · sequência atual 4 dia\(s\)/);
+  // "dias com as refeições registradas" (hábito de registro), pra não colidir com os "dias completos" das contas de calorias
+  assert.match(placar, /🥇 Lucas: 4 de 7 dias com as refeições registradas · proteína batida em 4 dia\(s\) · sequência atual 4 dia\(s\)/);
   assert.match(placar, /🥈 Alezinha: 0 de 7/);
 });
 
@@ -387,7 +404,12 @@ test('previsão de gasto de amanhã: mesmo dia da semana, ajuste pela meta adapt
   // meta adaptativa calibrada com gasto real 10% acima do relógio: corrige a previsão
   const ajustada = previsaoGastoAmanha({ gastos, dia: '2026-09-30', objetivo: 'Hipertrofia', metaAdaptativa: { status: 'calibrado', gasto: 2750 } });
   assert.ok(ajustada.previsto > 2650 && ajustada.previsto <= 3000);
-  assert.match(ajustada.texto, /ajustada pelo gasto real/);
+  assert.match(ajustada.texto, /corrigida pela balança \(x1,\d\d\)/);
+  // diferença grande: o gasto calibrado está na régua das fotos, então o texto não põe a diferença toda no relógio (revisão de
+  // 09/10: "o relógio marca 27% a menos do que o gasto real" ao lado do PROGRESSO dizendo que não dá pra separar)
+  const grande = previsaoGastoAmanha({ gastos, dia: '2026-09-30', objetivo: 'Hipertrofia', metaAdaptativa: { status: 'calibrado', gasto: 3400 } });
+  assert.match(grande.texto, /o gasto real é \d+% maior do que o relógio marca; vem do relógio baixo e\/ou das fotos altas, e os dados não separam as duas/);
+  assert.doesNotMatch(grande.texto, /a balança mostra que o relógio marca/);
   // sem relógio ou com poucos dias: nada
   assert.equal(previsaoGastoAmanha({ gastos: null, dia: '2026-09-30', objetivo: 'x' }), null);
   assert.equal(previsaoGastoAmanha({ gastos: { '2026-09-29': 2500 }, dia: '2026-09-30', objetivo: 'x' }), null);
@@ -408,19 +430,25 @@ test('visão 7/30 dias: critério único de "dia com registro" e formato em tóp
   const pesagens = [{ dia: '2026-09-23', peso: 77 }, { dia: '2026-09-26', peso: 75.7 }, { dia: '2026-09-29', peso: 75.7 }];
   const gastos = { '2026-09-27': 2400, '2026-09-28': 2500, '2026-09-29': 2515 };
   const v = calcularVisao({ refeicoes, pesagens, perfil, dia, gastos });
-  assert.equal(v.sete.comRegistro, 5); // dias com QUALQUER registro
-  assert.equal(v.sete.comEstimativa, 3); // média só sobre estes
+  // período de comida = 7 dias FECHADOS (22 a 28/09): hoje (29/09) fica à parte
+  assert.equal(v.sete.comRegistro, 4); // dias com QUALQUER registro: 25, 26, 27 e 28/09
+  assert.equal(v.sete.comEstimativa, 2); // média só sobre estes (27 e 28/09)
   assert.equal(Math.round(v.sete.kcal), 2700);
   assert.equal(v.sequencia, 5); // 5 dias completos seguidos (3 registros/dia), com ou sem estimativa
-  assert.equal(v.balanco.situacao, 'dentro'); // (2700-2400 + 2700-2500)/2 = +250 kcal/dia, no limite de baixo do alvo
+  // pela meta provisória (gasto do relógio em 28 dias = 2.450 + 250 a 500 = 2.700 a 2.950), a mesma régua do !progresso:
+  // 2.700 kcal/dia nos dias completos -> dentro (o saldo pelo relógio, +250, continua aparecendo como dado)
+  assert.equal(v.balanco.situacao, 'dentro');
+  assert.equal(v.balanco.situacaoRelogio, 'dentro'); // (2700-2400 + 2700-2500)/2 = +250 kcal/dia, no limite de baixo do alvo
   const zap = visaoZap({ refeicoes, pesagens, perfil, dia, gastos });
-  assert.match(zap, /^\*Últimos 7 dias\*\n• Registro: 5 de 7 dias\n• Média: 2\.700 kcal\/dia \(sobre 3 dias com estimativa\)\n• Proteína: 150 g\/dia \(meta 120 a 165 g\)\n• Peso: 77 kg \(23\/09\) → 75,7 kg \(29\/09\), −1,3 kg/m);
-  assert.match(zap, /\*Sequência\*\n• 5 dias seguidos com o dia completo/);
+  assert.match(zap, /^\*Últimos 7 dias\* \(22\/09 a 28\/09\)\n• Registro: 4 de 7 dias\n• Média: 2\.700 kcal\/dia \(sobre 2 dias com estimativa\)\n• Proteína: 150 g\/dia \(meta 120 a 165 g\)\n• Peso: 77 kg \(23\/09\) → 75,7 kg \(29\/09\), −1,3 kg/m);
+  // a sequência é do hábito de registrar (conta os dias sem estimativa); o nome não diz mais "dia completo", que nas contas de
+  // calorias é outra régua (revisão de 09/10: "22 dias seguidos com o dia completo" ao lado de "20 dias completos")
+  assert.match(zap, /\*Sequência\*\n• 5 dias seguidos registrando as refeições/);
   assert.match(zap, /\*Balanço energético\* \(relógio\)\n• Hoje: comeu 2\.700 kcal, gastou 2\.515 kcal\n• Saldo de hoje: \+185 kcal \(dia ainda incompleto\)/);
-  assert.match(zap, /• Últimos 2 dias: \+250 kcal\/dia\n• Objetivo pede: \+250 a \+500 kcal\/dia → no alvo ✅/);
+  assert.match(zap, /• Últimos 2 dias pelo relógio: \+250 kcal\/dia\n• Últimos 2 dias completos: 2\.700 kcal\/dia contra a meta provisória 2\.700 kcal a 2\.950 kcal → no alvo ✅/);
   // o texto do prompt continua com as dicas anti-confusão e o mesmo critério
   const prompt = visaoPeriodo({ refeicoes, pesagens, perfil, dia, gastos });
-  assert.match(prompt, /ÚLTIMOS 7 DIAS: 5 de 7 dias com registro · média nos dias registrados 2\.700 kcal e proteína 150 g\/dia \(meta 120 a 165 g\) \(média sobre os 3 dias com estimativa\)/);
+  assert.match(prompt, /ÚLTIMOS 7 DIAS \(22\/09 a 28\/09, dias fechados; hoje fica à parte\): 4 de 7 dias com registro · média nos dias registrados 2\.700 kcal e proteína 150 g\/dia \(meta 120 a 165 g\) \(média sobre os 2 dias com estimativa\)/);
   assert.match(prompt, /no DIA INTEIRO \(soma de 3 refeição\(ões\)/);
   assert.equal(visaoZap({ refeicoes: [], pesagens: [], perfil, dia }), '');
 });

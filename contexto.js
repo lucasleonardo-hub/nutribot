@@ -5,6 +5,7 @@
 import { colecao } from './mongo.js';
 import { visitasDeHoje, localDe } from './lugares.js';
 import { fusoDe } from './util.js';
+import { diasDeComida } from './progresso.js';
 
 // gasto estimado por MET quando o relógio não traz kcal da sessão (o Hevy grava a sessão sem calorias): MET × kg × h
 const MET_POR_NOME = [
@@ -275,11 +276,13 @@ export async function analiseForca(perfil, dia, { magraSem = null, faixa = null 
   const jids = perfil.jids || [];
   if (!jids.length) return { texto: '', prog: null, podePuxar: false, sugestoes: [] };
   const desde8 = new Date(new Date(`${dia}T12:00:00Z`).getTime() - 56 * 86400_000).toISOString();
-  const [sessoes, rel, refs14] = await Promise.all([
+  const diaMenos = (n) => new Date(new Date(`${dia}T12:00:00Z`).getTime() - n * 86400_000).toISOString().slice(0, 10);
+  const [sessoes, rel, refs28] = await Promise.all([
     colecao('treinos').find({ jid: { $in: jids }, inicio: { $gte: desde8 } }).toArray().catch(() => []),
     colecao('saude_relogio').findOne({ _id: jids[0] }, { projection: { sonos: { $slice: -7 }, fcRepouso: 1, fcMedia: 1, recuperacao: 1 } }).catch(() => null),
-    colecao('refeicoes').find({ jid: { $in: jids }, dia: { $gte: new Date(new Date(`${dia}T12:00:00Z`).getTime() - 13 * 86400_000).toISOString().slice(0, 10), $lte: dia } }).toArray().catch(() => []),
+    colecao('refeicoes').find({ jid: { $in: jids }, dia: { $gte: diaMenos(28), $lte: dia } }).toArray().catch(() => []),
   ]);
+  const refs14 = refs28.filter((r) => r.dia >= diaMenos(13));
   if (!sessoes.length) return { texto: '', prog: null, podePuxar: false, sugestoes: [] };
   const prog = progressaoForca(sessoes, { dia });
   // sugestões de carga abertas (feitas no domingo) conferidas contra o Hevy desde então
@@ -287,15 +290,10 @@ export async function analiseForca(perfil, dia, { magraSem = null, faixa = null 
   const txtSug = textoSugestoesCarga(sugestoes, { hoje: dia });
   const sonos = (rel?.sonos || []).filter((s) => s.total);
   const sonoMedioMin = sonos.length ? Math.round(sonos.reduce((a, s) => a + s.total, 0) / sonos.length) : null;
-  const ult7 = refs14.filter((r) => r.dia > new Date(new Date(`${dia}T12:00:00Z`).getTime() - 7 * 86400_000).toISOString().slice(0, 10));
-  const porDia = new Map();
-  for (const r of ult7) {
-    const d = porDia.get(r.dia) || { kcal: 0, p: 0 };
-    d.kcal += r.estimativa?.kcal || 0;
-    d.p += r.estimativa?.p || 0;
-    porDia.set(r.dia, d);
-  }
-  const diasRef = [...porDia.values()].filter((d) => d.kcal >= 1000);
+  // 7 dias FECHADOS e completos (critério único do progresso.js, com a mediana dos 28 dias como no !progresso e na meta
+  // adaptativa): o dia de hoje pela metade puxava a média pra baixo e a leitura saía "calorias abaixo da faixa: comida
+  // primeiro" no meio da tarde
+  const diasRef = diasDeComida(refs28, { dia, de: diaMenos(28) }).completos.filter((c) => c.dia >= diaMenos(7));
   const kcalMedia = diasRef.length ? Math.round(diasRef.reduce((a, d) => a + d.kcal, 0) / diasRef.length) : null;
   const pMedia = diasRef.length ? Math.round(diasRef.reduce((a, d) => a + d.p, 0) / diasRef.length) : null;
   const peso = Number(perfil.peso) || 0;
@@ -305,13 +303,17 @@ export async function analiseForca(perfil, dia, { magraSem = null, faixa = null 
   // leitura em código, na ordem do conhecimento: sono -> comida -> composição -> estímulo
   const leitura = [];
   const sonoCurto = sonoMedioMin != null && sonoMedioMin < 390;
-  const comidaBaixa = (faixa && kcalMedia != null && kcalMedia < faixa.min) || (pAlvo && pMedia != null && pMedia < pAlvo);
+  // calorias "abaixo" só fora da incerteza da meta (a mesma folga do !progresso; 100 kcal sem calibração): 3.850 contra um
+  // piso de 3.910 com ±600 de incerteza saía "comida primeiro" aqui e "dentro" no PROGRESSO (revisão de 09/10)
+  const folgaKcal = faixa ? Math.max(100, Number(faixa.folga) || 0) : 0;
+  const kcalBaixa = Boolean(faixa && kcalMedia != null && kcalMedia < faixa.min - folgaKcal);
+  const comidaBaixa = kcalBaixa || (pAlvo && pMedia != null && pMedia < pAlvo);
   const recupRuim = rel?.recuperacao && /segur|alta|acima/i.test(String(rel.recuperacao));
   if (prog.caindo.length >= 3 && (sonoCurto || recupRuim)) leitura.push(`carga caindo em ${prog.caindo.length} exercícios com ${sonoCurto ? `sono médio ${hs(sonoMedioMin)}` : 'batimento de repouso acima da média'}: sinal de deload/descanso, não de puxar`);
   if (prog.parados.length) {
     const nomes = prog.parados.slice(0, 3).map((e) => `${e.title} (${fmtKg(e.melhor)} kg há ${e.semanasParado} sem.)`).join(', ');
     if (sonoCurto) leitura.push(`carga parada em ${prog.parados.length} exercício(s) [${nomes}] e sono médio ${hs(sonoMedioMin)} na semana: recuperação primeiro, carga depois`);
-    else if (comidaBaixa) leitura.push(`carga parada em ${prog.parados.length} exercício(s) [${nomes}] e ${kcalMedia != null && faixa && kcalMedia < faixa.min ? `calorias abaixo da faixa (${kcalMedia} vs ${faixa.min})` : `proteína abaixo da meta (${pMedia} g vs ${pAlvo} g)`}: comida primeiro`);
+    else if (comidaBaixa) leitura.push(`carga parada em ${prog.parados.length} exercício(s) [${nomes}] e ${kcalBaixa ? `calorias abaixo da faixa (${kcalMedia} vs ${faixa.min}${folgaKcal > 100 ? `, incerteza da meta ±${Math.round(folgaKcal)}` : ''})` : `proteína abaixo da meta (${pMedia} g vs ${pAlvo} g)`}: comida primeiro`);
     else if (magraSem != null && magraSem < 0.05) leitura.push(`carga parada em ${prog.parados.length} exercício(s) [${nomes}] com massa magra parada: superávit virando gordura? ajustar composição do prato antes de carga`);
     else leitura.push(`carga parada em ${prog.parados.length} exercício(s) [${nomes}] com sono${sonoMedioMin != null ? ` ${hs(sonoMedioMin)}` : ''}, comida e massa magra em dia: pode PUXAR (+1,25 a 2,5 kg, ou +1 a 2 repetições, uma mudança por vez)`);
   }

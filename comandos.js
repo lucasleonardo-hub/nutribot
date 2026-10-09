@@ -10,7 +10,7 @@ import { notasDe, listarDocumentosDe } from './pessoas.js';
 import { reservasDisponiveis } from './reservas.js';
 import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS, diasAnteriores } from './util.js';
 import { resumirHoje, formatarEstimativaLinhas, lerTipoRefeicao, gastoAdaptativo, acharRegistro, nomeDoSlot, padraoAlimentar, repertorioDoGrupo, semanaDoPlano, previsaoSemana } from './resumo.js';
-import { visaoDe } from './acompanhamento.js';
+import { visaoDe, progressoDe } from './acompanhamento.js';
 import { lembrar } from './dia.js';
 import { estado } from './estado.js';
 import { enviar, enviarImagem } from './whatsapp.js';
@@ -29,12 +29,12 @@ import { pensamentosZap, pensarSobre } from './pensamentos.js';
 import { linhaDeTendencia } from './previsao.js';
 import { tendenciaCompleta } from './tendencia.js';
 import { resumoProatividade } from './proatividade.js';
-import { metaBalancoPara, tendenciaGordura } from './resumo.js';
+import { faixaDaMeta } from './resumo.js';
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
 export const AJUDA =
-  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !despensa (o que você tem em casa, pelas fotos dos cupons do mercado que você me manda: itens padronizados, validade e tabela nutricional; !despensa add 2 kg arroz; !despensa tirar iogurte; !despensa acabando leite; ou é só me dizer "acabou o iogurte"), !nota (explica como entra a compra: foto do cupom), !atividade (esporte fixo sem relógio, ex.: vôlei seg e qua 20h–22h: eu confiro pela localização se você foi e somo o gasto estimado; !atividade nova Vôlei; seg,qua; 20:00-22:00; met 6; aqui | lugar UFSC; !atividade sim/não responde quando eu perguntar; !atividade remover 1), !tendencia (sua linha de tendência pessoal pela bioimpedância: peso, gordura e massa magra por semana, ritmo e se está no caminho do alvo), !pensamentos (o que eu andei pensando sobre você hoje: penso 3x por dia, em silêncio, quando há dado novo; !pensamentos agora força um), !reflexao (como eu te entendo hoje: a síntese da minha reflexão livre sobre você, reescrita aos domingos em Nutri-Reflexoes.md na sua pasta; !reflexao nova reescreve agora), !lugares (se você ligou a localização no app: onde está agora e os lugares que frequenta, com o padrão da semana; !lugares casa, !lugares aqui é academia X, !lugares esquecer), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras e dicas de compra barata, só com as refeições que você costuma registrar e com a meta de cada dia da semana; de sexta a domingo é o plano da semana que vem; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar; toda sexta ao meio-dia eu pergunto quem quer e basta responder "quero"), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
+  'Comandos: !refeicao café 2 ovos e 1 banana (registra à mão uma refeição que ficou sem registro; tipo opcional), !apagar 11:03 (apaga um registro seu de hoje pela hora do !hoje; !apagar ultimo), !hoje (seus totais do dia, meta e sequência; !hoje todos = grupo inteiro), !grafico (peso, calorias, gasto e meta dos últimos 30 dias em imagem; !grafico todos), !treino (séries por grupo, volume e progressão de carga da semana, pelo Hevy), !relogio (o que chegou do seu celular: passos, sono e peso de hoje, último envio), !despensa (o que você tem em casa, pelas fotos dos cupons do mercado que você me manda: itens padronizados, validade e tabela nutricional; !despensa add 2 kg arroz; !despensa tirar iogurte; !despensa acabando leite; ou é só me dizer "acabou o iogurte"), !nota (explica como entra a compra: foto do cupom), !atividade (esporte fixo sem relógio, ex.: vôlei seg e qua 20h–22h: eu confiro pela localização se você foi e somo o gasto estimado; !atividade nova Vôlei; seg,qua; 20:00-22:00; met 6; aqui | lugar UFSC; !atividade sim/não responde quando eu perguntar; !atividade remover 1), !progresso (como está o seu ritmo de peso, com as contas abertas: período, pesagens, tendência com a margem de erro, alvo, veredito, comida registrada x balança, meta de calorias calibrada pela balança, alertas e limites), !tendencia (sua linha de tendência pessoal pela bioimpedância: peso, gordura e massa magra por semana, ritmo e a projeção até a etapa),!pensamentos (o que eu andei pensando sobre você hoje: penso 3x por dia, em silêncio, quando há dado novo; !pensamentos agora força um), !reflexao (como eu te entendo hoje: a síntese da minha reflexão livre sobre você, reescrita aos domingos em Nutri-Reflexoes.md na sua pasta; !reflexao nova reescreve agora), !lugares (se você ligou a localização no app: onde está agora e os lugares que frequenta, com o padrão da semana; !lugares casa, !lugares aqui é academia X, !lugares esquecer), !agenda (seus compromissos de hoje e amanhã e as janelas livres), !plano (plano da semana + lista de compras e dicas de compra barata, só com as refeições que você costuma registrar e com a meta de cada dia da semana; de sexta a domingo é o plano da semana que vem; !plano orçamento apertado, só mercado de bairro = observação que fica guardada; !plano limpar; toda sexta ao meio-dia eu pergunto quem quer e basta responder "quero"), !voz (liga/desliga minhas notas de voz de segunda, sexta e as espontâneas; pedir "em áudio" sempre funciona), !apelido X (fixa seu apelido; !apelido nenhum tira), !silencio 2h (não entro em papo por um tempo; !falar cancela), !id, !nome NovoNome (me rebatiza), !perfil, !dossie (sua pasta no Drive e minhas notas sobre você), !persona (o que eu já sei de vocês), !licoes (meu caderno de aprendizado: erros que cometi, causas e as regras que adotei), !fontes (o que eu estudei), !estudar (revisa a base com estudos novos), !status (conexão, cota do Gemini e modelos), !reset, !resumo (fecha o dia agora), !ajuda';
 
 /** "2h", "30m", "1h30", "90" (minutos) -> ms; null se não entendeu */
 export function duracaoDe(texto) {
@@ -545,15 +545,26 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
     }
     try {
       const pes = await pesagensDesde(perfil.jids, diasAnteriores(dia, 60)[0]).catch(() => []);
-      const pesoAtual = [...pes].sort((a, b) => a.dia.localeCompare(b.dia)).pop()?.peso || perfil.peso;
-      const faixa = metaBalancoPara({ objetivo: perfil.objetivo, peso: pesoAtual, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia, ritmo: perfil.ritmo, metaModo: perfil.metaModo, gorduraTend: tendenciaGordura(pes.filter((p) => p.dia >= diasAnteriores(dia, 28)[0])) });
+      const faixa = faixaDaMeta(perfil, dia, pes);
       // linha completa: passado (todas as semanas com pesagem), ritmo pela balança e pela comida, projeção semana a semana até a etapa
       const t = (await tendenciaCompleta(perfil, dia).catch(() => null)) || linhaDeTendencia({ pesagens: pes, perfil, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
-      await enviar(jidGrupo, t ? t.zap : 'Ainda não tenho pesagens suficientes pra uma tendência (preciso de pelo menos 4 em 10 dias ou mais). Sobe na balança do relógio que eu monto.', msg, { rapido: true });
+      await enviar(jidGrupo, t ? `${t.zap}\n\n_(as contas do veredito, comida x balança e a meta calibrada: !progresso)_` : 'Ainda não tenho pesagens suficientes pra uma tendência (preciso de pelo menos 4 em 10 dias ou mais). Sobe na balança do relógio que eu monto.', msg, { rapido: true });
     } catch (e) {
       console.error('[tendencia]', e.message);
       await enviar(jidGrupo, 'Não consegui montar a tendência agora.', msg, { rapido: true });
     }
+    return true;
+  }
+  if (cmd === '!progresso') {
+    // o relatório que dá pra conferir: período, pesagens, tendência com intervalo, alvo, veredito, comida x balança, meta
+    // calibrada, alertas e limites (progresso.js; o mesmo veredito do !hoje, do !tendencia e do que a IA recebe)
+    const perfil = await buscarPerfil(jids);
+    if (!perfil?.onboarded) {
+      await enviar(jidGrupo, SEM_CADASTRO, msg);
+      return true;
+    }
+    const a = await progressoDe(perfil, dia);
+    await enviar(jidGrupo, a ? a.zap : 'Não consegui montar o progresso agora.', msg, { rapido: true });
     return true;
   }
 

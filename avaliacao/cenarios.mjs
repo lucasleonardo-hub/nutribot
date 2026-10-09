@@ -23,6 +23,36 @@ export const PERFIS = {
   semGenero: { nome: 'Rafa', jids: ['r@s.whatsapp.net'], peso: 70, altura: 170, objetivo: 'manter o peso', cidade: 'Florianópolis', fuso: 'America/Sao_Paulo', dieta: 'onívora', onboarded: true },
 };
 
+// ---------- progresso de peso (progresso.js): análises montadas com dados de mentira, no formato que o prompt recebe ----------
+import { analisarProgresso, somarDias } from '../progresso.js';
+const FAIXA_GANHO = { ritmoKgSemana: 0.36, min: 300, max: 500, rotulo: 'superávit de ~400 kcal/dia (+0,36 kg/semana rumo a 76 kg) [etapa]', fonte: 'meta' };
+// forma do caso real de 09/10/2026 (26 pesagens de relógio em 27 dias, 22 dias com registro), com pesos deslocados e
+// calorias arredondadas: tendência ~+0,2 kg/semana com incerteza larga, registro ~+900 kcal/dia acima do relógio que a
+// balança não acompanha, e +1,4 kg nos últimos 6 dias
+const PESOS_FORMA = [70.3, 70.7, 70.4, 71.7, 71.2, 71.9, null, 71.3, 71.7, 71.7, 73.0, 71.7, 71.9, 71.7, 71.3, 71.1, 71.7, 72.9, 71.8, 71.3, 71.0, 71.0, 71.0, 71.1, 72.2, 72.1, 72.4];
+const KCAL_FORMA = { 4: [1300, 2], 5: 3150, 6: [2100, 3], 7: 2950, 8: 2850, 9: 3550, 10: 3350, 11: 3500, 12: 2900, 13: 3000, 14: 3750, 15: 2700, 16: 4250, 17: 3650, 18: 3300, 19: 3650, 20: 3300, 21: 3350, 22: 4400, 23: 4750, 24: 4500, 25: 4150 };
+const GASTO_FORMA = [1750, 2700, 2700, 3500, 2800, 2550, 2100, 1800, 2650, 2700, 2400, 3100, 2500, 1700, 1800, 2650, 2600, 3850, 2500, 2550, 2100, 1900, 3500, 3050, 3450, 3700, 2350];
+const PERFIL_FORMA = { peso: 72.4, metaPeso: 76, metaPrazo: null };
+function analiseFormaReal(dia, perfil) {
+  const base = somarDias(dia, -26);
+  const pesagens = PESOS_FORMA.map((p, i) => (p == null ? null : { dia: somarDias(base, i), peso: p, fonte: 'relogio' })).filter(Boolean);
+  const refeicoes = [];
+  for (const [i, v] of Object.entries(KCAL_FORMA)) {
+    const [kcal, n] = Array.isArray(v) ? v : [v, 5];
+    for (let k = 0; k < n; k++) refeicoes.push({ dia: somarDias(base, Number(i)), estimativa: { kcal: kcal / n, p: 35 } });
+  }
+  const gastos = Object.fromEntries(GASTO_FORMA.map((g, i) => [somarDias(base, i), g]));
+  return analisarProgresso({ perfil: { ...perfil, ...PERFIL_FORMA }, dia, pesagens, refeicoes, gastos, faixa: FAIXA_GANHO });
+}
+function analisePoucasPesagens(dia, perfil) {
+  const pesagens = [0, 1, 3, 4, 5].map((i) => ({ dia: somarDias(dia, -i), peso: 72.4 - i * 0.1, fonte: 'relogio' }));
+  return analisarProgresso({ perfil: { ...perfil, ...PERFIL_FORMA }, dia, pesagens, faixa: FAIXA_GANHO });
+}
+function analiseEstavel(dia, perfil) {
+  const pesagens = Array.from({ length: 28 }, (_, i) => ({ dia: somarDias(dia, -i), peso: Math.round((72.4 + 0.12 * Math.sin(i * 2.1)) * 10) / 10, fonte: 'relogio' }));
+  return analisarProgresso({ perfil: { ...perfil, ...PERFIL_FORMA }, dia, pesagens, faixa: FAIXA_GANHO });
+}
+
 const bot = (hora, texto) => ({ hora, nome: 'Dona Benta', texto, tipo: 'bot' });
 const fala = (hora, nome, texto, jid) => ({ hora, nome, texto, tipo: 'texto', jid });
 
@@ -237,5 +267,47 @@ export const CENARIOS = [
     id: 'C47', categoria: 'incerteza', titulo: 'quantidade invisível pede UMA pergunta e marca incerteza', quem: 'ale', hora: '08:40',
     texto: 'café da manhã: pão com queijo e café',
     perguntaOuIncerteza: true,
+  },
+  // ---------- progresso de peso (09/10/2026: "abaixo do ganho esperado" comendo acima da meta) ----------
+  // `progresso(dia, perfil)` monta a análise (progresso.js); o runner põe analise.texto no acompanhamento e aplica a guarda
+  // de contradição como em produção. `semContradicao` reprova resposta que contradiz as contas.
+  {
+    id: 'P01', categoria: 'progresso', titulo: '"como está meu progresso?" responde com período, pesagens, tendência com margem, alvo e veredito', quem: 'lucas', hora: '06:51',
+    texto: 'como está meu progresso?',
+    progresso: analiseFormaReal,
+    perfil: PERFIL_FORMA,
+    semContradicao: true,
+    semBlocoRefeicao: true,
+    deve: [/pesage/i, /0,36|36/, /(±|entre|margem|incerte|prov[áa]vel)/i, /balan[çc]a/i],
+    naoDeve: [/comendo (al[ée]m|demais|acima)/i, /d[ée]ficit cal/i, /refei[çc][ãa]o (esquecida|sem registro)/i, /exatamente|com certeza/i],
+  },
+  {
+    id: 'P02', categoria: 'progresso', titulo: 'a queixa real: "abaixo do ganho esperado" comendo acima da meta vira explicação da contradição', quem: 'lucas', hora: '10:30',
+    texto: 'pq vc disse que eu to abaixo do ganho esperado se eu como acima da meta todo dia?',
+    progresso: analiseFormaReal,
+    perfil: PERFIL_FORMA,
+    semContradicao: true,
+    semBlocoRefeicao: true,
+    deve: [/rel[óo]gio/i, /balan[çc]a/i, /(foto|estimativ|registr)/i],
+    naoDeve: [/refei[çc][ãa]o (esquecida|sem registro)|esqueceu de registrar/i, /d[ée]ficit cal/i, /comendo al[ée]m do objetivo/i],
+  },
+  {
+    id: 'P03', categoria: 'progresso', titulo: 'poucas pesagens: não crava ritmo', quem: 'lucas', hora: '09:00',
+    texto: 'to ganhando peso no ritmo certo?',
+    progresso: analisePoucasPesagens,
+    perfil: PERFIL_FORMA,
+    semContradicao: true,
+    semBlocoRefeicao: true,
+    deve: [/(ainda|poucas|pouco tempo|cedo|mais (umas? )?(semanas?|pesagens)|n[ãa]o d[áa] pra (cravar|dizer|julgar))/i],
+    naoDeve: [/abaixo do ritmo/i, /\b(sim|t[áa]|est[áa]),? no ritmo\b/i],
+  },
+  {
+    id: 'P04', categoria: 'progresso', titulo: 'peso estável (intervalo estreito) não vira "caindo"', quem: 'lucas', hora: '19:10',
+    texto: 'meu peso tá caindo?',
+    progresso: analiseEstavel,
+    perfil: PERFIL_FORMA,
+    semContradicao: true,
+    semBlocoRefeicao: true,
+    deve: [/est[áa]vel|parad|n[ãa]o (est[áa] |t[áa] )?caindo|n[ãa]o caiu|mesmo lugar/i],
   },
 ];

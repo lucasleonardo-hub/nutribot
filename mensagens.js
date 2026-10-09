@@ -3,7 +3,7 @@
 
 import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, apagarRefeicaoPorId, registrarHabito, registrarCorrecao, pesagensDesde } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, apagarRefeicaoPorId, registrarHabito, registrarCorrecao, pesagensDesde, refeicoesDesde } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
@@ -28,8 +28,9 @@ import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
 import { responderPendente, registrarRelato } from './atividades.js';
 import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, confirmacaoNota, aplicarLinhaDespensa, blocoDespensa, testarConsultaSefaz, parsearTextoNfce, receberNotaDoApp } from './despensa.js';
 import { blocoForcaRecuperacao } from './contexto.js';
-import { metaBalancoPara, tendenciaGordura } from './resumo.js';
+import { faixaDaMeta, gastoAdaptativo } from './resumo.js';
 import { linhaDeTendencia } from './previsao.js';
+import { conferirTextoProgresso, problemaDeProgresso, pareceProgresso, rotaPerguntaProgresso, tirarFrases } from './progresso.js';
 
 // a pessoa está falando de treino, carga, platô, recuperação ou suplemento? aí o bloco FORÇA x RECUPERAÇÃO entra
 const RE_TREINO = /\b(treino|treinei|treinar|academia|carga|peso (no|na|do) (supino|agach|exerc)|supino|agachamento|levantamento|terra|remada|puxada|repeti[çc][õo]es|s[ée]ries?|plat[ôo]|estagn|evolu[çc][ãa]o|progress|for[çc]a|recupera[çc][ãa]o|descanso|deload|dor muscular|creatina|whey|hipercal[óo]rico|suplemento|hevy|rpe)\b/i;
@@ -168,13 +169,15 @@ function perguntaRecenteDe(jid, hora) {
 const imagemMsg = (m) => Boolean(extractMessageContent(m?.message)?.imageMessage);
 /** Bloco FORÇA x RECUPERAÇÃO com a faixa e a massa magra da pessoa (pesagens de 60 dias). */
 async function blocoForcaDe(perfil, dia) {
-  const pes = await pesagensDesde(perfil.jids, diasAnteriores(dia, 60)[0]).catch(() => []);
-  const pesoAtual = [...pes].sort((a, b) => a.dia.localeCompare(b.dia)).pop()?.peso || perfil.peso;
-  const faixa = metaBalancoPara({ objetivo: perfil.objetivo, peso: pesoAtual, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia, ritmo: perfil.ritmo, metaModo: perfil.metaModo, gorduraTend: tendenciaGordura(pes.filter((p) => p.dia >= diasAnteriores(dia, 28)[0])) });
+  const desde30 = diasAnteriores(dia, 30)[0];
+  const [pes, refs] = await Promise.all([pesagensDesde(perfil.jids, diasAnteriores(dia, 60)[0]).catch(() => []), refeicoesDesde(perfil.jids, desde30).catch(() => [])]);
+  const faixa = faixaDaMeta(perfil, dia, pes);
   const tend = linhaDeTendencia({ pesagens: pes, perfil, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null, semanas: 4 });
-  const gasto = perfil.relogio?.gastos ? Object.values(perfil.relogio.gastos).slice(-14).filter(Boolean) : [];
-  const gastoMedio = gasto.length ? gasto.reduce((a, b) => a + b, 0) / gasto.length : null;
-  const faixaKcal = faixa && gastoMedio ? { min: Math.round(gastoMedio + faixa.min), max: Math.round(gastoMedio + faixa.max) } : null;
+  // faixa de calorias = a meta adaptativa (calibrada pela balança quando dá; a mesma do !hoje e do !progresso). Até 09/10 era
+  // relógio cru + superávit, ~600 kcal abaixo do que a balança pedia, e a leitura "comida baixa" saía trocada
+  const meta = gastoAdaptativo({ refeicoes: refs, pesagens: pes.filter((p) => p.dia >= desde30), perfil, dia, gastos: perfil.relogio?.gastos });
+  // com a folga da incerteza da meta (a mesma do !progresso), pra "calorias abaixo da faixa" não sair onde o PROGRESSO diz "dentro"
+  const faixaKcal = meta?.alvo ? { min: meta.alvo.min, max: meta.alvo.max, folga: meta.status === 'calibrado' && meta.folga ? meta.folga : 100 } : null;
   return blocoForcaRecuperacao(perfil, dia, { magraSem: tend?.magraSem ?? null, faixa: faixaKcal });
 }
 function textoDe(m) {
@@ -474,7 +477,8 @@ export function prioridade({ texto, temImagem, temAudio, conteudo }) {
   if (ctx?.stanzaId && enviadosPeloBot.has(ctx.stanzaId)) return 'resposta-a-ela';
   if (ctx?.participant && meusJids().includes(jidNormalizedUser(ctx.participant))) return 'resposta-a-ela';
   if ((ctx?.mentionedJid || []).some((j) => meusJids().includes(jidNormalizedUser(j)))) return 'mencao';
-  if (ASSUNTO_DELA.test(texto)) return 'assunto';
+  // pergunta de progresso sem "?" ("como está meu progresso") é assunto dela: vai pelo caminho completo, com os números
+  if (ASSUNTO_DELA.test(texto) || pareceProgresso(texto)) return 'assunto';
   return null; // papo aleatório
 }
 
@@ -892,7 +896,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(textoDecisao)));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao), forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  // pergunta de progresso (responde com o bloco PROGRESSO DE PESO, sem registrar nada): a regra está em progresso.js, a mesma
+  // que a avaliação importa (nunca quando a mensagem também conta refeição, corrige registro, contesta ou continua a refeição)
+  const perguntaProgresso = rotaPerguntaProgresso({ texto, temImagem, temAudio, metaConversa, contestacao, emAndamento });
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -1007,9 +1014,25 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     if (!problema && termosErrados.length) {
       problema = `sua resposta para ${perfil.nome.split(' ')[0]} usou vocabulário do objetivo OPOSTO ao dela(e): ${termosErrados.join(', ')}. O objetivo de ${perfil.nome.split(' ')[0]} é "${eu.objetivo}". Reescreva sem esses termos, com veredito, dica e [[links]] alinhados a ESSE objetivo.`;
     }
+    // (d) progresso, em código: a resposta contradiz as contas do bloco PROGRESSO DE PESO (peso "caindo" com a tendência
+    // subindo, "no ritmo" com o veredito abaixo, "comendo além do objetivo" quando a balança não acompanha o registro)
+    // (só quando o bloco foi mesmo pro prompt desta resposta: visaoDe deixa a análise em eu._progresso junto com o texto)
+    const progresso = String(visao || '').includes('PROGRESSO DE PESO') ? eu._progresso : null;
+    const sobreProgresso = !problema && progresso ? conferirTextoProgresso(resposta, progresso) : [];
+    // análise de prato (foto ou bloco de refeição) com uma frase de progresso contraditória: tira a frase em vez de refazer
+    // tudo. Refazer mandava a foto de novo, podia trocar a estimativa registrada e devolvia relatório de progresso no lugar
+    // da análise do prato (revisão de 09/10)
+    const temBlocoRefeicao = temImagem || /Refei[cç][aã]o:|O que eu vi|🔥\s*\*?Estimativa/i.test(resposta || '');
+    if (sobreProgresso.length && temBlocoRefeicao) {
+      resposta = tirarFrases(resposta, sobreProgresso.map((x) => x.frase));
+      console.warn(`[consciencia] análise de refeição de ${perfil.nome} com frase de progresso contraditória: frase retirada (${sobreProgresso.map((x) => x.tipo).join(', ')})`);
+    } else if (sobreProgresso.length) problema = problemaDeProgresso(sobreProgresso);
     if (problema) {
       console.warn(`[consciencia] resposta barrada e refeita: ${problema.slice(0, 200)}`);
-      const aviso = `\n\nCONFERÊNCIA DO SISTEMA (feita ANTES de enviar sua resposta anterior, que foi barrada): ${problema} Reescreva a resposta usando SÓ os números do bloco "REFEIÇÕES JÁ REGISTRADAS HOJE"; se a pessoa tiver razão, ceda e corrija (linha REGISTRO quando for registro). Não mencione esta conferência.`;
+      const comoRefazer = sobreProgresso.length
+        ? 'Reescreva só o que fala de peso, ritmo ou meta, usando os números do bloco PROGRESSO DE PESO do acompanhamento (período, pesagens, tendência com a incerteza, alvo, veredito e alertas), sem recalcular; o resto da resposta fica como estava.'
+        : 'Reescreva a resposta usando SÓ os números do bloco "REFEIÇÕES JÁ REGISTRADAS HOJE"; se a pessoa tiver razão, ceda e corrija (linha REGISTRO quando for registro).';
+      const aviso = `\n\nCONFERÊNCIA DO SISTEMA (feita ANTES de enviar sua resposta anterior, que foi barrada): ${problema} ${comoRefazer} Não mencione esta conferência.`;
       const r3 = await ia.responder({ ...base, rotulos: rotulosAtuais, jaPesquisou: true, conhecimento: `${conhecimento || ''}${aviso}` }).catch(() => null);
       if (r3?.texto) {
         resposta = r3.texto;
@@ -1028,6 +1051,15 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       if (aindaErrados.length) {
         resposta = removerFrasesCom(resposta, aindaErrados);
         console.warn(`[consciencia] frases com objetivo trocado removidas da resposta pra ${perfil.nome}: ${aindaErrados.join(', ')}`);
+      }
+      // progresso ainda contraditório depois de refazer: vai a resposta com o veredito calculado junto, pra pessoa não ficar
+      // com a versão errada (as contas completas estão no !progresso)
+      if (sobreProgresso.length) {
+        const ainda = conferirTextoProgresso(resposta, progresso);
+        if (ainda.length) {
+          resposta = `${String(resposta || '').trim()}\n\n📏 _Conferindo nas contas: ${progresso.vereditoCurto} (contas completas: !progresso)_`;
+          console.warn(`[consciencia] progresso ainda contraditório depois de refazer (${ainda.map((x) => x.tipo).join(', ')}): veredito calculado anexado`);
+        }
       }
     }
   }

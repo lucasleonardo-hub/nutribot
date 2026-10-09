@@ -10,15 +10,16 @@ import * as ia from './gemini.js';
 import { atualizarConhecimento, docsPara } from './conhecimento.js';
 import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
 import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo, placarSemana } from './resumo.js';
-import { visaoDe } from './acompanhamento.js';
+import { visaoDe, progressoDe } from './acompanhamento.js';
 import { linhaSemanaLugares, ondeMora } from './lugares.js';
 import { refletirTodos } from './reflexao.js';
 import { fecharPendentes } from './atividades.js';
 import { contextoDoDia, contextoDoDiaDeTodos, analiseForca, gerarSugestoesCarga, textoSugestoesCarga } from './contexto.js';
-import { preverSemana, conferirPrevisao, avaliarRitmo, projetarMeta, linhaDeTendencia } from './previsao.js';
+import { preverSemana, conferirPrevisao, linhaDeTendencia } from './previsao.js';
 import { tendenciaCompleta } from './tendencia.js';
-import { calibrarNoDomingo, descreverCalibracaoEnergia } from './calibracao.js';
-import { proporEtapa, metaBalancoPara, tendenciaGordura } from './resumo.js';
+import { calibrarNoDomingo } from './calibracao.js';
+import { proporEtapa, faixaDaMeta, pesoDeReferencia } from './resumo.js';
+import { validarPesagens } from './progresso.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
 import { configGrafico, renderizar } from './graficos.js';
@@ -352,27 +353,28 @@ export async function fecharSemana({ dia, perfis, grupo }) {
           console.log(`[previsao] ${p.nome}: ${conf.acerto || 'sem pesagem'} (previu ${anterior.deltaKg?.toFixed?.(2)} kg, deu ${conf.realKg?.toFixed?.(2) ?? '?'} kg)`);
         }
       }
-      const nova = preverSemana({ perfil: p, refeicoes: refs30, pesagens: pes30, gastos: p.relogio?.gastos, dia });
+      // a análise vem ANTES da aposta: a aposta usa o mesmo viés registro x balança do !progresso (preverSemana)
+      const analise = await progressoDe(p, dia, { refeicoes: refs30, pesagens: pes30 });
+      const nova = preverSemana({ perfil: p, refeicoes: refs30, pesagens: pes30, gastos: p.relogio?.gastos, dia, analise });
+      if (nova) linhas.push(nova.texto);
+      // o RITMO é julgado pelo que a balança MEDIU (progresso.js), nunca pela aposta: até 04/10 a aposta feita pela comida
+      // (+0,79 kg/semana) passava por avaliarRitmo e virava "RÁPIDO DEMAIS, ~450 kcal/dia a menos" com a balança marcando
+      // −0,3 kg na semana, e projetarMeta repetia a aposta como se fosse o ritmo. Vai mesmo sem aposta (semana sem pesagem
+      // perto do domingo ainda tem 30 dias de pesagens); a projeção até a etapa vem da linha de tendência, que parte da balança.
+      if (analise?.tendencia?.n) linhas.push(analise.texto);
       if (nova) {
-        linhas.push(nova.texto);
         if (!nova.semDados) {
-          const ritmo = avaliarRitmo({ peso: nova.pesoInicial, deltaKg: nova.deltaKg, objetivo: p.objetivo });
-          if (ritmo) linhas.push(ritmo);
-          const projecao = projetarMeta({ perfil: p, deltaKgSemana: nova.deltaKg, pesoAtual: nova.pesoInicial, dia });
-          if (projecao) linhas.push(projecao);
           // linha de tendência pessoal (bioimpedância) contra o ritmo alvo: a resposta de "está no caminho?" vem pronta
           try {
             const pes60 = await pesagensDesde(jids, diasAnteriores(dia, 60)[0]).catch(() => pes30);
-            const faixa = metaBalancoPara({ objetivo: p.objetivo, peso: nova.pesoInicial, metaPeso: p.metaPeso, metaPrazo: p.metaPrazo, dia, ritmo: p.ritmo, metaModo: p.metaModo, gorduraTend: tendenciaGordura(pes30) });
+            const faixa = faixaDaMeta(p, dia, pes60);
             // linha completa (passado por semana cruzando comida, gasto, treino e sono; futuro semana a semana até a etapa; chegada)
             const tend = (await tendenciaCompleta(p, dia).catch(() => null)) || linhaDeTendencia({ pesagens: pes60, perfil: p, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
             if (tend) linhas.push(tend.texto);
-            // calibração: o que a semana fechada ensinou sobre o viés comida registrada x balança (progressivo, nunca por um dia)
-            if (tend?.semanas) {
-              const cal = await calibrarNoDomingo(p, dia, { semanas: tend.semanas, ritmoReal: tend.ritmo?.real ?? null }).catch(() => null);
-              const linhaCal = descreverCalibracaoEnergia(cal);
-              if (linhaCal) linhas.push(linhaCal);
-            }
+            // calibração: o que a semana fechada ensinou sobre o viés comida registrada x balança (progressivo, nunca por um
+            // dia). Segue alimentando a correção do balanço na projeção; o número não vai pro resumo porque o PROGRESSO já traz
+            // o viés medido agora, com intervalo (dois números pro mesmo viés confundem)
+            if (tend?.semanas) await calibrarNoDomingo(p, dia, { semanas: tend.semanas, ritmoReal: tend.ritmo?.real ?? null }).catch(() => null);
             const forca = await analiseForca(p, dia, { magraSem: tend?.magraSem ?? null }).catch(() => null);
             if (forca?.texto) linhas.push(forca.texto);
             // ciclo das sugestões de carga: fecha as da semana passada com resultado e, se a leitura permitir, propõe as novas
@@ -398,12 +400,15 @@ export async function fecharSemana({ dia, perfis, grupo }) {
           } catch (e) {
             console.warn('[tendencia]', e.message);
           }
-          // meta-etapa batida (sem teto): sobe o degrau e avisa; o ganho continua no ritmo saudável
-          if (p.metaModo === 'etapa' && p.metaPeso && nova.pesoInicial) {
+          // meta-etapa batida (sem teto): sobe o degrau e avisa; o ganho continua no ritmo saudável. Pelo peso de referência
+          // suavizado (o mesmo da faixa da meta: tendência, média de 7 dias ou última), não pela pesagem do domingo, que pode
+          // ser água: um pico perto da etapa subia o degrau com a linha de tendência dizendo que ainda faltava mais de 1 kg
+          const pesoRef = pesoDeReferencia(validarPesagens(pes30, { dia }).pontos, dia, p).peso;
+          if (p.metaModo === 'etapa' && p.metaPeso && pesoRef) {
             const ganho = /hipertrof|ganh|massa|bulk|for[çc]a/i.test(String(p.objetivo || ''));
-            const bateu = ganho ? nova.pesoInicial >= p.metaPeso - 0.3 : nova.pesoInicial <= p.metaPeso + 0.3;
+            const bateu = ganho ? pesoRef >= p.metaPeso - 0.3 : pesoRef <= p.metaPeso + 0.3;
             if (bateu) {
-              const prox = proporEtapa({ peso: nova.pesoInicial, ganho, dia });
+              const prox = proporEtapa({ peso: pesoRef, ganho, dia });
               if (prox) {
                 await salvarPerfil({ jids: p.jids, metaPeso: prox.metaPeso, metaPrazo: prox.metaPrazo, atualizacoes: { ...(p.atualizacoes || {}), metaPeso: dia } }).catch(() => {});
                 linhas.push(`ETAPA BATIDA: ${String(p.metaPeso).replace('.', ',')} kg. Próxima etapa definida pelo sistema: ${prox.metaPeso} kg até ${prox.metaPrazo} (~${prox.semanas} semanas no ritmo saudável). Anuncie no resumo como conquista e apresente a próxima.`);

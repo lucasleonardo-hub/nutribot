@@ -41,6 +41,7 @@ const ia = await import('../gemini.js');
 const C = await import('../consciencia.js');
 const { ferramentasPara } = await import('../ferramentas.js');
 const { parecePedidoOuPlano, agora } = await import('../util.js');
+const { rotaPerguntaProgresso, conferirTextoProgresso, problemaDeProgresso, tirarFrases } = await import('../progresso.js');
 
 const modelo = flag('modelo') || (chaveDedicada ? 'flash' : 'lite');
 const leve = modelo !== 'flash';
@@ -117,11 +118,29 @@ function contextoHorarioDe(hora) {
   if (h < 19) return 'tarde';
   return 'noite';
 }
-async function aplicarGuardas({ r, base, cen, perfil, perfis, texto, historico, hora }) {
+async function aplicarGuardas({ r, base, cen, perfil, perfis, texto, historico, hora, analise = null }) {
   const guardas = [];
   let resposta = r.texto || '';
   let refeicao = r.refeicao;
   if (!resposta) return { final: null, refeicao, guardas };
+  // (0) progresso: texto que contradiz o bloco PROGRESSO DE PESO é barrado e refeito uma vez; se insistir, sai com o veredito
+  // calculado junto; em análise de refeição, só a frase sai (como em mensagens.js)
+  if (analise) {
+    const achados = conferirTextoProgresso(resposta, analise);
+    if (achados.length && /Refei[cç][aã]o:|O que eu vi|🔥\s*\*?Estimativa/i.test(resposta)) {
+      resposta = tirarFrases(resposta, achados.map((x) => x.frase));
+      guardas.push(`frase de progresso contraditória retirada da análise de refeição (${achados.map((x) => x.tipo).join(', ')})`);
+    } else if (achados.length) {
+      guardas.push(`progresso contraditório refeito (${achados.map((x) => x.tipo).join(', ')})`);
+      const aviso = `\n\nCONFERÊNCIA DO SISTEMA (feita ANTES de enviar sua resposta anterior, que foi barrada): ${problemaDeProgresso(achados)} Reescreva só o que fala de peso, ritmo ou meta, usando os números do bloco PROGRESSO DE PESO do acompanhamento (período, pesagens, tendência com a incerteza, alvo, veredito e alertas), sem recalcular; o resto da resposta fica como estava. Não mencione esta conferência.`;
+      const r3 = await ia.responder({ ...base, ferramentas: null, jaPesquisou: true, conhecimento: aviso }).catch(() => null);
+      if (r3?.texto) resposta = r3.texto;
+      if (conferirTextoProgresso(resposta, analise).length) {
+        resposta = `${resposta.trim()}\n\n📏 _Conferindo nas contas: ${analise.vereditoCurto} (contas completas: !progresso)_`;
+        guardas.push('veredito calculado anexado');
+      }
+    }
+  }
   // (1) objetivo trocado: barra e refaz, como em produção; se ainda vier, a frase sai
   const termos = perfil.objetivo ? C.vocabularioErrado(resposta, perfil.objetivo) : [];
   if (termos.length) {
@@ -181,11 +200,15 @@ async function aplicarGuardas({ r, base, cen, perfil, perfis, texto, historico, 
 }
 
 // ---------- checagens ----------
-function checar(cen, { texto, refeicao, usadas, r }) {
+function checar(cen, { texto, refeicao, usadas, r, analise = null }) {
   const falhas = [];
   if (texto == null) {
     if (!cen.podeCalar) falhas.push('ficou em silêncio');
     return falhas;
+  }
+  if (cen.semContradicao && analise) {
+    const achados = conferirTextoProgresso(texto, analise);
+    if (achados.length) falhas.push(`contradiz as contas: ${achados.map((x) => `${x.tipo} ("${x.trecho.slice(0, 60)}")`).join('; ')}`);
   }
   for (const re of cen.deve || []) if (!re.test(texto)) falhas.push(`faltou ${re}`);
   for (const re of cen.naoDeve || []) {
@@ -214,6 +237,7 @@ for (const [i, cen] of lista.entries()) {
     console.error(`${cen.id}: perfil "${cen.quem}" não existe`);
     process.exit(2);
   }
+  if (cen.perfil) Object.assign(perfil, cen.perfil); // o cenário pode ajustar o perfil pros dados dele (peso, meta)
   const perfis = ['lucas', 'heitor', 'ale'].map((k) => (k === cen.quem ? perfil : structuredClone(PERFIS[k])));
   if (!['lucas', 'heitor', 'ale'].includes(cen.quem)) perfis.push(perfil);
   const historico = (cen.historico || []).map((m) => ({ ...m }));
@@ -244,13 +268,19 @@ for (const [i, cen] of lista.entries()) {
     jaDito: extras.jaDito || '',
     despensa: '',
     rotulos: null,
-    planejando: Boolean(extras.planejando),
+    // como em produção (mensagens.js), pela MESMA função importada: pergunta com "?" é pedido de opinião (resposta curta),
+    // MENOS pergunta de progresso, que tem modo próprio; o cenário ainda pode forçar
+    perguntaProgresso: extras.perguntaProgresso ?? rotaPerguntaProgresso({ texto: cen.texto, metaConversa: Boolean(extras.metaConversa), contestacao: Boolean(extras.contestacao), emAndamento: extras.emAndamento || null }),
     contestacao: Boolean(extras.contestacao),
     emAndamento: extras.emAndamento || null,
     metaConversa: Boolean(extras.metaConversa),
     leve,
     calibracao: '',
   };
+  base.planejando = extras.planejando ?? (parecePedidoOuPlano(cen.texto) && !base.perguntaProgresso);
+  // progresso de peso: a análise (progresso.js) entra no acompanhamento como em produção e serve à guarda e à checagem
+  const analise = typeof cen.progresso === 'function' ? cen.progresso(base.dia, perfil) : null;
+  if (analise) base.visao = [base.visao, analise.texto].filter(Boolean).join('\n');
   const t0 = Date.now();
   const item = { id: cen.id, categoria: cen.categoria, titulo: cen.titulo, quem: cen.quem, texto: cen.texto, status: 'ok', falhas: [], falhasBruto: [], guardas: [], usadas: [], ms: 0 };
   try {
@@ -271,7 +301,7 @@ for (const [i, cen] of lista.entries()) {
     }
     if (!r) r = await comPrazo(ia.responder({ ...base, ferramentas: null }));
     const usadas = ferramentas?.usadas || [];
-    const { final, refeicao, guardas } = await aplicarGuardas({ r, base, cen, perfil, perfis, texto: cen.texto, historico, hora: cen.hora });
+    const { final, refeicao, guardas } = await aplicarGuardas({ r, base, cen, perfil, perfis, texto: cen.texto, historico, hora: cen.hora, analise });
     item.bruto = r.texto;
     item.final = final;
     item.refeicao = refeicao || null;
@@ -279,8 +309,8 @@ for (const [i, cen] of lista.entries()) {
     item.pergunta = r.pergunta || null;
     item.usadas = [...usadas];
     item.guardas = guardas;
-    item.falhas = checar(cen, { texto: final, refeicao, usadas, r });
-    item.falhasBruto = checar(cen, { texto: r.texto, refeicao: r.refeicao, usadas, r });
+    item.falhas = checar(cen, { texto: final, refeicao, usadas, r, analise });
+    item.falhasBruto = checar(cen, { texto: r.texto, refeicao: r.refeicao, usadas, r, analise });
     item.status = item.falhas.length ? 'falhou' : item.falhasBruto.length ? 'ok-pela-guarda' : 'ok';
   } catch (e) {
     item.status = 'erro';

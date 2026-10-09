@@ -54,8 +54,10 @@ test('projecaoAteMeta: ritmo real e pela comida, projeção semana a semana até
   assert.ok(Math.abs(p.ritmo.balanco - 0.245) < 0.01, `balanco ${p.ritmo.balanco}`);
   assert.ok(Math.abs(p.ritmo.esperado - 0.25) < 0.03);
   assert.equal(p.ritmo.alvo, 0.3);
-  // faltam ~4,3 kg em 15 semanas -> ~0,29 kg/semana
-  assert.ok(p.falta > 4 && p.falta < 4.6, `falta ${p.falta}`);
+  // faltam ~4 kg em 15 semanas -> ~0,27 kg/semana. O peso atual é o de tendência hoje (75,96 kg nesta série exata), o mesmo
+  // da META DE PESO; com a média de 7 dias (75,86) o "faltam" daqui e o da meta saíam diferentes no mesmo prompt
+  assert.ok(p.falta > 3.9 && p.falta < 4.6, `falta ${p.falta}`);
+  assert.equal(p.pesoAtual, 75.96);
   assert.ok(Math.abs(p.ritmo.necessario - p.falta / 15) < 0.01);
   // até o prazo (15/01 está 15 semanas depois de 03/10) e, como nesse ritmo chega depois, segue até a chegada
   assert.ok(p.futuro.length >= 15 && p.futuro.length === Math.max(15, p.chegada.semanas), `futuro ${p.futuro.length}`);

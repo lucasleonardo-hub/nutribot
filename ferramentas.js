@@ -14,11 +14,16 @@ import { docsPara } from './conhecimento.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { linhaDeTendencia } from './previsao.js';
 import { tendenciaCompleta } from './tendencia.js';
+import { progressoDe } from './acompanhamento.js';
+import { diasDeComida, somarDias } from './progresso.js';
 import { treinoDe, temHevy } from './treino.js';
 import { ehDonoDaAgenda } from './agenda.js';
 import { horariosHabituais, diasAnteriores, fusoDe } from './util.js';
 
 const TETO_CHARS = 7000;
+// a ferramenta pesagens junta o PROGRESSO inteiro, a lista de pesagens e a linha de tendência de 120 dias: com 7.000 a
+// lista e o fim da tendência eram cortados (revisão de 09/10)
+const TETO_POR_FERRAMENTA = { pesagens: 10000 };
 const NOME_DIA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
 const corta = (t, n = TETO_CHARS) => {
   const s = String(t ?? '').trim();
@@ -76,7 +81,7 @@ const DECLARACOES = [
   },
   {
     name: 'pesagens',
-    description: 'Linha de tendência completa: pesagens e bioimpedância por semana (peso, gordura, massa magra) cruzadas com comida registrada, gasto do relógio, treinos e sono; ritmo pela balança e pela comida; projeção semana a semana até a etapa de peso, data de chegada e veredito (no ritmo, abaixo, acima). Peça sempre que a conversa for de ritmo, meta, etapa ou peso.',
+    description: 'Progresso de peso com as contas abertas (período, pesagens, tendência com intervalo de confiança, alvo, veredito, comida registrada x balança, meta de calorias calibrada pela balança, alertas e limites) + linha de tendência completa (pesagens e bioimpedância por semana cruzadas com comida, gasto do relógio, treinos e sono; projeção semana a semana até a etapa e data de chegada). Peça sempre que a conversa for de ritmo, progresso, meta, etapa ou peso.',
     parameters: { type: 'OBJECT', properties: { dias: { type: 'INTEGER', description: 'quantos dias de pesagens listar no fim (7 a 120; padrão 42)' } } },
   },
   { name: 'despensa', description: 'O que a pessoa tem em casa (despensa alimentada pelas notas fiscais), com quantidades e validades.' },
@@ -131,7 +136,11 @@ export function ferramentasPara(perfil, { dia, apenas = null, escrita = false } 
   const exec = {
     async refeicoes_periodo({ dias } = {}) {
       const n = inteiro(dias, 1, 60, 14);
-      const refs = await refeicoesDesde(jids, diasAnteriores(dia, n)[0]);
+      // busca ao menos 28 dias: o dia completo usa a mediana dos 28 dias da pessoa (critério único do !progresso e da meta
+      // adaptativa); a lista e os totais mostram só os n dias pedidos
+      const desde = diasAnteriores(dia, n)[0];
+      const todas = await refeicoesDesde(jids, diasAnteriores(dia, Math.max(n, 29))[0]);
+      const refs = todas.filter((r) => r.dia >= desde);
       if (!refs.length) return `(nenhuma refeição registrada nos últimos ${n} dias)`;
       const linhas = refs
         .slice(-120)
@@ -140,7 +149,13 @@ export function ferramentasPara(perfil, { dia, apenas = null, escrita = false } 
           const prot = Number(r.estimativa?.p ?? r.proteina) || 0;
           return `${r.dia} ${r.horaLocal || r.hora || ''} [${r.slot || '?'}] ${r.descricao || r.resumo || ''}${kcal ? ` (${Math.round(kcal)} kcal${prot ? `, P ${Math.round(prot)} g` : ''})` : ''}`;
         });
-      return `${refs.length} refeições em ${n} dias (${linhas.length < refs.length ? 'as últimas 120' : 'todas'}):\n${linhas.join('\n')}`;
+      // totais por dia já somados, com o dia completo marcado (critério único): sem isso a IA somava a lista cortada nas 120
+      // últimas e dividia pelo período inteiro, e a média saía baixa
+      const c = diasDeComida(todas, { dia: somarDias(dia, 1), de: desde, medianaRef: diasDeComida(todas, { dia, de: somarDias(dia, -28) }).mediana });
+      const totais = c.dias.map((x) => `${x.dia}${x.dia === dia ? ' (hoje, em andamento)' : ''}: ${Math.round(x.kcal)} kcal, P ${Math.round(x.p)} g, ${x.n} registro(s)${x.completo ? '' : ' (incompleto: fora das médias)'}`);
+      const completosFechados = c.completos.filter((x) => x.dia < dia);
+      const media = completosFechados.length ? Math.round(completosFechados.reduce((a, x) => a + x.kcal, 0) / completosFechados.length) : null;
+      return `TOTAIS POR DIA (${n} dias; média dos ${completosFechados.length} dias completos fechados: ${media != null ? `${media} kcal/dia` : 'sem dias completos'}):\n${totais.join('\n')}\n\n${refs.length} refeições em ${n} dias (${linhas.length < refs.length ? 'as últimas 120' : 'todas'}):\n${linhas.join('\n')}`;
     },
     async padrao_alimentar({ dias } = {}) {
       const n = inteiro(dias, 7, 60, 28);
@@ -190,7 +205,7 @@ export function ferramentasPara(perfil, { dia, apenas = null, escrita = false } 
         const a = ats.find((y) => y.dia === x);
         const s = sonos.get(x);
         return (
-          `${x}: ${a?.passos ? `${a.passos} passos` : 'passos ?'} · ${a?.calorias ? `gasto ${a.calorias} kcal` : 'gasto ?'}` +
+          `${x}${x === dia ? ' (hoje, parcial: o relógio ainda está somando)' : ''}: ${a?.passos ? `${a.passos} passos` : 'passos ?'} · ${a?.calorias ? `gasto ${a.calorias} kcal` : 'gasto ?'}` +
           (a?.fcRepouso ? ` · repouso ${a.fcRepouso} bpm` : '') +
           (s ? ` · sono ${hm(s.total)} (profundo ${hm(s.profundo)}, REM ${hm(s.rem)})` : '') +
           (a?.treinos?.length ? ` · treinos: ${a.treinos.map((t) => `${t.nome} ${t.hora}${t.min ? ` ${t.min} min` : ''}${t.kcal ? ` ${Math.round(t.kcal)} kcal` : ''}`).join(', ')}` : '')
@@ -201,13 +216,16 @@ export function ferramentasPara(perfil, { dia, apenas = null, escrita = false } 
     async pesagens({ dias } = {}) {
       const n = inteiro(dias, 7, 120, 42);
       const pes = await pesagensDesde(jids, diasAnteriores(dia, n)[0]);
-      if (!pes.length) return `(sem pesagens nos últimos ${n} dias)`;
-      const tend = (await tendenciaCompleta(perfil, dia).catch(() => null)) || linhaDeTendencia({ pesagens: pes, perfil, dia, semanas: 6 });
+      // o PROGRESSO (veredito, comida x balança, meta calibrada, alertas) é o mesmo do prompt e do !progresso; sem pesagem nos
+      // últimos N dias ele e a linha de 120 dias ainda valem (antes a ferramenta devolvia só "sem pesagens" e a tendência sumia)
+      const [analise, completa] = await Promise.all([progressoDe(perfil, dia).catch(() => null), tendenciaCompleta(perfil, dia).catch(() => null)]);
+      const tend = completa || (pes.length ? linhaDeTendencia({ pesagens: pes, perfil, dia, semanas: 6 }) : null);
       const ult = [...pes]
         .sort((a, b) => a.dia.localeCompare(b.dia))
         .slice(-12)
         .map((p) => `${p.dia}: ${p.peso} kg${p.gordura != null ? ` · gordura ${p.gordura}%` : ''}${p.magra != null ? ` · magra ${p.magra} kg` : ''}`);
-      return [tend?.texto || '', `ÚLTIMAS PESAGENS:\n${ult.join('\n')}`].filter(Boolean).join('\n\n');
+      // a lista curta vem antes da linha de tendência (a parte mais longa): se o teto cortar, corta o fim da tendência
+      return [analise?.tendencia?.n ? analise.texto : '', ult.length ? `ÚLTIMAS PESAGENS:\n${ult.join('\n')}` : `(sem pesagens nos últimos ${n} dias)`, tend?.texto || ''].filter(Boolean).join('\n\n');
     },
     async despensa() {
       return (await blocoDespensa(perfil)) || '(despensa vazia ou sem notas)';
@@ -277,7 +295,7 @@ export function ferramentasPara(perfil, { dia, apenas = null, escrita = false } 
     if (!fn || !declaracoes.some((d) => d.name === nome)) return `(ferramenta desconhecida: ${nome})`;
     const t0 = Date.now();
     try {
-      const saida = corta(await fn(args || {}));
+      const saida = corta(await fn(args || {}), TETO_POR_FERRAMENTA[nome] || TETO_CHARS);
       usadas.push(nome);
       console.log(`[ferramentas] ${String(perfil?.nome || '').split(' ')[0]}: ${nome}(${JSON.stringify(args || {})}) -> ${(saida.length / 1000).toFixed(1)}k chars em ${Date.now() - t0} ms`);
       return saida;

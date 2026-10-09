@@ -7,6 +7,7 @@
 import { colecao, listarPerfis } from './mongo.js';
 import { aplicarDadosSaude } from './saude.js';
 import { fusoDe } from './util.js';
+import { preferirPesagem } from './progresso.js';
 import { receberLocais, descreverSituacao } from './lugares.js';
 import { perguntarCompra } from './despensa.js';
 
@@ -40,7 +41,7 @@ const ehSamsung = (fonte) => /shealth|samsung/i.test(String(fonte || ''));
 
 /**
  * Converte o envio do app. Datas vêm em ISO (instante); dia e hora saem no fuso da pessoa.
- * pesos: última medição do dia (prefere Samsung Health). sonos: por noite (dia em que acordou), sessões do mesmo dia
+ * pesos: uma por dia, a primeira da manhã (prefere Samsung Health). sonos: por noite (dia em que acordou), sessões do mesmo dia
  * somam e a mais longa define deitou/levantou. atividades: por dia, passos, calorias totais e treinos (nome, min, hora).
  */
 export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
@@ -49,10 +50,10 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
     const l = localDe(p.t, fuso);
     const kg = n(p.kg);
     if (!l || !kg || kg < 25 || kg > 400) continue;
-    const atual = pesos.get(l.dia);
-    if (atual && ehSamsung(atual.fonte) && !ehSamsung(p.fonte)) continue;
-    if (atual && atual.hora > l.hora && ehSamsung(atual.fonte) === ehSamsung(p.fonte)) continue; // fica a última do dia
-    pesos.set(l.dia, { dia: l.dia, hora: l.hora, peso: kg, gordura: n(p.gordura), altura: n(p.altura), magra: n(p.magra), fonte: p.fonte || '' });
+    // Samsung Health vence; depois a primeira da manhã (progresso.preferirPesagem). Até 09/10 ficava a ÚLTIMA do dia, e
+    // pesagem das 22h entrava na tendência como se fosse da manhã
+    const nova = { dia: l.dia, hora: l.hora, peso: kg, gordura: n(p.gordura), altura: n(p.altura), magra: n(p.magra), fonte: p.fonte || '' };
+    pesos.set(l.dia, preferirPesagem(pesos.get(l.dia), nova, ehSamsung));
   }
 
   const sonos = new Map();
@@ -114,15 +115,22 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
   return { pesos: ordenar(pesos), sonos: ordenar(sonos), atividades: ordenar(atividades) };
 }
 
-/** Junta o que já estava guardado com o que chegou agora (por dia; o novo vence), cortando o que passou de 90 dias. */
+/**
+ * Junta o que já estava guardado com o que chegou agora (por dia; o novo vence), cortando o que passou de 90 dias. Pesos:
+ * o app manda as últimas 72 h contadas de AGORA, então o dia mais antigo do envio chega só com as pesagens feitas depois
+ * da hora atual (a da noite), e "o novo vence" trocava a da manhã guardada por ela no 3º dia (revisão de 09/10). Entre
+ * medições diferentes do mesmo dia vale a regra da série (preferirPesagem); a MESMA medição (mesma hora) chegando de novo
+ * é substituída pela nova, que pode trazer a gordura ou a massa magra que faltavam.
+ */
 export function fundir(guardado, novo, hoje) {
   const limite = new Date(new Date(`${hoje}T12:00:00Z`).getTime() - DIAS_GUARDADOS * 86400000).toISOString().slice(0, 10);
-  const juntar = (a = [], b = []) => {
+  const juntar = (a = [], b = [], escolher = (_, x) => x) => {
     const m = new Map(a.map((x) => [x.dia, x]));
-    for (const x of b) m.set(x.dia, x);
+    for (const x of b) m.set(x.dia, escolher(m.get(x.dia), x));
     return [...m.values()].filter((x) => x.dia >= limite).sort((x, y) => x.dia.localeCompare(y.dia));
   };
-  return { pesos: juntar(guardado?.pesos, novo.pesos), sonos: juntar(guardado?.sonos, novo.sonos), atividades: juntar(guardado?.atividades, novo.atividades) };
+  const pesagem = (g, x) => (!g || g.hora === x.hora ? x : preferirPesagem(g, x, ehSamsung));
+  return { pesos: juntar(guardado?.pesos, novo.pesos, pesagem), sonos: juntar(guardado?.sonos, novo.sonos), atividades: juntar(guardado?.atividades, novo.atividades) };
 }
 
 // ============================================================

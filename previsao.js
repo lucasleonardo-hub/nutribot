@@ -2,15 +2,21 @@
 // sete dias depois, a conferência do que ela previu contra o que a balança mostrou.
 //
 // Dois métodos, nessa ordem:
-//   1) BALANÇO ENERGÉTICO (melhor): média diária de (calorias comidas − gastas pelo relógio) nos dias COMPLETOS da semana.
-//      7.700 kcal ≈ 1 kg de tecido corporal, então delta_kg = média_diária × 7 ÷ 7700.
-//   2) TENDÊNCIA DA BALANÇA (quem não tem relógio): regressão linear das pesagens dos últimos 21 dias.
+//   1) BALANÇO ENERGÉTICO: média diária de (calorias comidas − gastas pelo relógio) nos dias COMPLETOS da semana.
+//      7.700 kcal ≈ 1 kg de tecido corporal, então delta_kg = média_diária × 7 ÷ 7700. Quando o registro não bate com a
+//      balança (o critério ÚNICO do !progresso: registroDiscordaDaBalanca, no trecho alinhado de comida e pesagens dos últimos
+//      28 dias, com intervalo de 95%), o balanço da semana é CORRIGIDO pelo viés que a balança mede (o mesmo "gasto real" da
+//      meta adaptativa). 27/09: o balanço cru apostou +0,76 kg com "confiança alta" e a balança deu −0,30. A 1ª correção
+//      trocava a aposta pela inclinação de 21 dias quando ela diferia 0,4 kg/semana do balanço DESTA semana: janelas
+//      diferentes (quem começou o bulk na semana virava "registro descalibrado"), limiar sem erro-padrão e pesagens cruas
+//      (outra pessoa na balança decidia a aposta) (revisão de 09/10).
+//   2) TENDÊNCIA DA BALANÇA (quem não tem relógio): regressão linear das pesagens validadas dos últimos 21 dias.
 // Sem dados suficientes, não inventa: diz o que falta.
 //
 // A divisão entre massa magra e gordura é ESTIMATIVA GROSSEIRA, guiada por proteína e treino da semana. Serve pra dar
 // direção ("ganho limpo" x "ganho sujo"), não pra valer como bioimpedância.
 
-import { diaCompleto } from './resumo.js';
+import { diasDeComida, validarPesagens, calibrarEnergia, registroDiscordaDaBalanca } from './progresso.js';
 
 const KCAL_POR_KG = 7700;
 const DIAS_TENDENCIA = 21;
@@ -67,11 +73,24 @@ function fracaoMagra({ ganho, proteinaPorKg, treinos }) {
 }
 
 /**
+ * Puro. Registro x balança pela MESMA conta do alerta do !progresso: comida registrada − relógio contra o peso, no trecho
+ * alinhado dos 28 dias fechados antes de `dia`, julgado por registroDiscordaDaBalanca. Usa a energia de `analise`
+ * (analisarProgresso do mesmo dia) quando vier; senão calcula com as mesmas funções. Devolve { discorda, energia }, ou null
+ * quando não há relógio ou falta dado pra calibrar (aí não há alerta no !progresso).
+ */
+export function registroXBalanca({ analise = null, refeicoes = [], pesagens = [], gastos = {}, dia }) {
+  const energia = analise ? analise.energia : calibrarEnergia({ pontos: validarPesagens(pesagens, { dia }).pontos, completos: diasDeComida(refeicoes, { dia, de: somarDias(dia, -28) }).completos, gastos: gastos || {} });
+  if (!energia || energia.insuficiente || energia.vies == null) return null;
+  return { discorda: registroDiscordaDaBalanca({ kgSemanaBalanca: energia.tendencia.kgSemana, icBalanca: energia.tendencia.ic95, kgSemanaRegistro: energia.ritmoPeloRegistro }), energia };
+}
+
+/**
  * Previsão para daqui a 7 dias.
- * @param {object} p { perfil, refeicoes (30 dias), pesagens (30 dias), gastos ({dia: kcal}), dia }
+ * @param {object} p { perfil, refeicoes (30 dias), pesagens (30 dias), gastos ({dia: kcal}), dia, analise (opcional:
+ *   analisarProgresso do mesmo dia, pra usar o mesmo viés do !progresso) }
  * @returns {object|null} { alvoDia, pesoInicial, deltaKg, pesoPrevisto, base, confianca, magraKg, gorduraKg, texto, detalhes }
  */
-export function preverSemana({ perfil = {}, refeicoes = [], pesagens = [], gastos, dia, horizonte = 7 }) {
+export function preverSemana({ perfil = {}, refeicoes = [], pesagens = [], gastos, dia, horizonte = 7, analise = null }) {
   const semana = diasAte(dia, 7);
   const porDia = new Map();
   for (const r of refeicoes) {
@@ -79,31 +98,52 @@ export function preverSemana({ perfil = {}, refeicoes = [], pesagens = [], gasto
     if (!porDia.has(r.dia)) porDia.set(r.dia, []);
     porDia.get(r.dia).push(r);
   }
-  const completos = [...porDia.entries()].filter(([, regs]) => diaCompleto(regs));
+  // dia completo pelo critério único (progresso.js: 2+ registros, 500+ kcal, 65%+ da mediana DOS 28 DIAS, como no !progresso
+  // e na meta adaptativa): a régua absoluta antiga (3 registros ou 1.200 kcal) deixava dia meio registrado puxar o balanço da
+  // aposta. Roda às 23:59, então `dia` entra.
+  const completosDias = new Set(diasDeComida(refeicoes, { dia: somarDias(dia, 1), de: somarDias(dia, -27) }).completos.map((c) => c.dia));
+  const completos = [...porDia.entries()].filter(([d]) => completosDias.has(d));
   const kcalDe = (regs) => regs.reduce((a, r) => a + (r.estimativa?.kcal || 0), 0);
   const protDe = (regs) => regs.reduce((a, r) => a + (r.estimativa?.p || 0), 0);
   const proteinaPorKg = completos.length && perfil.peso ? media(completos.map(([, regs]) => protDe(regs))) / perfil.peso : null;
   // treinos da semana: Hevy (força, com carga) + o que o relógio registrou de outros esportes, sem duplicar
   const treinos = perfil._treino?.analise?.sessoes != null ? perfil._treino.analise.sessoes + (perfil.relogio?.treinos7d || 0) : (perfil.relogio?.treinos7d ?? null);
   const alvoDia = somarDias(dia, horizonte);
-  const ultima = pesagemPerto(pesagens, dia, 3);
+  // pesagens limpas (a mesma limpeza do !progresso: outra pessoa na balança, libra, duas fontes no mesmo dia)
+  const pts = validarPesagens(pesagens, { dia }).pontos;
+  const ultima = pesagemPerto(pts, dia, 3);
 
   // ---- método 1: balanço energético (precisa do relógio e de dias completos)
-  const comOsDois = completos.filter(([d]) => gastos?.[d]);
+  const comOsDois = completos.filter(([d]) => Number(gastos?.[d]) > 800); // relógio fora do pulso ou parcial não entra
   let deltaKg = null;
   let base = null;
   let detalhes = '';
+  let confiancaCorrigida = null;
   if (comOsDois.length >= 3) {
     const balancos = comOsDois.map(([d, regs]) => kcalDe(regs) - gastos[d]);
     const mediaBalanco = media(balancos);
-    deltaKg = (mediaBalanco * 7) / KCAL_POR_KG;
-    base = 'balanço energético';
-    detalhes =
-      `média de ${Math.round(mediaBalanco) > 0 ? '+' : ''}${Math.round(mediaBalanco)} kcal/dia em ${comOsDois.length} dia(s) completo(s) ` +
-      `(comido menos gasto do relógio); 7.700 kcal ≈ 1 kg`;
+    const sinalKcal = (n) => `${Math.round(n) > 0 ? '+' : Math.round(n) < 0 ? '−' : ''}${Math.abs(Math.round(n)).toLocaleString('pt-BR')}`;
+    const rxb = registroXBalanca({ analise, refeicoes, pesagens, gastos, dia });
+    const vies = rxb?.discorda ? rxb.energia : null;
+    if (vies) {
+      // registro x balança não batem: o balanço DESTA semana (que conta a mudança de comida da semana) menos o viés medido
+      const corrigido = mediaBalanco - vies.vies;
+      deltaKg = (corrigido * 7) / KCAL_POR_KG;
+      base = 'balanço corrigido pela balança';
+      const meiaLargura = vies.icVies ? (vies.icVies[1] - vies.icVies[0]) / 2 : Infinity;
+      confiancaCorrigida = meiaLargura <= 300 ? 'média' : 'baixa';
+      detalhes =
+        `média de ${sinalKcal(mediaBalanco)} kcal/dia em ${comOsDois.length} dia(s) completo(s) (comido menos gasto do relógio), mas o registro não bate com a balança: ` +
+        `de ${dm(vies.de)} a ${dm(somarDias(vies.ate, -1))} ele ficou ~${Math.abs(Math.round(vies.vies)).toLocaleString('pt-BR')} kcal/dia ${vies.vies > 0 ? 'acima' : 'abaixo'} do que o peso mostrou` +
+        `${Number.isFinite(meiaLargura) ? ` (±${Math.round(meiaLargura).toLocaleString('pt-BR')})` : ''}; corrigido por esse viés, o balanço da semana é ${sinalKcal(corrigido)} kcal/dia; 7.700 kcal ≈ 1 kg`;
+    } else {
+      deltaKg = (mediaBalanco * 7) / KCAL_POR_KG;
+      base = 'balanço energético';
+      detalhes = `média de ${sinalKcal(mediaBalanco)} kcal/dia em ${comOsDois.length} dia(s) completo(s) (comido menos gasto do relógio); 7.700 kcal ≈ 1 kg`;
+    }
   } else {
     // ---- método 2: tendência da balança
-    const inclinacao = tendenciaKgDia(pesagens.filter((p) => diasAte(dia, DIAS_TENDENCIA).includes(p.dia)));
+    const inclinacao = tendenciaKgDia(pts.filter((p) => diasAte(dia, DIAS_TENDENCIA).includes(p.dia)));
     if (inclinacao != null) {
       deltaKg = inclinacao * 7;
       base = 'tendência da balança';
@@ -123,7 +163,7 @@ export function preverSemana({ perfil = {}, refeicoes = [], pesagens = [], gasto
   const fm = fracaoMagra({ ganho, proteinaPorKg, treinos });
   const magraKg = deltaKg * fm;
   const gorduraKg = deltaKg - magraKg;
-  const confianca = base === 'balanço energético' ? (comOsDois.length >= 5 ? 'alta' : 'média') : pesagens.length >= 6 ? 'média' : 'baixa';
+  const confianca = base === 'balanço energético' ? (comOsDois.length >= 5 ? 'alta' : 'média') : confiancaCorrigida || (pts.length >= 6 ? 'média' : 'baixa');
 
   const composicao =
     Math.abs(deltaKg) < 0.05
@@ -235,12 +275,14 @@ export function linhaDeTendencia({ pesagens = [], perfil = {}, dia, alvoKgSemana
   let status = 'neutro';
   if (pesoSem != null) {
     if (querGanhar) {
-      if (pesoSem < 0.05) { veredito = 'estagnado: peso não sobe'; status = 'abaixo'; }
+      if (pesoSem <= -0.05) { veredito = `peso caindo (${sinalKg(pesoSem)}/semana), contra o objetivo de ganhar`; status = 'abaixo'; }
+      else if (pesoSem < 0.05) { veredito = 'estagnado: peso não sobe'; status = 'abaixo'; }
       else if (faixa && pesoSem > faixa.max * 1.15) { veredito = `subindo mais rápido que o saudável (${sinalKg(pesoSem)}/semana)${gorduraSem != null && gorduraSem > 0.1 ? ', e a gordura está subindo junto' : gorduraSem != null && gorduraSem <= 0.05 ? ', mas a gordura não subiu: ganho limpo até agora' : ''}`; status = gorduraSem != null && gorduraSem > 0.1 ? 'acima_gordura' : 'acima'; }
       else if (alvoKgSemana != null && pesoSem < alvoKgSemana - 0.12) { veredito = `abaixo do ritmo alvo (${sinalKg(pesoSem)} contra ${sinalKg(alvoKgSemana)}/semana)`; status = 'abaixo'; }
       else { veredito = `no caminho (${sinalKg(pesoSem)}/semana${alvoKgSemana != null ? `, alvo ${sinalKg(alvoKgSemana)}` : ''}${magraSem != null ? `; massa magra ${sinalKg(magraSem)}/semana` : ''})`; status = 'ok'; }
     } else if (querPerder) {
-      if (pesoSem > -0.05) { veredito = 'estagnado: peso não cai'; status = 'abaixo'; }
+      if (pesoSem >= 0.05) { veredito = `peso subindo (${sinalKg(pesoSem)}/semana), contra o objetivo de perder`; status = 'abaixo'; }
+      else if (pesoSem > -0.05) { veredito = 'estagnado: peso não cai'; status = 'abaixo'; }
       else if (faixa && pesoSem < faixa.min * 1.15) { veredito = `caindo mais rápido que o saudável (${sinalKg(pesoSem)}/semana)${magraSem != null && magraSem < -0.15 ? ', e está perdendo massa magra' : ''}`; status = 'acima'; }
       else if (alvoKgSemana != null && pesoSem > alvoKgSemana + 0.12) { veredito = `mais devagar que o alvo (${sinalKg(pesoSem)} contra ${sinalKg(alvoKgSemana)}/semana)`; status = 'abaixo'; }
       else { veredito = `no caminho (${sinalKg(pesoSem)}/semana${magraSem != null ? `; massa magra ${sinalKg(magraSem)}/semana` : ''})`; status = 'ok'; }
@@ -281,7 +323,9 @@ export function avaliarRitmo({ peso, deltaKg, objetivo }) {
   if (dentro) return `RITMO: ${sinalKg(deltaKg)}/semana está DENTRO da faixa recomendada pra ${querGanhar ? 'ganhar massa' : 'perder gordura'} (${alvo}).`;
   const rapido = querGanhar ? deltaKg > faixa.max : deltaKg < faixa.min;
   const devagar = querGanhar ? deltaKg < faixa.min : deltaKg > faixa.max;
-  const excesso = querGanhar ? deltaKg - faixa.max : faixa.min - deltaKg;
+  // rápido: o que passou da borda de cima; devagar: o que falta até a borda de baixo (antes media até a de cima e dobrava o
+  // "kcal/dia a mais": +0,10 kg/semana com 74 kg pedia 300 em vez de ~90)
+  const excesso = rapido ? (querGanhar ? deltaKg - faixa.max : faixa.min - deltaKg) : querGanhar ? faixa.min - deltaKg : deltaKg - faixa.max;
   const ajusteDia = Math.round((Math.abs(excesso) * KCAL_POR_KG) / 7 / 10) * 10;
   if (rapido) {
     return (

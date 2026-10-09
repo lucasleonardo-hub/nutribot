@@ -2,10 +2,11 @@
 // até a etapa), cruzando balança e bioimpedância, comida registrada, gasto do relógio, treinos de força e sono.
 // projecaoAteMeta é pura (dá pra testar); tendenciaCompleta junta os dados do Mongo e a faixa da meta.
 import { pesagensDesde, refeicoesDesde, colecao } from './mongo.js';
-import { metaBalancoPara, tendenciaGordura } from './resumo.js';
-import { faixaSaudavel } from './previsao.js';
+import { faixaDaMeta, pesoDeReferencia } from './resumo.js';
+import { faixaSaudavel, registroXBalanca } from './previsao.js';
 import { diasAnteriores } from './util.js';
 import { corrigirBalanco } from './calibracao.js';
+import { validarPesagens, regressao as regressaoComIC, vereditoRitmo, registroDiscordaDaBalanca } from './progresso.js';
 
 const KCAL_POR_KG = 7700; // régua clássica (tecido misto); ganho magro custa menos por kg, mas serve de ordem de grandeza
 const MAX_SEMANAS_PASSADAS = 12;
@@ -132,28 +133,33 @@ export function semanasPassadas({ pesagens = [], refeicoes = [], gastos = {}, so
  * veredito, status ('ok'|'abaixo'|'acima'|'acima_gordura'|'neutro'), ajusteKcal, magraSem, gorduraSem, texto, textoCurto, zap, resumoZap.
  */
 export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [], gastos = {}, sonos = [], treinos = [], faixa = null } = {}) {
-  const pts = pesagens.filter((p) => p?.peso > 0 && p.dia && p.dia <= dia).sort((a, b) => a.dia.localeCompare(b.dia));
-  if (pts.length < 4 || !dia) return null;
+  if (!dia) return null;
+  // datas e pesos válidos, uma pesagem por dia, em ordem (a mesma limpeza do !progresso)
+  const pts = validarPesagens(pesagens, { dia }).pontos;
+  if (pts.length < 4) return null;
   const semanas = semanasPassadas({ pesagens: pts, refeicoes, gastos, sonos, treinos, dia });
   if (!semanas.length) return null;
   const objetivo = String(perfil.objetivo || '');
-  const querGanhar = /hipertrof|ganh|massa|bulk|for[çc]a/i.test(objetivo);
+  const querGanhar = /hipertrof|ganh|massa|bulk|engord|for[çc]a/i.test(objetivo);
   const querPerder = !querGanhar && /emagre|perd|reduz|defin|secar|gordura/i.test(objetivo);
   const direcao = querGanhar ? 1 : querPerder ? -1 : 0;
 
-  // ritmo real: regressão nas pesagens das últimas 4 semanas (ou nas últimas 6 pesagens, se forem poucas)
+  // ritmo real: regressão nas pesagens das últimas 4 semanas (ou nas últimas 6 pesagens, se forem poucas), com o erro-padrão
+  // corrigido pela autocorrelação das pesagens (a mesma conta do !progresso)
   const rec = pts.filter((p) => distDias(p.dia, dia) <= 27);
   const base = rec.length >= 4 ? rec : pts.slice(-6);
   const x0 = base[0].dia;
-  const rp = regressao(base.map((p) => distDias(x0, p.dia)), base.map((p) => Number(p.peso)));
-  const ritmoReal = rp ? rp.slope * 7 : null;
+  const rp = regressaoComIC(base.map((p) => distDias(x0, p.dia)), base.map((p) => Number(p.peso)));
+  const ritmoReal = rp ? rp.b * 7 : null;
   const seSem = rp ? rp.se * 7 : null; // erro-padrão do ritmo (kg/semana)
   const comG = base.filter((p) => p.gordura != null && Number(p.gordura) > 0);
   const magraSem = comG.length >= 4 ? inclinacao(comG.map((p) => distDias(x0, p.dia)), comG.map((p) => Number(p.peso) * (1 - Number(p.gordura) / 100))) * 7 : null;
   const gorduraSem = comG.length >= 4 ? inclinacao(comG.map((p) => distDias(x0, p.dia)), comG.map((p) => Number(p.peso) * (Number(p.gordura) / 100))) * 7 : null;
   const gorduraPpSem = comG.length >= 4 ? inclinacao(comG.map((p) => distDias(x0, p.dia)), comG.map((p) => Number(p.gordura))) * 7 : null;
-  const daSemana = pts.filter((p) => distDias(p.dia, dia) <= 6).map((p) => Number(p.peso));
-  const pesoAtual = Math.round((media(daSemana) ?? Number(pts[pts.length - 1].peso)) * 100) / 100;
+  // peso atual = o MESMO peso de referência da META DE PESO (resumo.pesoDeReferencia: o de tendência, ou a média de 7 dias
+  // com poucas pesagens): com a média de 7 dias aqui e o de tendência na meta, o prompt trazia dois "faltam" diferentes
+  const ref = pesoDeReferencia(pts, dia, perfil);
+  const pesoAtual = Math.round(Number(ref.peso) * 100) / 100;
 
   // ritmo pelo balanço energético: comida registrada − gasto do relógio, nas últimas 3 semanas com 3+ dias completos
   const comBalanco = semanas.filter((s) => s.balanco != null && s.diasBalanco >= 3).slice(-3);
@@ -165,11 +171,19 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
   // esperado daqui pra frente: média PONDERADA pelo inverso da variância. A balança é a verdade sobre o peso (σ = erro-padrão
   // da regressão, mínimo 0,08 kg/semana); o balanço energético carrega ±250 kcal/dia de erro de foto e de relógio
   // (σ ≈ 0,25 kg/semana): confere, não manda. (Média simples transformava +0,29 e +0,74 em +0,52 e num falso "acima do saudável".)
+  // Quando registro e balança não batem, uma das duas está errada, e não se mistura: o esperado segue a balança. (09/10: +0,16
+  // da balança e +0,82 da comida, que registrava ~900 kcal/dia a mais do que a balança mostrava, viravam um "+0,29" que não
+  // era medida nem previsão confiável, e o veredito saía "um pouco abaixo, coma +47 kcal".) O critério é o MESMO do alerta do
+  // !progresso (registroDiscordaDaBalanca: fora do IC 95% da balança e mais de ~250 kcal/dia), e na MESMA janela dele (o
+  // trecho alinhado de comida e pesagens dos 28 dias) quando ela existe; com 2 desvios da variância combinada, a mesma mensagem
+  // dizia "não batem" no alerta e ainda misturava as duas na data de chegada. Sem calibração de 28 dias, a janela daqui.
   const SIGMA_BALANCO = 0.25;
   const sigmaReal = ritmoReal != null ? Math.max(seSem ?? 0.12, 0.08) : null;
+  const rxb = registroXBalanca({ refeicoes, pesagens, gastos, dia });
+  const discordante = ritmoReal != null && ritmoBalanco != null && (rxb ? rxb.discorda : registroDiscordaDaBalanca({ kgSemanaBalanca: ritmoReal, icBalanca: rp.ic.map((x) => x * 7), kgSemanaRegistro: ritmoBalanco }));
   let ritmoEsperado = null;
   let sigmaEsperado = null;
-  if (ritmoReal != null && ritmoBalanco != null) {
+  if (ritmoReal != null && ritmoBalanco != null && !discordante) {
     const wr = 1 / sigmaReal ** 2;
     const wb = 1 / SIGMA_BALANCO ** 2;
     ritmoEsperado = (ritmoReal * wr + ritmoBalanco * wb) / (wr + wb);
@@ -194,10 +208,15 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
   const saud = faixaSaudavel({ peso: pesoAtual, ganho: querGanhar });
   const limiteSaudavel = saud ? (querGanhar ? saud.max : saud.min) : null; // kg/semana, com o sinal da direção
   const necessarioSaudavel = necessario != null && limiteSaudavel != null && Math.abs(necessario) > Math.abs(limiteSaudavel) ? limiteSaudavel : necessario;
+  // veredito: o MESMO do !progresso (vereditoRitmo): ritmo MEDIDO pela balança nas últimas 4 semanas contra o alvo de onde
+  // sai a meta de calorias (faixa.ritmoKgSemana; sem faixa, o necessário pro prazo dentro do saudável), com a confiança.
+  // O esperado (balança + comida, quando batem) serve à projeção, não ao veredito: o que já aconteceu é o que a balança mediu.
+  const vr = vereditoRitmo({ pontos: pts, dia, faixa, objetivo: perfil.objetivo, pesoPerfil: perfil.peso, alvoPadrao: necessarioSaudavel });
 
-  // chegada à meta no ritmo esperado (só se está andando na direção certa)
+  // chegada à meta no ritmo esperado: só se está andando na direção certa e com pesagens bastantes pro veredito (a mesma
+  // regra: com "ainda não dá pra julgar o ritmo", uma data de chegada era um número sem base; revisão de 09/10)
   let chegada = null;
-  if (metaPeso && falta != null && ritmoEsperado != null && Math.abs(ritmoEsperado) >= 0.03 && Math.sign(falta) === Math.sign(ritmoEsperado) && Math.abs(falta) > 0.1) {
+  if (vr.tend.suficiente && metaPeso && falta != null && ritmoEsperado != null && Math.abs(ritmoEsperado) >= 0.03 && Math.sign(falta) === Math.sign(ritmoEsperado) && Math.abs(falta) > 0.1) {
     const sem = Math.ceil(Math.abs(falta) / Math.abs(ritmoEsperado));
     if (sem <= 104) chegada = { semanas: sem, data: somarDias(dia, sem * 7) };
   }
@@ -252,8 +271,11 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
     const linhaAlvo = necessario != null ? pesoAtual + necessario * i : alvoSem != null ? pesoAtual + alvoSem * i : null;
     futuro.push({ fim, projetado: ritmoEsperado != null ? pesoAtual + ritmoEsperado * i : null, banda: incerteza != null ? incerteza * i : null, linhaAlvo, marcaPrazo: Boolean(prazo && fim >= prazo && somarDias(fim, -7) < prazo) });
   }
-  // kcal/dia a mais (ou a menos) pra andar na linha do prazo, dentro do saudável
-  const ajusteKcal = necessarioSaudavel != null && ritmoEsperado != null ? ((necessarioSaudavel - ritmoEsperado) * KCAL_POR_KG) / 7 : null;
+  const ritmoMedido = vr.tend.suficiente ? vr.tend.kgSemana : null;
+  // kcal/dia a mais (ou a menos) pra sair do ritmo medido e chegar no alvo (7.700 kcal/kg; referência, a meta calibrada pela
+  // balança fica no !progresso)
+  const alvoRef = vr.alvo ?? necessarioSaudavel;
+  const ajusteKcal = alvoRef != null && (ritmoMedido ?? ritmoEsperado) != null ? ((alvoRef - (ritmoMedido ?? ritmoEsperado)) * KCAL_POR_KG) / 7 : null;
 
   // sinais de contexto (últimas 2 semanas com dado)
   const ult2 = semanas.slice(-2);
@@ -262,45 +284,52 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
   const avisos = [];
   if (sonoMedio != null && sonoMedio < 390) avisos.push(`sono médio de ${hm(sonoMedio)} nas últimas semanas (menos de 6h30 trava recuperação e apetite)`);
   if (treinosSem != null && treinosSem < 2.5 && treinos.length) avisos.push(`${treinosSem.toFixed(1).replace('.', ',')} treinos de força por semana (menos de 3 segura o ganho de massa)`);
-  if (ritmoReal != null && ritmoBalanco != null && Math.abs(ritmoReal - ritmoBalanco) >= 0.2) avisos.push(`balança (${kgSinal(ritmoReal)}/sem) e comida (${kgSinal(ritmoBalanco)}/sem) discordam: ou tem refeição sem registro, ou é água (creatina, sal, sono)`);
+  // a explicação depende do SENTIDO: balança abaixo do que a comida prevê não se explica por refeição esquecida (essa puxaria
+  // a balança pra cima do previsto); até 09/10 o aviso dizia "refeição sem registro ou água" nos dois casos
+  if (ritmoReal != null && ritmoBalanco != null && Math.abs(ritmoReal - ritmoBalanco) >= 0.2) {
+    const segue = discordante ? '; o esperado segue a balança' : '';
+    avisos.push(
+      ritmoReal < ritmoBalanco
+        ? `balança (${kgSinal(ritmoReal)}/sem) e comida (${kgSinal(ritmoBalanco)}/sem) discordam: a balança fica ABAIXO do que o registro prevê, então o relógio subestima o gasto e/ou as estimativas das fotos saem altas (refeição esquecida puxaria pro outro lado); água e sal mexem em dias, não em semanas${segue}`
+        : `balança (${kgSinal(ritmoReal)}/sem) e comida (${kgSinal(ritmoBalanco)}/sem) discordam: a balança fica ACIMA do que o registro prevê, então tem refeição ou bebida sem registro, porção maior que a estimada, ou o relógio superestima o gasto${segue}`,
+    );
+  }
 
-  // veredito
+  // veredito (texto no jeito da linha de tendência; status no vocabulário dela: ok/abaixo/acima/acima_gordura/neutro)
   let veredito = 'sem direção clara';
   let status = 'neutro';
   const prazoInviavel = necessario != null && limiteSaudavel != null && Math.abs(necessario) > Math.abs(limiteSaudavel) * 1.05;
-  if (ritmoEsperado == null) veredito = 'ainda sem ritmo (preciso de mais pesagens)';
-  else if (direcao === 0) veredito = `peso ${Math.abs(ritmoEsperado) < 0.1 ? 'estável' : `${kgSinal(ritmoEsperado)}/semana`}`;
+  const v = vr.veredito;
+  // a incerteza aparece em todo veredito, inclusive no "no ritmo" (que antes saía sem ela justamente quando era incerto)
+  const confTxt = v.confianca === 'media' ? `; provável (${Math.round(v.prob * 100)}%), não certo` : v.confianca === 'baixa' ? `; ainda incerto (${Math.round(v.prob * 100)}%)` : '';
+  const jaChegou = metaPeso && falta != null && direcao && falta * direcao <= 0.1; // etapa alcançada (ou passada) no sentido do objetivo
+  const chegadaTxt = metaPeso && direcao ? (jaChegou ? `; a etapa de ${kg1(metaPeso)} já foi alcançada` : chegada ? `; no ritmo esperado chega aos ${kg1(metaPeso)} em ${dmy(chegada.data)}${prazo ? ` (prazo ${dmy(prazo)})` : ''}` : '; nesse passo não chega') : '';
+  const avisoPrazo = prazoInviavel ? `. Aviso: o prazo pedia ${kgSinal(necessario)}/semana, acima do saudável; a data realista é ${chegadaSaudavel ? dmy(chegadaSaudavel.data) : '?'}` : '';
+  if (v.status === 'inconclusivo') veredito = ritmoEsperado == null ? 'ainda sem ritmo (preciso de mais pesagens)' : `ainda sem ritmo confiável (${vr.tend.motivo})`;
+  else if (v.status === 'neutro' || !vr.direcao) veredito = `peso ${Math.abs(vr.tend.kgSemana) < 0.1 ? 'estável' : `${kgSinal(vr.tend.kgSemana)}/semana`}`;
   else {
-    const andando = ritmoEsperado * direcao; // positivo = na direção certa
-    const limite = Math.abs(limiteSaudavel || 0);
-    const gorduraSubindo = direcao > 0 && gorduraPpSem != null && gorduraPpSem > 0.2;
-    const magraCaindo = direcao < 0 && magraSem != null && magraSem < -0.15;
-    if (andando < 0.05) {
-      veredito = direcao > 0 ? 'estagnado: o peso não sobe' : 'estagnado: o peso não cai';
+    const dir = vr.direcao;
+    const andando = vr.tend.kgSemana * dir; // positivo = na direção certa
+    const gorduraSubindo = dir > 0 && gorduraPpSem != null && gorduraPpSem > 0.2;
+    const magraCaindo = dir < 0 && magraSem != null && magraSem < -0.15;
+    const contra = `${kgSinal(vr.tend.kgSemana)}/semana pela balança contra ${kgSinal(vr.alvo)} do alvo`;
+    if (v.status === 'abaixo') {
       status = 'abaixo';
-    } else if (limite && andando > limite * 1.15) {
-      veredito = `${direcao > 0 ? 'subindo' : 'caindo'} mais rápido que o saudável (${kgSinal(ritmoEsperado)}/semana, máximo ${kgSinal(limiteSaudavel)})${gorduraSubindo ? ', e a gordura está subindo junto' : magraCaindo ? ', e está perdendo massa magra' : ''}`;
-      status = gorduraSubindo || magraCaindo ? 'acima_gordura' : 'acima';
-    } else if (necessario != null) {
-      // o que decide é a DATA: chegar até 1 semana depois do prazo é ritmo; até 4 semanas é 'um pouco abaixo'; mais é abaixo
-      const atrasoSem = chegada && prazo ? distDias(prazo, chegada.data) / 7 : null;
-      const compara = `${kgSinal(ritmoEsperado)}/semana contra ${kgSinal(necessarioSaudavel)} necessários`;
-      if (atrasoSem != null && atrasoSem <= 1) {
-        veredito = `no ritmo da etapa (${compara}); nesse passo chega aos ${kg1(metaPeso)} em ${dmy(chegada.data)}${prazoInviavel ? `. Aviso: o prazo pedia ${kgSinal(necessario)}/semana, acima do saudável; a data realista é ${chegadaSaudavel ? dmy(chegadaSaudavel.data) : '?'}` : ''}`;
-        status = 'ok';
-      } else {
-        const grau = atrasoSem != null && atrasoSem <= 4 ? 'um pouco abaixo' : 'abaixo';
-        veredito = `${grau} do ritmo da etapa (${compara})${chegada ? `: nesse passo os ${kg1(metaPeso)} ficam pra ${dmy(chegada.data)}, ${Math.max(1, Math.round(atrasoSem))} semana(s) depois de ${dmy(prazo)}` : ': nesse passo não chega'}${ajusteKcal != null && ajusteKcal > 0 ? `; pra entrar na linha: ${kcalSinal(ajusteKcal)}/dia a mais` : ''}`;
-        status = 'abaixo';
+      // peso indo pro lado contrário é dito como tal (antes virava "estagnado: o peso não sobe" e a queda sumia do veredito)
+      if (andando <= -0.05) veredito = `${dir > 0 ? 'peso caindo, contra o objetivo' : 'peso subindo, contra o objetivo'} (${contra}${confTxt})`;
+      else if (andando < 0.05) veredito = `${dir > 0 ? 'estagnado: o peso não sobe' : 'estagnado: o peso não cai'} (${contra}${confTxt})`;
+      else {
+        const grau = dir * vr.alvo - andando <= Math.abs(vr.alvo) * 0.25 ? 'um pouco abaixo' : 'abaixo';
+        veredito = `${grau} do ${metaPeso ? 'ritmo da etapa' : 'ritmo alvo'} (${contra}${confTxt})`;
       }
-    } else if (alvoSem != null) {
-      const dentro = andando >= Math.abs(alvoSem) - 0.12;
-      veredito = dentro ? `no caminho (${kgSinal(ritmoEsperado)}/semana, alvo ${kgSinal(alvoSem)})` : `abaixo do ritmo alvo (${kgSinal(ritmoEsperado)} contra ${kgSinal(alvoSem)}/semana)`;
-      status = dentro ? 'ok' : 'abaixo';
+    } else if (v.status === 'acima') {
+      veredito = `${dir > 0 ? 'subindo' : 'caindo'} mais rápido que o saudável (${kgSinal(vr.tend.kgSemana)}/semana, máximo ${kgSinal(vr.limite)}${confTxt})${gorduraSubindo ? ', e a gordura está subindo junto' : magraCaindo ? ', e está perdendo massa magra' : ''}`;
+      status = gorduraSubindo || magraCaindo ? 'acima_gordura' : 'acima';
     } else {
-      veredito = `${direcao > 0 ? 'subindo' : 'caindo'} ${kgSinal(ritmoEsperado)}/semana`;
+      veredito = `${metaPeso ? 'no ritmo da etapa' : 'no caminho'} (${contra}${confTxt}${v.pRapido >= 0.2 ? `; pode estar passando do teto saudável (${Math.round(v.pRapido * 100)}%)` : ''})`;
       status = 'ok';
     }
+    veredito += `${chegadaTxt}${avisoPrazo}`;
   }
   if (gorduraPpSem != null && direcao > 0 && gorduraPpSem > 0.2 && status === 'ok') veredito += `; atenção: gordura subindo ${gorduraPpSem.toFixed(1).replace('.', ',')} pp/semana`;
 
@@ -313,15 +342,17 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
   const maisMenos = (f) => (f.banda != null ? ` (±${f.banda.toFixed(1).replace('.', ',')})` : '');
   const linhaFuturo = (f) => `${dmy(f.fim)}: ${f.projetado != null ? kg1(f.projetado) : '?'}${maisMenos(f)}${f.linhaAlvo != null ? ` · linha da etapa ${kg1(f.linhaAlvo)}` : ''}${f.marcaPrazo ? ' ⬅ prazo' : ''}`;
   const txtJanela = chegada ? `Chegada aos ${kg1(metaPeso)} no ritmo esperado: ${dmy(chegada.data)} (${chegada.semanas} semanas${janelaChegada ? `; provável entre ${dmy(janelaChegada.cedo)} e ${janelaChegada.tarde ? dmy(janelaChegada.tarde) : 'sem data, se o ritmo cair pro limite baixo'}` : ''}).` : '';
+  // o rótulo diz de onde veio o ritmo: 4 semanas, ou as últimas pesagens (quando o mês teve menos de 4)
+  const rotuloRitmo = rec.length >= 4 ? 'balança, 4 semanas' : `balança, últimas ${base.length} pesagens desde ${dmy(base[0].dia)}`;
   const ritmos =
-    `Ritmo real (balança, 4 semanas): ${ritmoReal != null ? `${kgSinal(ritmoReal)}/semana` : '?'}` +
+    `Ritmo real (${rotuloRitmo}): ${ritmoReal != null ? `${kgSinal(ritmoReal)}/semana` : '?'}` +
     `${ritmoBalanco != null ? `; pela comida (balanço médio ${kcalSinal(balancoDia)}/dia em ${comBalanco.reduce((a, s) => a + s.diasBalanco, 0)} dias com relógio e registro${corr.aplicado ? `, corrigido pelo seu histórico pra ${kcalSinal(balancoUsado)}` : ''}): ${kgSinal(ritmoBalanco)}/semana` : ''}` +
-    `${ritmoEsperado != null ? `; esperado daqui pra frente: ${kgSinal(ritmoEsperado)}/semana${incerteza != null ? ` (incerteza ±${incerteza.toFixed(2).replace('.', ',')})` : ''}` : ''}` +
-    `${alvoSem != null ? `; alvo da faixa: ${kgSinal(alvoSem)}/semana` : ''}` +
+    `${ritmoEsperado != null ? `; esperado daqui pra frente${discordante ? ' (segue a balança: a comida discorda além do ruído)' : ''}: ${kgSinal(ritmoEsperado)}/semana${incerteza != null ? ` (incerteza ±${incerteza.toFixed(2).replace('.', ',')})` : ''}` : ''}` +
+    `${alvoSem != null ? `; alvo (o mesmo da meta de calorias): ${kgSinal(alvoSem)}/semana` : ''}` +
     `${necessario != null ? `; necessário pra ${rotuloMeta}: ${kgSinal(necessario)}/semana${prazoInviavel ? ` (acima do saudável, máximo ${kgSinal(limiteSaudavel)})` : ''}` : ''}` +
     `${magraSem != null ? `; massa magra ${kgSinal(magraSem)}/semana, gordura ${kgSinal(gorduraSem)}/semana` : ''}.`;
   const texto =
-    `LINHA DE TENDÊNCIA ATÉ A ETAPA${rotuloMeta ? ` (${rotuloMeta})` : ''}; peso atual ${kg1(pesoAtual)}${falta != null ? `, faltam ${kgSinal(falta)}` : ''}:\n` +
+    `LINHA DE TENDÊNCIA ATÉ A ETAPA${rotuloMeta ? ` (${rotuloMeta})` : ''}; peso atual ${kg1(pesoAtual)} (${ref.rotulo})${falta != null ? `, faltam ${kgSinal(falta)}` : ''}:\n` +
     `PASSADO (médias por semana, mais antiga -> mais nova; comida = kcal registradas, gasto = relógio):\n${semanas.map((s) => `- ${linhaSemana(s)}`).join('\n')}\n` +
     `${ritmos}\n` +
     `${txtComposicao ? `${txtComposicao}\n` : ''}` +
@@ -330,13 +361,13 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
     `${avisos.length ? `AVISOS: ${avisos.join('; ')}.\n` : ''}` +
     `VEREDITO: ${veredito}. (Bioimpedância oscila de um dia pro outro; o que vale é a tendência de semanas. Balanço energético usa 7.700 kcal por kg, uma aproximação; a banda de incerteza cresce com o horizonte. Como calcular e as fontes: documento "Como os números são calculados".)`;
   const textoCurto =
-    `RITMO ATÉ A ETAPA${rotuloMeta ? ` (${rotuloMeta})` : ''}: peso ${kg1(pesoAtual)}${falta != null ? `, faltam ${kgSinal(falta)}` : ''}. ${ritmos} ` +
+    `RITMO ATÉ A ETAPA${rotuloMeta ? ` (${rotuloMeta})` : ''}: peso atual ${kg1(pesoAtual)} (${ref.rotulo})${falta != null ? `, faltam ${kgSinal(falta)}` : ''}. ${ritmos} ` +
     `${chegada ? `Chegada no ritmo atual: ${dmy(chegada.data)}${janelaChegada ? ` (provável entre ${dmy(janelaChegada.cedo)} e ${janelaChegada.tarde ? dmy(janelaChegada.tarde) : 'sem data'})` : ''}. ` : ''}${composicao ? `Composição desde ${dmy(composicao.desde)}: peso ${kgSinal(composicao.dPeso)}, massa magra ${kgSinal(composicao.dMagra)}, gordura ${kgSinal(composicao.dGord)} (${descreverParte(composicao)}). ` : ''}VEREDITO: ${veredito}.${avisos.length ? ` Avisos: ${avisos.join('; ')}.` : ''}`;
   const icone = status === 'ok' ? '✅' : status === 'abaixo' ? '⚠️' : status === 'acima_gordura' ? '🛑' : status === 'acima' ? '⚠️' : '•';
   const zap =
-    `📈 *Linha de tendência${rotuloMeta ? ` até ${rotuloMeta}` : ''}*\nPeso atual: *${kg1(pesoAtual)}*${falta != null ? ` · faltam ${kgSinal(falta)}` : ''}\n\n` +
+    `📈 *Linha de tendência${rotuloMeta ? ` até ${rotuloMeta}` : ''}*\n${ref.rotulo[0].toUpperCase()}${ref.rotulo.slice(1)}: *${kg1(pesoAtual)}*${falta != null ? ` · faltam ${kgSinal(falta)}` : ''}\n\n` +
     `*Passado (média por semana)*\n${semanas.map((s) => `- ${dmy(s.fim)}: *${kg1(s.peso)}*${s.gordura != null ? ` · ${s.gordura.toFixed(1).replace('.', ',')}% · ${kg1(s.magra)} magra` : ''}${s.balanco != null ? ` · ${kcalSinal(s.balanco)}/dia` : ''}${s.treinos ? ` · ${s.treinos} treino(s)` : ''}${s.sono != null ? ` · sono ${hm(s.sono)}` : ''}`).join('\n')}\n\n` +
-    `*Ritmo*\n- Balança (4 sem.): ${ritmoReal != null ? `${kgSinal(ritmoReal)}/semana` : '?'}${ritmoBalanco != null ? `\n- Pela comida (${kcalSinal(balancoDia)}/dia): ${kgSinal(ritmoBalanco)}/semana` : ''}${ritmoEsperado != null ? `\n- Esperado: *${kgSinal(ritmoEsperado)}/semana* (±${incerteza.toFixed(2).replace('.', ',')})` : ''}${necessario != null ? `\n- Necessário pra etapa: ${kgSinal(necessario)}/semana${prazoInviavel ? ` (acima do saudável, máx. ${kgSinal(limiteSaudavel)})` : ''}` : alvoSem != null ? `\n- Alvo: ${kgSinal(alvoSem)}/semana` : ''}${magraSem != null ? `\n- Massa magra ${kgSinal(magraSem)} · gordura ${kgSinal(gorduraSem)} por semana` : ''}\n\n` +
+    `*Ritmo*\n- Balança (${rec.length >= 4 ? '4 sem.' : `últimas ${base.length} pesagens`}): ${ritmoReal != null ? `*${kgSinal(ritmoReal)}/semana*` : '?'}${ritmoBalanco != null ? `\n- Pela comida (${kcalSinal(balancoDia)}/dia${corr.aplicado ? `, corrigido pra ${kcalSinal(balancoUsado)}` : ''}): ${kgSinal(ritmoBalanco)}/semana` : ''}${ritmoEsperado != null ? `\n- Esperado pra projeção: ${kgSinal(ritmoEsperado)}/semana (±${incerteza.toFixed(2).replace('.', ',')})${discordante ? ' (segue a balança: a comida discorda)' : ''}` : ''}${alvoSem != null ? `\n- Alvo (o da meta de calorias): ${kgSinal(alvoSem)}/semana` : ''}${necessario != null ? `\n- Necessário pro prazo: ${kgSinal(necessario)}/semana${prazoInviavel ? ` (acima do saudável, máx. ${kgSinal(limiteSaudavel)})` : ''}` : ''}${magraSem != null ? `\n- Massa magra ${kgSinal(magraSem)} · gordura ${kgSinal(gorduraSem)} por semana` : ''}\n\n` +
     `${composicao ? `*Composição da mudança* (${dmy(composicao.desde)} → ${dmy(composicao.ate)})\n- Peso ${kgSinal(composicao.dPeso)}: massa magra ${kgSinal(composicao.dMagra)}, gordura ${kgSinal(composicao.dGord)}\n- Gordura de ${pct(composicao.gorduraDe)} para ${pct(composicao.gorduraPara)}: ${descreverParte(composicao)}${gorduraNaMeta != null ? `\n- Se seguir assim, em ${kg1(metaPeso)}: ~${pct(gorduraNaMeta)} de gordura, ${kg1(metaPeso * (1 - gorduraNaMeta / 100))} de massa magra` : ''}\n\n` : ''}` +
     `*Projeção* (ritmo atual ± incerteza · linha da etapa)\n${futuro.map((f) => `- ${dmy(f.fim)}: ${f.projetado != null ? kg1(f.projetado) : '?'}${maisMenos(f)}${f.linhaAlvo != null ? ` · ${kg1(f.linhaAlvo)}` : ''}${f.marcaPrazo ? ' ⬅ prazo' : ''}`).join('\n')}\n` +
     `${chegada ? `\nChegada aos ${kg1(metaPeso)} nesse ritmo: *${dmy(chegada.data)}*${janelaChegada ? ` (provável entre ${dmy(janelaChegada.cedo)} e ${janelaChegada.tarde ? dmy(janelaChegada.tarde) : 'sem data'})` : ''}` : ''}${chegadaSaudavel && prazoInviavel ? `\nNo ritmo máximo saudável: ${dmy(chegadaSaudavel.data)}` : ''}\n\n` +
@@ -346,7 +377,7 @@ export function projecaoAteMeta({ perfil = {}, dia, pesagens = [], refeicoes = [
     `${ritmoBalanco != null ? `\n• Pela comida: ${kgSinal(ritmoBalanco)}/semana (balanço ${kcalSinal(balancoDia)}/dia)` : ''}` +
     `${magraSem != null ? `\n• Massa magra ${kgSinal(magraSem)} · gordura ${kgSinal(gorduraSem)} por semana` : ''}` +
     `${composicao ? `\n• Desde ${dmy(composicao.desde)}: ${descreverParte(composicao)}` : ''}`;
-  return { semanas, pesoAtual, falta, ritmo: { real: ritmoReal, balanco: ritmoBalanco, esperado: ritmoEsperado, alvo: alvoSem, necessario, necessarioSaudavel, limiteSaudavel }, seSem, incerteza, balancoDia, balancoCorrigido: corr.aplicado ? balancoUsado : null, chegada, janelaChegada, chegadaSaudavel, prazoInviavel, futuro, composicao, gorduraNaMeta, veredito, status, ajusteKcal, magraSem, gorduraSem, gorduraPpSem, avisos, texto, textoCurto, zap, resumoZap };
+  return { semanas, pesoAtual, falta, ritmo: { real: ritmoReal, medido: ritmoMedido, balanco: ritmoBalanco, esperado: ritmoEsperado, alvo: alvoSem, necessario, necessarioSaudavel, limiteSaudavel }, discordante, julgamento: v, seSem, incerteza, balancoDia, balancoCorrigido: corr.aplicado ? balancoUsado : null, chegada, janelaChegada, chegadaSaudavel, prazoInviavel, futuro, composicao, gorduraNaMeta, veredito, status, ajusteKcal, magraSem, gorduraSem, gorduraPpSem, avisos, texto, textoCurto, zap, resumoZap };
 }
 
 /** Junta os dados da pessoa (120 dias de pesagens, 35 de comida, relógio, Hevy) e devolve projecaoAteMeta; null sem base. */
@@ -359,7 +390,6 @@ export async function tendenciaCompleta(perfil, dia) {
     colecao('treinos').find({ jid: { $in: perfil.jids }, inicio: { $gte: new Date(Date.now() - 100 * 86400_000).toISOString() } }).project({ inicio: 1 }).toArray().catch(() => []),
   ]);
   if (pesagens.length < 4) return null;
-  const pesoAtual = [...pesagens].sort((a, b) => a.dia.localeCompare(b.dia)).pop()?.peso || perfil.peso;
-  const faixa = metaBalancoPara({ objetivo: perfil.objetivo, peso: pesoAtual, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia, ritmo: perfil.ritmo, metaModo: perfil.metaModo, gorduraTend: tendenciaGordura(pesagens.filter((p) => p.dia >= diasAnteriores(dia, 28)[0])) });
+  const faixa = faixaDaMeta(perfil, dia, pesagens); // a mesma faixa do !progresso, do !hoje e da meta de calorias
   return projecaoAteMeta({ perfil, dia, pesagens, refeicoes, gastos: perfil.relogio?.gastos || {}, sonos: saude?.sonos || [], treinos, faixa });
 }
