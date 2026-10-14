@@ -95,10 +95,12 @@ const ida = (x) => JSON.parse(JSON.stringify(x));
 // ---------- perfil ----------
 test('perfil: só os campos do contrato, id string, sem jids; ehDono pelo ADMIN_JID; semApelido = apelido null', () => {
   const p = M.montarPerfil(perfilBase(), { temHevy: true, adminJid: JID });
-  assert.deepEqual(Object.keys(p).sort(), ['apelido', 'ehDono', 'fuso', 'id', 'metaPeso', 'metaPrazo', 'nome', 'objetivo', 'primeiroNome', 'temHevy', 'temRelogio'].sort());
-  assert.deepEqual(p, { id: ID, nome: 'Pessoa A Teste', primeiroNome: 'Pessoa', apelido: 'Pê', fuso: 'America/Sao_Paulo', objetivo: 'Hipertrofia: ganhar massa', metaPeso: 80, metaPrazo: '2030-07-15', temRelogio: true, temHevy: true, ehDono: true });
-  const outro = M.montarPerfil({ _id: 'b', nome: 'Pessoa B', jids: ['b@x'], semApelido: true, apelido: 'Bê', fuso: 'Fuso/Inexistente' }, { adminJid: JID });
+  assert.deepEqual(Object.keys(p).sort(), ['apelido', 'ehDono', 'fuso', 'id', 'metaPeso', 'metaPrazo', 'nome', 'objetivo', 'primeiroNome', 'temHevy', 'temRelogio', 'altura', 'ritmo'].sort());
+  assert.deepEqual(p, { id: ID, nome: 'Pessoa A Teste', primeiroNome: 'Pessoa', apelido: 'Pê', fuso: 'America/Sao_Paulo', objetivo: 'Hipertrofia: ganhar massa', metaPeso: 80, metaPrazo: '2030-07-15', temRelogio: true, temHevy: true, ehDono: true, altura: 178, ritmo: 'maximo' });
+  const outro = M.montarPerfil({ _id: 'b', nome: 'Pessoa B', jids: ['b@x'], semApelido: true, apelido: 'Bê', fuso: 'Fuso/Inexistente', altura: '172.6', ritmo: 'médio' }, { adminJid: JID });
   assert.equal(outro.apelido, null);
+  assert.deepEqual([outro.altura, outro.ritmo], [173, null]); // ritmo só sem acento (como aplicarAtualizacao grava)
+  assert.equal(M.montarPerfil({ _id: 'c', nome: 'C', ritmo: 'maximo' }).ritmo, 'maximo');
   assert.equal(outro.ehDono, false);
   assert.equal(outro.temRelogio, false);
   assert.equal(outro.metaPeso, null);
@@ -126,7 +128,10 @@ test('refeição: id, hora local, faixa pela incerteza, macros, origem e itens d
     incerteza: 'media',
     itens: [item('arroz'), item('feijão'), item('150 g de frango grelhado'), item('salada')],
     miniatura: null,
+    foto: null,
   });
+  // fase 3: a foto no Drive sai só como link
+  assert.deepEqual(M.montarRefeicao({ _id: 'f', foto: { driveId: 'abc 123', nome: 'x.jpg' } }).foto, { url: 'https://drive.google.com/file/d/abc%20123/view' });
   const semEst = M.montarRefeicao({ _id: 'x', slot: 'lanche', hora: '16:00', resumo: 'um pão de queijo', manual: true });
   assert.equal(semEst.kcal, null);
   assert.equal(semEst.faixa, null);
@@ -366,7 +371,16 @@ test('nutri: todo item com natureza, origem, atualizadoEm e escopo; o diário ve
   assert.equal(n.fatos.find((f) => f.campo === 'notas').texto, '- Gosta de café sem açúcar.\n- Odeia beterraba.');
   assert.equal(n.fatos.find((f) => f.campo === 'rotina').texto, 'Acorda às 6h. Janta tarde.');
   assert.deepEqual(n.fatos.filter((f) => f.campo === 'anotacao').map((f) => f.texto), ['Prefere arroz integral']);
-  assert.deepEqual(n.hipoteses.map((h) => [h.id, h.status]), [['h1', 'aberta'], ['h0', 'confirmada']]);
+  // fase 3: ids estáveis e o que a pessoa pode fazer com cada fato no app
+  // rotina e notas aqui tiveram frases de lugar filtradas: NÃO são editáveis (salvar o texto filtrado apagaria o bairro de vez)
+  assert.deepEqual(n.fatos.map((f) => [f.id, f.editavel, f.apagavel, f.valor]), [
+    ['objetivo', false, false, null], ['metaPeso', false, false, null], ['peso', false, false, null], ['altura', false, false, null], ['dieta', true, true, 'onívora'],
+    [`produto:${M.hashCurto('Whey X')}`, false, true, null], ['girias', false, true, null], ['rotina', false, true, null], ['notas', false, true, null], [`anotacao:${M.hashCurto('Prefere arroz integral')}`, false, true, null],
+  ]);
+  const limpo = M.montarNutri({ perfil: perfilBase({ rotina: 'Acorda às 6h.', notas: '- Gosta de café.\n- Odeia beterraba.' }) });
+  assert.deepEqual(limpo.fatos.filter((f) => f.editavel).map((f) => [f.id, f.valor]), [['rotina', 'Acorda às 6h.'], ['notas', '- Gosta de café.\n- Odeia beterraba.']]);
+  assert.match(n.fatos.find((f) => f.campo === 'produto').id, /^produto:[0-9a-f]{8}$/);
+  assert.deepEqual(n.hipoteses.map((h) => [h.id, h.status, h.apagavel]), [['h1', 'aberta', true], ['h0', 'confirmada', false]]);
   assert.equal(n.hipoteses[1].atualizadoEm, '2030-03-03');
   assert.deepEqual(n.diario.map((d) => d.texto), ['O grupo comeu bem.']);
   assert.deepEqual(n.avaliacoes.map((x) => x.tipo), ['pensamento', 'reflexao']);
@@ -447,12 +461,13 @@ test('avisos: rótulo em caixa alta sai; rápido demais = cuidado; sono e treino
 
 // ---------- I4: todas as chaves do contrato, sempre (com null quando falta), em dados mínimos ----------
 const ESQUEMA = {
-  Perfil: ['id', 'nome', 'primeiroNome', 'apelido', 'fuso', 'objetivo', 'metaPeso', 'metaPrazo', 'temRelogio', 'temHevy', 'ehDono'],
+  Perfil: ['id', 'nome', 'primeiroNome', 'apelido', 'fuso', 'objetivo', 'metaPeso', 'metaPrazo', 'temRelogio', 'temHevy', 'ehDono', 'altura', 'ritmo'],
   Hoje: ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana', 'humor', 'eventos'],
   Kcal: ['consumido', 'faixa', 'err', 'situacao'],
   Macro: ['g', 'meta'],
   // fase 2: dia, incerteza, miniatura e itens com macros (o ajuste por gramas parte deles)
-  Refeicao: ['id', 'dia', 'slot', 'nome', 'hora', 'kcal', 'faixa', 'p', 'c', 'g', 'descricao', 'origem', 'incerteza', 'itens', 'miniatura'],
+  // fase 3: foto no Drive (só o link)
+  Refeicao: ['id', 'dia', 'slot', 'nome', 'hora', 'kcal', 'faixa', 'p', 'c', 'g', 'descricao', 'origem', 'incerteza', 'itens', 'miniatura', 'foto'],
   Item: ['nome', 'gramas', 'kcal', 'p', 'c', 'g'],
   Evento: ['id', 'dia', 'hora', 'titulo', 'tipo', 'nota', 'criadoEm'],
   Humor: ['humor', 'energia', 'sono', 'texto', 'atualizadoEm'],
@@ -470,8 +485,9 @@ const ESQUEMA = {
   Treino: ['sessoes', 'series', 'volumeKg', 'volumeAnteriorKg', 'variacaoVolume', 'rpeMedio', 'semanasComTreino', 'porGrupo', 'progressao'],
   Exercicio: ['exercicio', 'sessoes', 'melhorKg', 'reps', 'desdeKg', 'ultimaSubida', 'semanasParado'],
   Sugestao: ['exercicio', 'deKg', 'deReps', 'paraKg', 'paraReps', 'status', 'feitaEm', 'batidaEm', 'como'],
-  Fato: ['campo', 'texto', 'natureza', 'origem', 'atualizadoEm', 'escopo'],
-  Hipotese: ['id', 'texto', 'status', 'comoVerificar', 'evidencia', 'sinais', 'natureza', 'origem', 'atualizadoEm', 'escopo'],
+  Fato: ['id', 'campo', 'texto', 'natureza', 'origem', 'atualizadoEm', 'escopo', 'editavel', 'apagavel', 'valor'],
+  Hipotese: ['id', 'texto', 'status', 'comoVerificar', 'evidencia', 'sinais', 'natureza', 'origem', 'atualizadoEm', 'escopo', 'apagavel'],
+  PesagemSimples: ['dia', 'peso', 'gordura', 'fonte', 'hora'],
   Diario: ['dia', 'texto', 'natureza', 'origem', 'atualizadoEm', 'escopo'],
   Avaliacao: ['tipo', 'dia', 'hora', 'texto', 'natureza', 'origem', 'atualizadoEm', 'escopo'],
   Periodo: ['de', 'ate', 'dias', 'diasComRegistro', 'diasComEstimativa', 'kcalMedia', 'proteinaMedia', 'metaProteina', 'diasCompletos', 'diasProteinaBatida', 'peso', 'texto'],
@@ -496,6 +512,11 @@ test('I4: chaves do contrato sempre presentes com dados mínimos (sem relógio, 
     { _id: 'r2', jid: 'm@x', dia: DIA, slot: 'almoco', hora: '12:00', minutos: 720, descricao: 'sopa de legumes' },
   ];
   confere(M.montarPerfil(minima), 'Perfil');
+  // fase 3: pesagens por intervalo (uma por dia, sem validação de outliers)
+  const ps = M.montarPesagens([{ dia: '2030-03-02', peso: 70.123, fonte: 'relogio', hora: '07:10', gordura: 150 }, { dia: '2030-03-01', peso: 70.4, jid: 'x@y' }, { dia: '2030-03-01', peso: 70.6, gordura: 18.26, jid: 'z@y' }, { dia: '2030-03-03' }]);
+  ps.forEach((x) => confere(x, 'PesagemSimples'));
+  // um ponto por dia (dois jids no mesmo dia: fica o último), gordura impossível vira null, nada de jid
+  assert.deepEqual(ps, [{ dia: '2030-03-01', peso: 70.6, gordura: 18.3, fonte: 'digitada', hora: null }, { dia: '2030-03-02', peso: 70.12, gordura: null, fonte: 'relogio', hora: '07:10' }]);
 
   const h = M.montarHoje({ perfil: minima, dia: DIA, hoje: DIA, horaAgora: '23:00', refeicoes: refs });
   confere(h, 'Hoje');

@@ -14,6 +14,7 @@ import { projecaoAteMeta } from './tendencia.js';
 import { energiaDoDia } from './saude.js';
 import { analisarTreinos, grupoEmPortugues } from './treino.js';
 import { progressaoForca, conferirSugestoes } from './contexto.js';
+import { createHash } from 'node:crypto';
 import { SLOTS, fusoDe, diasAnteriores, diaSeguinte, horariosHabituais, minutosDe, semAcento } from './util.js';
 
 // ---------- números ----------
@@ -70,6 +71,9 @@ export function montarPerfil(perfil, { temHevy = false, adminJid = '' } = {}) {
     temRelogio: Boolean(perfil?.relogio && typeof perfil.relogio === 'object' && Object.keys(perfil.relogio).length),
     temHevy: Boolean(temHevy),
     ehDono: Boolean(adminJid && (perfil?.jids || []).includes(adminJid)),
+    // fase 3: a tela Perfil edita altura e ritmo (o PUT já aceitava; faltava devolver)
+    altura: Number(perfil?.altura) > 0 ? int(perfil.altura) : null,
+    ritmo: /^(maximo|medio|minimo)$/.test(String(perfil?.ritmo || '')) ? String(perfil.ritmo) : null,
   });
 }
 
@@ -159,8 +163,10 @@ export function montarRefeicao(r, termosLocal = []) {
     origem: origemDaRefeicao(r),
     incerteza,
     itens: itensGravados(r, termosLocal) || itensDaRefeicao(baseItens).map((i) => ({ ...i, p: null, c: null, g: null })),
-    // miniatura JPEG feita pelo app (≤ 24 KB) no registro pelo app; a foto em si não fica guardada
+    // miniatura JPEG feita pelo app (≤ 24 KB) no registro pelo app; a foto em si não fica guardada no Mongo
     miniatura: typeof r?.miniatura === 'string' && r.miniatura ? `data:image/jpeg;base64,${r.miniatura}` : null,
+    // fase 3: a foto do registro pelo app fica na pasta da pessoa no Drive (D6); só o link sai
+    foto: r?.foto?.driveId ? { url: `https://drive.google.com/file/d/${encodeURIComponent(String(r.foto.driveId))}/view` } : null,
   });
 }
 const porMinuto = (a, b) => (Number(a.minutos) || 0) - (Number(b.minutos) || 0);
@@ -409,6 +415,22 @@ export function montarRefeicoes({ refeicoes = [], de, ate, hoje, termosLocal = [
 // Progresso
 // ============================================================
 /** GET /perfis/:id/progresso: a mesma análise do !progresso (31 dias), estruturada; `texto` é o textoZap. */
+/**
+ * GET /perfis/:id/pesagens?de=&ate= (fase 3): a lista crua de um dia por pesagem, já consolidada entre as fontes pelo
+ * mongo.pesagensDesde (a mesma régua do /progresso), sem a validação de outliers (ela é da janela de 31 dias). É o que o
+ * app desenha em 90 dias e 1 ano: só pontos e média de 7 dias, sem tendência.
+ */
+export function montarPesagens(pesagens = []) {
+  // um ponto por dia (perfil com dois jids pode trazer dois docs do mesmo dia: fica o último) e gordura só na faixa possível
+  const porDia = new Map();
+  for (const p of pesagens || []) {
+    if (!p?.dia || !(Number(p.peso) > 0)) continue;
+    const g = Number(p.gordura);
+    porDia.set(p.dia, { dia: p.dia, peso: r2(p.peso), gordura: g >= 2 && g <= 70 ? r1(g) : null, fonte: p.fonte || 'digitada', hora: p.hora || null });
+  }
+  return completar([...porDia.values()].sort((a, b) => a.dia.localeCompare(b.dia)));
+}
+
 export function montarProgresso({ perfil, dia, refeicoes = [], pesagens = [] }) {
   const { r31, p31 } = janela31({ dia, refeicoes, pesagens });
   const a = progressoComo({ perfil, dia, r31, p31 });
@@ -502,21 +524,35 @@ export function montarCorpo({ perfil, dia, pesagens = [], refeicoes = [], saude 
 // ============================================================
 const ROTULO_CAMPO = { objetivo: 'Objetivo', metaPeso: 'Meta de peso', peso: 'Peso', altura: 'Altura', dieta: 'Dieta', restricoes: 'Restrições', genero: 'Gênero' };
 
+/** Puro. 8 hex do sha1 do texto: identifica um produto fixo (pelo nome) ou uma anotação (pelo texto gravado) sem depender da posição na lista. */
+export const hashCurto = (t) => createHash('sha1').update(String(t ?? '')).digest('hex').slice(0, 8);
+/** Fatos de texto livre que a pessoa corrige no app (fase 3); objetivo, meta, peso e altura se editam na tela Perfil. */
+export const FATOS_EDITAVEIS = ['dieta', 'restricoes', 'rotina', 'notas'];
+/** Fatos que a pessoa apaga no app: os editáveis, as gírias (a lista toda), e cada produto fixo e anotação pelo id. */
+export const FATOS_APAGAVEIS = [...FATOS_EDITAVEIS, 'girias'];
+
 /**
  * GET /perfis/:id/nutri. fatos (cadastro, produtos fixos, gírias, rotina, notas e anotações), hipóteses (abertas no perfil e
  * fechadas na coleção), diário da Nutri e avaliações (reflexões e pensamentos). Todo item traz natureza ('declarado' |
  * 'medido' | 'inferido' | 'hipotese' | 'opiniao'), origem, atualizadoEm e escopo: 'pessoa', ou 'grupo' no diário (decisão
  * do dono: o diário fica no /nutri, mas marcado como texto sobre o grupo todo, não dado desta pessoa). Texto livre passa pelo
- * filtro de localização.
+ * filtro de localização. Fase 3: cada fato traz id, editavel e apagavel (contrato em docs/app/2026-10-14-plano-fase3.md);
+ * a hipótese aberta traz apagavel (a pessoa descarta).
  */
 export function montarNutri({ perfil, hipotesesFechadas = [], reflexoes = [], pensamentos = [], diario = [], termosLocal = [] }) {
   const sem = (t) => tirarLocalizacao(t, termosLocal);
   const at = perfil.atualizacoes || {};
   const fatos = [];
   // todo texto de fato passa pelo filtro (dieta, restrições e produto também: "só como no restaurante X")
-  const fato = (campo, texto, natureza, origem, atualizadoEm) => {
+  // `valor` = o texto cru que o PUT recebe de volta (sem o rótulo "Dieta: "); só nos editáveis. Se o filtro de localização
+  // tirou alguma frase, o fato NÃO é editável: salvar o texto filtrado apagaria de vez o bairro de casa que o bot usa
+  const fato = (campo, texto, natureza, origem, atualizadoEm, id = campo, valor = null) => {
     const t = sem(String(texto || '')).trim();
-    if (t) fatos.push({ campo, texto: t, natureza, origem, atualizadoEm: atualizadoEm || null, escopo: 'pessoa' });
+    if (!t) return;
+    const cru = valor == null ? null : String(valor).trim();
+    const filtrado = cru != null && sem(cru).trim() !== cru;
+    const editavel = FATOS_EDITAVEIS.includes(campo) && !filtrado;
+    fatos.push({ id, campo, texto: t, natureza, origem, atualizadoEm: atualizadoEm || null, escopo: 'pessoa', editavel, apagavel: FATOS_APAGAVEIS.includes(campo) || campo === 'produto' || campo === 'anotacao', valor: editavel ? cru : null });
   };
   const comVirgula = (n) => String(n).replace('.', ',');
   if (perfil.objetivo) fato('objetivo', `${ROTULO_CAMPO.objetivo}: ${perfil.objetivo}`, 'declarado', 'cadastro e conversa', at.objetivo);
@@ -526,15 +562,15 @@ export function montarNutri({ perfil, hipotesesFechadas = [], reflexoes = [], pe
     fato('peso', `${ROTULO_CAMPO.peso}: ${comVirgula(perfil.peso)} kg`, doRelogio ? 'medido' : 'declarado', doRelogio ? 'balança do relógio' : 'cadastro e conversa', at.peso);
   }
   if (perfil.altura) fato('altura', `${ROTULO_CAMPO.altura}: ${perfil.altura} cm`, 'declarado', 'cadastro', at.altura);
-  if (perfil.dieta) fato('dieta', `${ROTULO_CAMPO.dieta}: ${perfil.dieta}`, 'declarado', 'cadastro e conversa', at.dieta);
-  if (perfil.restricoes) fato('restricoes', `${ROTULO_CAMPO.restricoes}: ${perfil.restricoes}`, 'declarado', 'cadastro e conversa', at.restricoes);
-  for (const p of perfil.produtos || []) fato('produto', `Produto fixo: ${p.nome}${p.kcal ? ` (${p.kcal} kcal)` : ''}`, 'declarado', 'rótulo ou conversa', p.em);
+  if (perfil.dieta) fato('dieta', `${ROTULO_CAMPO.dieta}: ${perfil.dieta}`, 'declarado', 'cadastro e conversa', at.dieta, 'dieta', perfil.dieta);
+  if (perfil.restricoes) fato('restricoes', `${ROTULO_CAMPO.restricoes}: ${perfil.restricoes}`, 'declarado', 'cadastro e conversa', at.restricoes, 'restricoes', perfil.restricoes);
+  for (const p of perfil.produtos || []) fato('produto', `Produto fixo: ${p.nome}${p.kcal ? ` (${p.kcal} kcal)` : ''}`, 'declarado', 'rótulo ou conversa', p.em, `produto:${hashCurto(p.nome)}`);
   if (perfil.girias?.length) fato('girias', `Gírias: ${perfil.girias.join(', ')}`, 'inferido', 'conversa no grupo (lida pela IA toda noite)', null);
-  if (perfil.rotina) fato('rotina', sem(perfil.rotina), 'inferido', 'ficha de rotina (IA, toda noite)', null);
-  if (perfil.notas) fato('notas', sem(perfil.notas), 'inferido', 'notas da Nutri sobre a pessoa (IA, toda noite)', null);
-  for (const a of perfil.anotacoes || []) fato('anotacao', sem(a.texto), 'inferido', `anotação da Nutri${a.tipo ? ` (${a.tipo})` : ''}`, a.dia);
+  if (perfil.rotina) fato('rotina', perfil.rotina, 'inferido', 'ficha de rotina (IA, toda noite)', at.rotina, 'rotina', perfil.rotina);
+  if (perfil.notas) fato('notas', perfil.notas, 'inferido', 'notas da Nutri sobre a pessoa (IA, toda noite)', at.notas, 'notas', perfil.notas);
+  for (const a of perfil.anotacoes || []) fato('anotacao', sem(a.texto), 'inferido', `anotação da Nutri${a.tipo ? ` (${a.tipo})` : ''}`, a.dia, `anotacao:${hashCurto(a.texto)}`);
 
-  const hip = (h, origem) => ({
+  const hip = (h, origem, apagavel) => ({
     id: h.id || null,
     texto: sem(h.texto),
     status: h.status || 'aberta',
@@ -545,10 +581,11 @@ export function montarNutri({ perfil, hipotesesFechadas = [], reflexoes = [], pe
     origem,
     atualizadoEm: h.fechadaEm || h.ultimaChecagem || h.criadaEm || null,
     escopo: 'pessoa',
+    apagavel: Boolean(apagavel && h.id),
   });
   const hipoteses = [
-    ...(perfil.hipoteses || []).filter((h) => h.status === 'aberta').map((h) => hip(h, 'reflexão de domingo (IA); sinais dos pensamentos')),
-    ...hipotesesFechadas.map((h) => hip(h, 'reflexão de domingo (IA), conferida nos dados')),
+    ...(perfil.hipoteses || []).filter((h) => h.status === 'aberta').map((h) => hip(h, 'reflexão de domingo (IA); sinais dos pensamentos', true)),
+    ...hipotesesFechadas.map((h) => hip(h, h.status === 'descartada' ? 'descartada pela pessoa no app' : 'reflexão de domingo (IA), conferida nos dados', false)),
   ].filter((h) => h.texto);
 
   const avaliacoes = [

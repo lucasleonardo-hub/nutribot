@@ -113,7 +113,7 @@ private fun gruposDe(j: JSONObject): List<GrupoFontes> {
     }
     j.obj("drive")?.let { d ->
         val ok = d.bool("configurado") == true
-        gerais.add(Fonte("Google Drive", if (ok) "ok" else "não ligado", if (ok) "Configurado. A checagem diária das 07:20 avisa no WhatsApp se a permissão expirar." else "Não configurado no servidor."))
+        gerais.add(Fonte("Google Drive", if (ok) "ok" else "não ligado", if (ok) "Configurado." else "Não configurado."))
     }
     val out = ArrayList<GrupoFontes>()
     if (gerais.isNotEmpty()) out.add(GrupoFontes(null, gerais))
@@ -196,11 +196,6 @@ fun TelaIntegracoes(vm: AppVM, legado: Legado, voltar: () -> Unit) {
                     }
                 }
                 }
-                Text(
-                    "Quando o servidor está dormindo, o app mostra o que já tinha guardado e avisa \"acordando o servidor…\" (pode levar até 1 minuto).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Cores.Tinta3,
-                )
             }
 
             // O Relógio antigo, inteiro: o que este celular manda para o bot
@@ -243,8 +238,8 @@ fun TelaIntegracoes(vm: AppVM, legado: Legado, voltar: () -> Unit) {
                     Text("Este aparelho no app", style = MaterialTheme.typography.titleMedium)
                     Text("Servidor: ${vm.base}", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
                     Spacer(Modifier.height(8.dp))
-                    Botao("Desparear este celular", Modifier.fillMaxWidth(), suave = true) { vm.sair("Aparelho despareado. Para voltar, mande !app no privado do bot.") }
-                    Text("Apaga o token e os dados guardados no celular. O relógio continua mandando os dados normalmente.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 6.dp))
+                    Botao("Desconectar este celular", Modifier.fillMaxWidth(), suave = true) { vm.sair("Celular desconectado. Para voltar, mande !app no privado do bot.") }
+                    Text("Desconecta o app deste celular. O relógio continua enviando.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 6.dp))
                 }
             }
         }

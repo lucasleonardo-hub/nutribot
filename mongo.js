@@ -259,8 +259,10 @@ export async function registrarRefeicao(entrada) {
 }
 
 /** Ajusta campos de um registro (ex.: tipo da refeição quando a pessoa diz "era o lanche da tarde"). */
+/** Devolve quantos registros casaram (0 = a refeição já não existe; a foto do app usa isso pra não ficar órfã no Drive). */
 export async function atualizarRefeicao(id, set) {
-  await colecao('refeicoes').updateOne({ _id: idDe(id) }, { $set: { ...set, atualizadoEm: new Date() } });
+  const r = await colecao('refeicoes').updateOne({ _id: idDe(id) }, { $set: { ...set, atualizadoEm: new Date() } });
+  return r.matchedCount;
 }
 
 /** _id de Mongo a partir do que vier: ObjectId fica; string de 24 hex vira ObjectId; o resto fica como está. */
@@ -341,6 +343,11 @@ export async function registrarCorrecao({ dia, pessoa, texto }) {
 }
 export async function correcoesDoDia(dia) {
   return colecao('correcoes_dia').find({ dia }).sort({ em: 1 }).toArray();
+}
+
+/** Hipótese fechada fora da reflexão de domingo (a pessoa descartou pelo app): vai pra coleção `hipoteses` como as outras. */
+export async function guardarHipoteseFechada(doc) {
+  await colecao('hipoteses').insertOne({ ...doc, criadoEm: new Date() });
 }
 
 /** Apaga um registro pelo _id (pedido da pessoa: "remove esse almoço das 11:03", ou !apagar). */

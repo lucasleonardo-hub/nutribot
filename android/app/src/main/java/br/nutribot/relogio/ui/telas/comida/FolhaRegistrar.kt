@@ -122,14 +122,14 @@ fun FolhaRegistrar(
         val f = File(Imagens.pastaFotos(ctx), "foto_${System.currentTimeMillis()}.jpg")
         arquivoCamera = f.name
         val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fotos", f)
-        runCatching { camera.launch(uri) }.onFailure { erro = "Não achei um app de câmera neste celular. Use a galeria." }
+        runCatching { camera.launch(uri) }.onFailure { erro = "Sem app de câmera. Use a galeria." }
     }
 
     fun enviar() {
         val t = texto.trim()
         if (t.isBlank() && fotos.isEmpty()) { erro = "Escreva o que você comeu ou mande uma foto."; return }
-        if (!Formato.horaValida(hora)) { erro = "A hora precisa estar no formato HH:MM (ex.: 12:30)."; return }
-        if (t.length > 500) { erro = "O texto pode ter até 500 caracteres."; return }
+        if (!Formato.horaValida(hora)) { erro = "Hora no formato HH:MM."; return }
+        if (t.length > 500) { erro = "Até 500 caracteres."; return }
         escopo.launch {
             enviando = true
             erro = null
@@ -147,13 +147,13 @@ fun FolhaRegistrar(
                     }
                 }
                 val j = vm.escrever("POST", AppVM.rotaNovaRefeicao(perfilId), corpo)
-                val r = j.obj("refeicao")?.let { Refeicao.de(it) } ?: throw ErroApi(201, "resposta_invalida", "O servidor registrou, mas não devolveu a refeição. Puxe para atualizar.")
+                val r = j.obj("refeicao")?.let { Refeicao.de(it) } ?: throw ErroApi(201, "resposta_invalida", "Registrado. Puxe para atualizar.")
                 Imagens.limparTemporarias(ctx)
                 aoRegistrar(r, j.obj("hoje"))
             } catch (e: ErroApi) {
                 erro = when {
-                    e.status == 422 -> e.message ?: "A Nutri não viu comida aí. Descreva melhor o que você comeu."
-                    e.semConexao -> "O servidor está acordando (ou sem conexão). Tente de novo em instantes."
+                    e.status == 422 -> e.message ?: "A Nutri não viu comida aí. Descreva melhor."
+                    e.semConexao -> "Sem resposta do servidor. Tente de novo."
                     else -> e.paraPessoa
                 }
             } catch (e: CancellationException) {
@@ -205,7 +205,7 @@ fun FolhaRegistrar(
                     }
                     if (processando) CircularProgressIndicator(Modifier.size(28.dp), color = Cores.Acai, strokeWidth = 3.dp)
                 }
-                Text("Até 2 fotos. Elas vão reduzidas e não ficam guardadas; só uma miniatura fica no diário.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4)
+                Text("Até 2 fotos. A primeira fica na sua pasta do Drive.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4)
             }
             Text("Qual refeição?", style = MaterialTheme.typography.labelLarge)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -220,7 +220,7 @@ fun FolhaRegistrar(
             erro?.let { AvisoErro(it) }
             Spacer(Modifier.height(2.dp))
             Botao("Analisar e registrar", Modifier.fillMaxWidth(), habilitado = !processando) { enviar() }
-            Text("A Nutri estima as calorias e os macros (pode levar até 1 minuto se o servidor estiver acordando). Depois dá para ajustar por gramas.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4)
+            Text("A Nutri estima calorias e macros. Depois você ajusta por gramas.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4)
         }
     }
 }

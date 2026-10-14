@@ -250,15 +250,40 @@ const escrita = {
     if (a.sem_meta_peso) novo.metaPeso = null;
     return Object.keys(novo).length > 2 ? novo : null;
   },
-  salvarPerfil: async (p) => (perfilSalvo = p),
+  // como o Mongo: o patch entra no perfil, e o próximo pedido já lê o perfil novo
+  salvarPerfil: async (p) => {
+    perfilSalvo = p;
+    const alvo = perfis.find((x) => x.jids.includes(p.jids[0]));
+    if (alvo) Object.assign(alvo, p);
+  },
   lembrar: async (m) => lembradas.push(m),
+  // fase 3
+  guardarHipoteseFechada: async (h) => hipotesesGuardadas.push(h),
+  salvarNotas: async (perfil, texto, dia) => notasSalvas.push([perfil.nome, texto, dia]),
+  // como o de verdade: a promessa só resolve quando o "Drive" (liberarDrive) terminar; a resposta ao app não espera isso
+  guardarFoto: (x) =>
+    new Promise((ok) => {
+      liberarDrive = () => {
+        fotosGuardadas.push(x);
+        Object.assign(refeicoes.find((r) => r._id === x.registroId), { foto: { driveId: 'drv-1', nome: E.nomeDaFoto({ ...x.registro, mimeType: x.foto.mimeType, id: x.registroId }).nome } });
+        ok({ driveId: 'drv-1' });
+      };
+    }),
+  lixeiraDrive: async (id) => lixeira.push(id),
 };
+let liberarDrive = null;
+const hipotesesGuardadas = [];
+const notasSalvas = [];
+const fotosGuardadas = [];
+const lixeira = [];
+const pesagensEntreLista = [];
 const dados = {
   listarPerfis: async () => perfis,
   doDia: async (perfil, dia) => ({ refeicoes: refeicoes.filter((r) => perfil.jids.includes(r.jid) && r.dia === dia), pesagens: [], saude: null, treinos: [], humor: humores.find((h) => h.jid === perfil.jids[0] && h.dia === dia) || null, eventos: eventos.filter((e) => e.jid === perfil.jids[0] && e.dia === dia) }),
   refeicoesEntre: async (perfil, de, ate) => refeicoes.filter((r) => perfil.jids.includes(r.jid) && r.dia >= de && r.dia <= ate),
   eventosEntre: async (perfil, de, ate) => eventos.filter((e) => perfil.jids.includes(e.jid) && e.dia >= de && e.dia <= ate),
   de31: async () => ({ refeicoes: [], pesagens: [] }),
+  pesagensEntre: async (perfil, de, ate) => pesagensEntreLista.filter((p) => p.dia >= de && p.dia <= ate),
   catalogoHevy: async () => ({}),
   daNutri: async () => ({ hipotesesFechadas: [], reflexoes: [], pensamentos: [], diario: [] }),
   integracoes: async () => ({ porPerfil: new Map(), whatsapp: { estado: 'conectado' }, driveConfigurado: true }),
@@ -473,4 +498,177 @@ test('escrita sem token: 401 (e o corpo de 1 MB da foto nem é lido); rota inexi
   assert.equal((await grande.json()).erro.codigo, 'sem_token');
   const x = await pedir('POST', `/perfis/${ID}/inexistente`, {});
   assert.equal(x.status, 404);
+});
+
+// ============================================================
+// Fase 3: corrigir o que a Nutri sabe, pesagens por intervalo, foto no Drive
+// ============================================================
+test('aplicarCorrecaoFato (pura): edita e apaga texto livre, apaga produto/anotação pelo hash e gírias; nega o que se edita no Perfil', async () => {
+  const { hashCurto } = await import('../api-montadores.js');
+  const perfil = { nome: 'Pessoa A', jids: [JID], objetivo: 'manter', dieta: 'onívora', rotina: 'Acorda cedo.', girias: ['bah'], produtos: [{ nome: 'whey x', kcal: 120 }, { nome: 'aveia', kcal: 380 }], anotacoes: [{ dia: '2030-03-01', texto: 'Prefere arroz integral' }], atualizacoes: { objetivo: '2030-01-01' } };
+  const e = E.aplicarCorrecaoFato(perfil, 'dieta', 'Vegetariana', HOJE);
+  assert.deepEqual(e.patch, { jids: [JID], atualizacoes: { objetivo: '2030-01-01', dieta: HOJE }, dieta: 'vegetariana' });
+  assert.match(e.correcao, /corrigiu pelo app dieta: "vegetariana"/);
+  // mesmo texto: nada a gravar
+  assert.deepEqual(E.aplicarCorrecaoFato(perfil, 'rotina', 'Acorda cedo.', HOJE), { patch: null, correcao: null });
+  const a = E.aplicarCorrecaoFato(perfil, 'rotina', null, HOJE);
+  assert.deepEqual([a.patch.rotina, a.patch.atualizacoes.rotina], [null, HOJE]);
+  // rotina e notas são privadas: a linha da correção (que vai pro resumo do grupo) não leva o conteúdo
+  const rot = E.aplicarCorrecaoFato(perfil, 'rotina', 'Acorda às 5h e treina em jejum.', HOJE);
+  assert.equal(rot.correcao.includes('jejum'), false);
+  assert.match(rot.correcao, /conteúdo privado/);
+  assert.deepEqual(E.aplicarCorrecaoFato(perfil, 'girias', null, HOJE).patch.girias, []);
+  const p = E.aplicarCorrecaoFato(perfil, `produto:${hashCurto('whey x')}`, null, HOJE);
+  assert.deepEqual(p.patch.produtos, [{ nome: 'aveia', kcal: 380 }]);
+  assert.match(p.correcao, /apagou pelo app o produto fixo "whey x"/);
+  const an = E.aplicarCorrecaoFato(perfil, `anotacao:${hashCurto('Prefere arroz integral')}`, null, HOJE);
+  assert.deepEqual(an.patch.anotacoes, []);
+  assert.equal(an.correcao.includes('arroz'), false);
+  const erro = (fid, txt, status, codigo) => assert.throws(() => E.aplicarCorrecaoFato(perfil, fid, txt, HOJE), (x) => x.status === status && x.codigo === codigo, `${fid} ${txt}`);
+  erro('objetivo', 'ganhar', 400, 'fato_nao_editavel');
+  erro('objetivo', null, 400, 'fato_nao_apagavel');
+  erro('girias', 'tri', 400, 'fato_nao_editavel');
+  erro('produto:deadbeef', null, 404, 'fato_nao_encontrado');
+  erro(`produto:${hashCurto('aveia')}`, 'x', 400, 'fato_nao_editavel');
+  erro('notas', null, 404, 'fato_nao_encontrado'); // não tem notas
+  erro('restricoes', 'sem lactose', 404, 'fato_nao_encontrado'); // só corrige o que existe
+  erro('jids', null, 400, 'fato_nao_apagavel'); // campo fora da lista nunca é tocado
+  assert.throws(() => E.validarFato({ texto: '   ' }), /texto vazio/);
+  assert.equal(E.validarFato({ texto: ' a  b ' }), 'a b');
+  // as notas são uma lista: quebras de linha ficam; o limite é do campo e nunca trunca em silêncio
+  assert.equal(E.validarFato({ texto: '- Gosta de café.\r\n\r\n\r\n- Odeia   beterraba. \n' }, 'notas'), '- Gosta de café.\n\n- Odeia beterraba.');
+  assert.equal(E.validarFato({ texto: 'x'.repeat(3000) }, 'notas').length, 3000);
+  assert.throws(() => E.validarFato({ texto: 'x'.repeat(121) }, 'dieta'), /mais de 120/);
+  assert.throws(() => E.validarFato({ texto: 'x'.repeat(4001) }, 'notas'), /mais de 4000/);
+  assert.throws(() => E.validarFato({ texto: 'x'.repeat(401) }), /mais de 400/);
+});
+
+test('aplicarDescarteHipotese (pura) e nomeDaFoto', () => {
+  const h1 = { id: 'h1', texto: 'Come menos em dia de treino', status: 'aberta', criadaEm: '2030-03-10' };
+  const perfil = { nome: 'Pessoa A', jids: [JID], hipoteses: [h1, { id: 'h2', texto: 'Outra', status: 'aberta' }] };
+  const d = E.aplicarDescarteHipotese(perfil, 'h1', HOJE);
+  assert.deepEqual(d.patch, { jids: [JID], hipoteses: [perfil.hipoteses[1]] });
+  assert.deepEqual([d.fechada.status, d.fechada.fechadaEm, d.fechada.jid, d.fechada.evidencia], ['descartada', HOJE, JID, 'descartada pela pessoa no app']);
+  assert.equal(d.correcao.includes('Come menos'), false); // conteúdo privado fora do resumo do grupo
+  assert.match(d.correcao, /descartou pelo app uma hipótese/);
+  assert.throws(() => E.aplicarDescarteHipotese(perfil, 'h9', HOJE), (x) => x.status === 404 && x.codigo === 'hipotese_nao_encontrada');
+  // o fim do _id entra no nome: duas refeições na mesma hora e slot não dividem o arquivo
+  assert.deepEqual(E.nomeDaFoto({ dia: '2030-03-29', horaLocal: '12:30', slot: 'almoco', mimeType: 'image/jpeg', id: '65f0c0ffeeabc123' }), { pasta: '2030-03', nome: '2030-03-29 12h30 Almoço abc123.jpg' });
+  assert.equal(E.nomeDaFoto({ dia: '2030-03-29', horaLocal: '08:00', slot: 'cafe', mimeType: 'image/png' }).nome, '2030-03-29 08h00 Café da manhã.png');
+});
+
+test('guardarFotoNoDrive: pasta da pessoa/Fotos/AAAA-MM, arquivo nomeado, driveId anotado no registro; refeição apagada no meio = foto pra lixeira', async () => {
+  const chamadas = [];
+  const drive = {
+    pastaDe: async (p) => `raiz-${p.nome}`,
+    subpasta: async (pai, nome) => (chamadas.push(['subpasta', pai, nome]), `${pai}/${nome}`),
+    salvarEmPasta: async (pasta, nome, dados, mime) => (chamadas.push(['salvar', pasta, nome, dados.length, mime]), 'id-drive'),
+    lixeira: async (id) => chamadas.push(['lixeira', id]),
+  };
+  const sets = [];
+  const foto = { mimeType: 'image/jpeg', data: Buffer.alloc(10) };
+  const r = await E.guardarFotoNoDrive({ drive, atualizarRefeicao: async (id, set) => (sets.push([id, set]), 1), perfil: { nome: 'Pessoa A' }, registroId: 'novo1', registro: { dia: '2030-03-29', horaLocal: '12:30', slot: 'almoco' }, foto });
+  assert.deepEqual(r, { driveId: 'id-drive', nome: '2030-03-29 12h30 Almoço novo1.jpg' });
+  assert.deepEqual(chamadas, [['subpasta', 'raiz-Pessoa A', 'Fotos'], ['subpasta', 'raiz-Pessoa A/Fotos', '2030-03'], ['salvar', 'raiz-Pessoa A/Fotos/2030-03', '2030-03-29 12h30 Almoço novo1.jpg', 10, 'image/jpeg']]);
+  assert.deepEqual(sets, [['novo1', { foto: { driveId: 'id-drive', nome: '2030-03-29 12h30 Almoço novo1.jpg' } }]]);
+  // o DELETE chegou enquanto a foto subia: o updateOne não casa com nada e a foto vai pra lixeira em vez de ficar órfã
+  chamadas.length = 0;
+  const r2 = await E.guardarFotoNoDrive({ drive, atualizarRefeicao: async () => 0, perfil: { nome: 'Pessoa A' }, registroId: 'sumiu', registro: { dia: '2030-03-29', horaLocal: '12:30', slot: 'almoco' }, foto });
+  assert.equal(r2, null);
+  assert.deepEqual(chamadas.at(-1), ['lixeira', 'id-drive']);
+  assert.equal(await E.guardarFotoNoDrive({ drive, atualizarRefeicao: async () => 1, perfil: {}, registroId: 'x', registro: {}, foto: null }), null);
+});
+
+test('rotas da fase 3: PUT/DELETE nutri/fatos e DELETE nutri/hipoteses gravam pelo salvarPerfil, anotam a correção e devolvem o /nutri; GET /pesagens por intervalo', async () => {
+  const { hashCurto } = await import('../api-montadores.js');
+  const pA = perfis[0];
+  pA.dieta = 'onívora';
+  pA.anotacoes = [{ dia: '2030-03-01', texto: 'Prefere arroz integral' }];
+  pA.hipoteses = [{ id: 'h1', texto: 'Come menos em dia de treino', status: 'aberta', criadaEm: '2030-03-10' }];
+  correcoes.length = 0;
+  perfilSalvo = null;
+  let r = await pedir('PUT', `/perfis/${ID}/nutri/fatos/dieta`, { texto: 'vegetariana' });
+  assert.equal(r.status, 200);
+  assert.deepEqual([perfilSalvo.dieta, perfilSalvo.atualizacoes.dieta, perfilSalvo.jids], ['vegetariana', HOJE, [JID]]);
+  assert.equal(r.json.nutri.fatos.find((f) => f.id === 'dieta').texto, 'Dieta: vegetariana');
+  assert.match(correcoes.at(-1).texto, /corrigiu pelo app dieta/);
+  r = await pedir('PUT', `/perfis/${ID}/nutri/fatos/objetivo`, { texto: 'x' });
+  assert.deepEqual([r.status, r.json.erro.codigo], [400, 'fato_nao_editavel']);
+  r = await pedir('PUT', `/perfis/${ID}/nutri/fatos/dieta`, {});
+  assert.equal(r.status, 400);
+
+  r = await pedir('DELETE', `/perfis/${ID}/nutri/fatos/anotacao:${hashCurto('Prefere arroz integral')}`);
+  assert.deepEqual([r.status, r.json.apagado, perfilSalvo.anotacoes], [200, true, []]);
+  assert.equal(r.json.nutri.fatos.some((f) => f.campo === 'anotacao'), false);
+  r = await pedir('DELETE', `/perfis/${ID}/nutri/fatos/anotacao:00000000`);
+  assert.deepEqual([r.status, r.json.erro.codigo], [404, 'fato_nao_encontrado']);
+  // notas: além do Mongo, passam por salvarNotas (cache de pessoas.js e Nutri-Notas.md), senão a reescrita noturna desfaz
+  pA.notas = '- Gosta de café.';
+  r = await pedir('PUT', `/perfis/${ID}/nutri/fatos/notas`, { texto: '- Gosta de café sem açúcar.' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(notasSalvas.at(-1), ['Pessoa A', '- Gosta de café sem açúcar.', HOJE]);
+  r = await pedir('DELETE', `/perfis/${ID}/nutri/fatos/notas`);
+  assert.deepEqual([r.status, notasSalvas.at(-1), perfilSalvo.notas], [200, ['Pessoa A', '', HOJE], null]);
+  // Drive fora do ar: 503 e NADA gravado no Mongo (gravar só no Mongo deixaria a noite desfazer a correção)
+  pA.notas = '- Antiga.';
+  perfilSalvo = null;
+  const salvarNotasOk = escrita.salvarNotas;
+  escrita.salvarNotas = async () => { throw new Error('drive caiu'); };
+  r = await pedir('PUT', `/perfis/${ID}/nutri/fatos/notas`, { texto: '- Nova.' });
+  assert.deepEqual([r.status, r.json.erro.codigo, perfilSalvo], [503, 'drive_indisponivel', null]);
+  escrita.salvarNotas = salvarNotasOk;
+  delete pA.notas;
+  // texto de 400+ nas notas passa (limite 4000); dieta com 121 não
+  pA.dieta = 'x';
+  r = await pedir('PUT', `/perfis/${ID}/nutri/fatos/dieta`, { texto: 'y'.repeat(121) });
+  assert.equal(r.status, 400);
+
+  r = await pedir('DELETE', `/perfis/${ID}/nutri/hipoteses/h1`);
+  assert.deepEqual([r.status, r.json.apagado, perfilSalvo.hipoteses], [200, true, []]);
+  assert.deepEqual([hipotesesGuardadas.at(-1).id, hipotesesGuardadas.at(-1).status, hipotesesGuardadas.at(-1).jid], ['h1', 'descartada', JID]);
+  assert.equal(r.json.nutri.hipoteses.some((h) => h.id === 'h1'), false);
+  assert.match(correcoes.at(-1).texto, /descartou pelo app uma hipótese/);
+  assert.equal(correcoes.at(-1).texto.includes('Come menos'), false); // o conteúdo não vai pro resumo do grupo
+  r = await pedir('DELETE', `/perfis/${ID}/nutri/hipoteses/h1`);
+  assert.equal(r.status, 404);
+  // outra pessoa não alcança o perfil A pelo id de B? (o token vê os perfis liberados; o que vale é o :id do pedido)
+  delete pA.dieta;
+  delete pA.anotacoes;
+  delete pA.hipoteses;
+
+  pesagensEntreLista.push({ dia: '2030-03-01', peso: 70.4, fonte: 'relogio', hora: '07:00' }, { dia: '2030-02-01', peso: 71 });
+  r = await pedir('GET', `/perfis/${ID}/pesagens?de=2030-01-01&ate=${HOJE}`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.pesagens, [{ dia: '2030-02-01', peso: 71, gordura: null, fonte: 'digitada', hora: null }, { dia: '2030-03-01', peso: 70.4, gordura: null, fonte: 'relogio', hora: '07:00' }]);
+  r = await pedir('GET', `/perfis/${ID}/pesagens?de=2029-01-01&ate=${HOJE}`);
+  assert.deepEqual([r.status, r.json.erro.codigo], [400, 'intervalo_invalido']); // 452 dias > 366
+  r = await pedir('GET', `/perfis/${ID}/pesagens?de=2020-01-01&ate=${HOJE}`);
+  assert.deepEqual([r.status, r.json.erro.codigo], [400, 'dia_invalido']); // fora da janela de 2 anos
+  r = await pedir('GET', `/perfis/${ID}/pesagens?de=2030-03-01&ate=2030-04-01`);
+  assert.deepEqual([r.status, r.json.erro.codigo], [400, 'dia_invalido']); // futuro
+  r = await pedir('GET', `/perfis/${ID}/pesagens?ate=${HOJE}`);
+  assert.deepEqual([r.status, r.json.erro.codigo], [400, 'pedido_invalido']); // de obrigatório
+});
+
+test('POST /refeicoes com foto: a resposta não espera o Drive e o registro ganha foto.driveId depois', async () => {
+  respostaIa = { estimativa: { kcal: 300, p: 10, c: 30, g: 10 }, descricao: 'pão', tipo: 'cafe', itens: [{ nome: 'pão', gramas: 50, kcal: 300 }] };
+  fotosGuardadas.length = 0;
+  const foto = { mime: 'image/jpeg', base64: Buffer.alloc(300, 7).toString('base64') };
+  liberarDrive = null;
+  const { status, json } = await pedir('POST', `/perfis/${ID}/refeicoes`, { fotos: [foto], hora: '08:00' });
+  assert.equal(status, 201);
+  assert.equal(json.refeicao.foto, null); // o link só aparece na próxima leitura
+  // a resposta chegou com o "Drive" ainda pendente (liberarDrive só é chamado agora)
+  assert.equal(fotosGuardadas.length, 0);
+  assert.equal(typeof liberarDrive, 'function');
+  liberarDrive();
+  await new Promise((ok) => setTimeout(ok, 5));
+  assert.deepEqual([fotosGuardadas.length, fotosGuardadas[0].registroId, fotosGuardadas[0].foto.data.length, fotosGuardadas[0].registro.slot], [1, json.refeicao.id, 300, 'cafe']);
+  const salvo = refeicoes.find((x) => x._id === json.refeicao.id);
+  assert.deepEqual(salvo.foto, { driveId: 'drv-1', nome: `2030-03-29 08h00 Café da manhã ${json.refeicao.id.slice(-6)}.jpg` });
+  // apagar manda a foto pra lixeira do Drive
+  const d = await pedir('DELETE', `/perfis/${ID}/refeicoes/${json.refeicao.id}`);
+  assert.equal(d.status, 200);
+  await new Promise((ok) => setTimeout(ok, 20));
+  assert.deepEqual(lixeira, ['drv-1']);
 });

@@ -97,8 +97,8 @@ fun FolhaAjustar(vm: AppVM, perfilId: String, r: Refeicao, aoFechar: () -> Unit,
     fun texto(v: Double?): String = v?.roundToInt()?.toString() ?: ""
 
     fun salvar() {
-        if (hora.isNotBlank() && !Formato.horaValida(hora)) { erro = "A hora precisa estar no formato HH:MM."; return }
-        if (descricao.trim().length > 220) { erro = "A descrição pode ter até 220 caracteres."; return }
+        if (hora.isNotBlank() && !Formato.horaValida(hora)) { erro = "Hora no formato HH:MM."; return }
+        if (descricao.trim().length > 220) { erro = "Descrição: até 220 caracteres."; return }
         val corpo = JSONObject()
         val mudouGramas = r.itens.indices.any { i -> r.itens[i].gramas != null && abs(gramas[i] - (r.itens[i].gramas ?: 0.0)) >= 0.5 }
         if (mudouGramas) {
@@ -127,7 +127,7 @@ fun FolhaAjustar(vm: AppVM, perfilId: String, r: Refeicao, aoFechar: () -> Unit,
                 val nova = j.obj("refeicao")?.let { Refeicao.de(it) } ?: r
                 aoSalvar(nova, j.obj("hoje"))
             } catch (e: ErroApi) {
-                erro = if (e.semConexao) "O servidor está acordando (ou sem conexão). Tente de novo em instantes." else e.paraPessoa
+                erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
             } catch (e: CancellationException) {
                 throw e
             } finally {
@@ -171,7 +171,7 @@ fun FolhaAjustar(vm: AppVM, perfilId: String, r: Refeicao, aoFechar: () -> Unit,
                     }
                 }
             } else {
-                Text("Esta refeição não tem itens com gramas (veio do WhatsApp). Ajuste as calorias e os macros direto nos campos.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                Text("Registro do WhatsApp: sem itens em gramas. Ajuste os totais.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
             }
             Text("Totais da refeição", style = MaterialTheme.typography.labelLarge)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -183,7 +183,7 @@ fun FolhaAjustar(vm: AppVM, perfilId: String, r: Refeicao, aoFechar: () -> Unit,
                 OutlinedTextField(gManual ?: texto(gCalc), { gManual = it }, label = { Text("Gordura g") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f))
             }
             if (listOf(kcalManual, pManual, cManual, gManual).any { it != null }) {
-                Text("Você mexeu nos totais: o que digitou vale, no lugar do recálculo pelas gramas.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4)
+                Text("Totais digitados valem no lugar das gramas.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4)
             }
             OutlinedTextField(descricao, { descricao = it }, label = { Text("Descrição") }, minLines = 1, maxLines = 3, modifier = Modifier.fillMaxWidth())
             Text("Qual refeição?", style = MaterialTheme.typography.labelLarge)

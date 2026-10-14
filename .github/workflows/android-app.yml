@@ -5,7 +5,7 @@
 name: android-app
 on:
   push:
-    branches: [app-fase1, app-fase2, main]
+    branches: [app-fase1, app-fase2, app-fase3, main]
     paths: ['android/**', '.github/workflows/android-app.yml']
   workflow_dispatch:
 permissions:

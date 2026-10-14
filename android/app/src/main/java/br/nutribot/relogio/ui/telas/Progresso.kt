@@ -110,7 +110,7 @@ fun TelaProgresso(vm: AppVM, perfil: Perfil?) {
     var pesar by rememberSaveable { mutableStateOf(false) }
     ConteudoCarga(carga, { vm.carregar(rota, forcar = true) }, topo = { Cabecalho("Progresso", "${perfil.curto} · peso e energia", Pose.CorgiBalanca, 64.dp) }) { j ->
         Botao("Registrar peso", Modifier.fillMaxWidth()) { pesar = true }
-        ConteudoProgresso(j)
+        ConteudoProgresso(vm, perfil, j)
     }
     if (pesar) DialogoPeso(vm, perfil.id, aoFechar = { pesar = false }) { pesar = false; vm.invalidar(perfil.id) }
 }
@@ -125,9 +125,9 @@ private fun DialogoPeso(vm: AppVM, perfilId: String, aoFechar: () -> Unit, aoReg
     var erro by remember { mutableStateOf<String?>(null) }
     fun enviar() {
         val kg = Formato.numeroDigitado(peso)
-        if (kg == null || kg < 25 || kg > 400) { erro = "Peso entre 25 e 400 kg (ex.: 68,2)."; return }
+        if (kg == null || kg < 25 || kg > 400) { erro = "Peso entre 25 e 400 kg."; return }
         val pct = if (gordura.isBlank()) null else Formato.numeroDigitado(gordura)
-        if (gordura.isNotBlank() && (pct == null || pct < 3 || pct > 70)) { erro = "Gordura entre 3 e 70% (ou deixe em branco)."; return }
+        if (gordura.isNotBlank() && (pct == null || pct < 3 || pct > 70)) { erro = "Gordura entre 3 e 70%, ou em branco."; return }
         escopo.launch {
             enviando = true
             erro = null
@@ -137,7 +137,7 @@ private fun DialogoPeso(vm: AppVM, perfilId: String, aoFechar: () -> Unit, aoReg
                 vm.escrever("POST", AppVM.rotaPesagens(perfilId), corpo)
                 aoRegistrar()
             } catch (e: ErroApi) {
-                erro = if (e.semConexao) "O servidor está acordando (ou sem conexão). Tente de novo em instantes." else e.paraPessoa
+                erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
             } catch (e: CancellationException) {
                 throw e
             } finally {
@@ -151,7 +151,7 @@ private fun DialogoPeso(vm: AppVM, perfilId: String, aoFechar: () -> Unit, aoReg
         title = { Text("Registrar peso", style = MaterialTheme.typography.headlineSmall) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Vale como pesagem de hoje. Se o relógio também mandar, a dele vence.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                Text("Pesagem de hoje. Se o relógio pesar, vale a dele.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
                 OutlinedTextField(peso, { peso = it.take(6) }, label = { Text("Peso (kg)") }, placeholder = { Text("68,2") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(gordura, { gordura = it.take(5) }, label = { Text("Gordura % (opcional)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
                 erro?.let { AvisoErro(it) }
@@ -162,11 +162,20 @@ private fun DialogoPeso(vm: AppVM, perfilId: String, aoFechar: () -> Unit, aoReg
     )
 }
 
+/** Janelas do gráfico: até 28 dias vêm do /progresso; 90 dias e 1 ano vêm da rota de pesagens por intervalo (fase 3). */
+private val janelas = listOf(7 to "7 d", 14 to "14 d", 21 to "21 d", 28 to "28 d", 90 to "90 d", 365 to "1 ano")
+
 @Composable
-private fun ConteudoProgresso(j: JSONObject) {
+private fun ConteudoProgresso(vm: AppVM, perfil: Perfil, j: JSONObject) {
     val pesagens = remember(j) { pesagensDe(j) }
     val tend = j.obj("tendencia")
     var janela by rememberSaveable { mutableIntStateOf(28) }
+    val longa = janela > 28
+    // 90 d e 1 ano: pesagens do intervalo [hoje − janela + 1, hoje], só pontos e média de 7 dias (sem tendência nem banda)
+    val hoje = Formato.hojeDe(j.str("dia"), perfil.fuso)
+    val rotaLonga = AppVM.rotaPesagensEntre(perfil.id, Formato.iso(hoje.minusDays((janela - 1).toLong())), Formato.iso(hoje))
+    val cargaLonga by vm.carga(rotaLonga).collectAsStateWithLifecycle()
+    LaunchedEffect(rotaLonga, longa) { if (longa) vm.carregar(rotaLonga) }
 
     Cartao(forma = Formas.Grande) {
         Row(verticalAlignment = Alignment.Top) {
@@ -183,17 +192,27 @@ private fun ConteudoProgresso(j: JSONObject) {
                 tend.str("direcao")?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = Cores.Tinta2) }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(7, 14, 21, 28, 90).forEach { d ->
+        Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            janelas.forEach { (d, nome) ->
                 val ativa = d == janela
                 Box(
                     Modifier.weight(1f).heightIn(min = 48.dp).clip(Formas.Pilula).background(if (ativa) Cores.Acai else Cores.Trilho)
                         .clickable(role = Role.Tab) { janela = d },
                     contentAlignment = Alignment.Center,
-                ) { Text("${d}d", fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 14.sp, color = if (ativa) Cores.Branco else Cores.LilasTexto) }
+                ) { Text(nome, fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 13.sp, maxLines = 1, color = if (ativa) Cores.Branco else Cores.LilasTexto) }
             }
         }
-        GraficoPeso(pesagens, tend, janela)
+        if (!longa) {
+            GraficoPeso(pesagens, tend, janela)
+        } else {
+            val dados = cargaLonga.dados
+            val erroLonga = cargaLonga.erro
+            when {
+                dados != null -> GraficoPeso(remember(dados) { pesagensDe(dados) }, null, janela)
+                erroLonga != null -> Text(erroLonga.paraPessoa, style = MaterialTheme.typography.bodySmall, color = Cores.CuidadoTinta, modifier = Modifier.padding(vertical = 30.dp))
+                else -> Text("Carregando…", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(vertical = 30.dp))
+            }
+        }
         Legenda()
         janelaTexto(tend, janela)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 6.dp)) }
     }
@@ -246,7 +265,7 @@ private fun ConteudoProgresso(j: JSONObject) {
             Box(
                 Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(Formas.Pequeno).background(Cores.Trilho).clickable(role = Role.Button) { aberto = !aberto },
                 contentAlignment = Alignment.Center,
-            ) { Text(if (aberto) "Esconder a conta" else "Como cheguei nisso (o !progresso)", fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 15.sp, color = Cores.LilasTexto) }
+            ) { Text(if (aberto) "Esconder a conta" else "Como cheguei nisso", fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 15.sp, color = Cores.LilasTexto) }
             if (aberto) Text(texto, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 10.dp))
         }
     }
@@ -255,10 +274,9 @@ private fun ConteudoProgresso(j: JSONObject) {
 private fun janelaTexto(tend: JSONObject?, janela: Int): String? {
     val k = tend.arr("janelas").objs().firstOrNull { (it.num("dias") ?: 0.0).toInt() == janela }?.num("kgSemana")
     return when {
-        janela == 28 -> null
-        janela == 90 -> "O /progresso traz as pesagens dos últimos 31 dias (a janela do !progresso); os 90 dias chegam numa próxima versão."
-        k != null -> "Nos últimos $janela dias: ${Formato.sinal(k)} kg/sem. A faixa de 95% é da janela de 28 dias."
-        else -> "Sem tendência calculada para $janela dias: só os pontos e a média de 7 dias."
+        janela >= 28 -> null
+        k != null -> "Últimos $janela dias: ${Formato.sinal(k)} kg/sem."
+        else -> "Sem tendência em $janela dias: só pontos e média de 7 dias."
     }
 }
 
@@ -334,7 +352,7 @@ private fun GraficoPeso(pesagens: List<Pesagem>, tend: JSONObject?, janela: Int)
             drawLine(Cores.Trilho, Offset(esq, y), Offset(dir, y), 1.dp.toPx())
             drawContext.canvas.nativeCanvas.drawText(Formato.decimal(kg) + " kg", dir + 4.dp.toPx(), y + 3.dp.toPx(), paint)
         }
-        drawContext.canvas.nativeCanvas.drawText(if (janela == 90) "há 3 meses" else "há $janela dias", esq, size.height - 6.dp.toPx(), paint)
+        drawContext.canvas.nativeCanvas.drawText(when (janela) { 90 -> "há 3 meses"; 365 -> "há 1 ano"; else -> "há $janela dias" }, esq, size.height - 6.dp.toPx(), paint)
         paint.textAlign = android.graphics.Paint.Align.RIGHT
         drawContext.canvas.nativeCanvas.drawText("hoje", dir, size.height - 6.dp.toPx(), paint)
 

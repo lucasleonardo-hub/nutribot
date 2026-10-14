@@ -44,10 +44,11 @@ export function extrairSintese(texto) {
  * Puro. Junta as hipóteses abertas com as novas extraídas do texto: novas entram com id e data; repetidas (mesmo texto
  * normalizado ou marcadas pela IA como já existentes) não duplicam; no máximo MAX_ABERTAS, as mais antigas saem primeiro.
  */
-export function fundirHipoteses(abertas = [], novas = [], dia) {
+export function fundirHipoteses(abertas = [], novas = [], dia, excluir = []) {
   const norm = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9áàâãéêíóôõúüç ]/g, '').replace(/\s+/g, ' ').trim();
   const lista = abertas.map((h) => ({ ...h }));
-  const vistas = new Set(lista.map((h) => norm(h.texto)));
+  // `excluir`: textos que não podem voltar (hipóteses que a pessoa descartou pelo app; fase 3 do app)
+  const vistas = new Set([...lista.map((h) => norm(h.texto)), ...excluir.map(norm)]);
   let seq = lista.length;
   for (const n of novas) {
     const texto = String(n?.texto || '').trim();
@@ -154,7 +155,9 @@ export async function refletirSobre(perfil, { dia, persona, motivo = 'domingo' }
   // 3) novas suspeitas do texto viram hipóteses abertas (pra conferir na semana que vem)
   try {
     const novas = await ia.extrairHipoteses({ perfil: comExtras, texto: limpo, abertas, dia });
-    abertas = fundirHipoteses(abertas, novas, dia);
+    // o que a pessoa descartou pelo app não volta com o mesmo texto (fase 3 do app)
+    const descartadas = await colecao('hipoteses').find({ jid: { $in: perfil.jids || [] }, status: 'descartada' }).project({ texto: 1 }).toArray().catch(() => []);
+    abertas = fundirHipoteses(abertas, novas, dia, descartadas.map((h) => h.texto));
   } catch (e) {
     console.warn('[reflexao] extração de hipóteses falhou:', e.message);
   }

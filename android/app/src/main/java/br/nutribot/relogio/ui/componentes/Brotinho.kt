@@ -60,9 +60,10 @@ private fun DrawScope.gradienteFolha(p: Path, cores: List<Color>): Brush {
 /**
  * Brotinho com Caju e Lia: cresce com os dias de registro; murcho = Lia triste e Caju dormindo.
  * dias >= 20 vira festa (os dois comemorando).
+ * escala < 1 encolhe o desenho (0,37 cabe num quadrado de 56 dp); soVaso = só a planta, sem os mascotes (cabeçalho do cartão).
  */
 @Composable
-fun Brotinho(dias: Int, murcho: Boolean, modifier: Modifier = Modifier) {
+fun Brotinho(dias: Int, murcho: Boolean, modifier: Modifier = Modifier, escala: Float = 1f, soVaso: Boolean = false) {
     val festa = !murcho && dias >= 20
     val formas = remember(murcho) { FormasBroto(murcho) }
     val parado = LocalReduzirMovimento.current
@@ -70,10 +71,10 @@ fun Brotinho(dias: Int, murcho: Boolean, modifier: Modifier = Modifier) {
     val giro = t?.animateFloat(-3f, 3f, infiniteRepeatable(tween(2000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "balanca")
     val gota = t?.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "gota")
     val brilho = t?.animateFloat(0.2f, 1f, infiniteRepeatable(tween(1000, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "brilho")
-    val rotulo = if (murcho) "Brotinho murcho no vaso; Caju e Lia estão deitados, cansados" else "Brotinho verde no vaso, $dias dias regado"
+    val rotulo = if (murcho) "Brotinho murcho no vaso; Caju e Lia cansados" else "Brotinho verde no vaso, $dias dias regado"
     Row(modifier.semantics(mergeDescendants = true) { contentDescription = rotulo }, verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        if (!murcho) Mascote(Pose.CorgiFesta, 112.dp, descricao = false)
-        Canvas(Modifier.size(128.dp, 150.dp)) {
+        if (!murcho && !soVaso) Mascote(Pose.CorgiFesta, 112.dp * escala, descricao = false)
+        Canvas(Modifier.size(128.dp * escala, 150.dp * escala)) {
             val g = giro?.value ?: 0f
             val fase = gota?.value ?: 0.5f
             val br = brilho?.value ?: 1f
@@ -109,11 +110,12 @@ fun Brotinho(dias: Int, murcho: Boolean, modifier: Modifier = Modifier) {
                 }
             }
         }
+        if (soVaso) return@Row
         if (murcho) {
-            Mascote(Pose.LontraTriste, 92.dp, descricao = false)
-            Mascote(Pose.CorgiDormindo, 62.dp, descricao = false)
+            Mascote(Pose.LontraTriste, 92.dp * escala, descricao = false)
+            Mascote(Pose.CorgiDormindo, 62.dp * escala, descricao = false)
         } else {
-            Mascote(if (festa) Pose.LontraTrofeu else Pose.LontraComendo, 112.dp, descricao = false)
+            Mascote(if (festa) Pose.LontraTrofeu else Pose.LontraComendo, 112.dp * escala, descricao = false)
         }
     }
 }

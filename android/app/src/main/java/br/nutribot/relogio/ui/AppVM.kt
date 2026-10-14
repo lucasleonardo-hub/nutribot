@@ -117,11 +117,11 @@ class AppVM(app: Application) : AndroidViewModel(app) {
 
     /** O token guardado, decifrado em IO. Não ter como ler agora (Keystore ocupado) não desfaz o pareamento. */
     private suspend fun lerToken(): String = withContext(Dispatchers.IO) { sessao.token }
-        ?: throw ErroApi(0, "token_local", "Não consegui ler o token guardado neste celular. Puxe para tentar de novo; se continuar, desparear em Integrações e parear de novo.")
+        ?: throw ErroApi(0, "token_local", "Não consegui ler o acesso guardado. Puxe para tentar de novo.")
 
     /** Só o servidor dizendo que o token é inválido ou revogado desfaz o pareamento (nunca sem_token ou falha local). */
     private fun tratarNaoAutorizado(e: ErroApi) {
-        if (e.naoAutorizado && (e.codigo == "token_invalido" || e.codigo == "token_revogado")) sair("Este aparelho não está mais autorizado (o token foi revogado ou expirou). Mande !app no privado do bot para parear de novo.")
+        if (e.naoAutorizado && (e.codigo == "token_invalido" || e.codigo == "token_revogado")) sair("Este celular foi desconectado. Mande !app no privado do bot para ligar de novo.")
     }
 
     /**
@@ -216,7 +216,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
                 val nomeAparelho = listOfNotNull(Build.MANUFACTURER?.replaceFirstChar { it.uppercase() }, Build.MODEL).joinToString(" ").ifBlank { "Android" }
                 val corpo = JSONObject().put("codigo", codigo).put("aparelho", nomeAparelho)
                 val j = withContext(Dispatchers.IO) { Api.post(sessao.base, "/parear", null, corpo) }
-                val token = j.str("token") ?: throw ErroApi(200, "sem_token", "O servidor não devolveu o token.")
+                val token = j.str("token") ?: throw ErroApi(200, "sem_token", "O servidor não devolveu o acesso.")
                 withContext(Dispatchers.IO) {
                     sessao.guardarToken(token)
                     if (j.arr("perfis") != null) cache.salvar(ROTA_PERFIS, JSONObject().put("perfis", j.arr("perfis")))
@@ -229,8 +229,8 @@ class AppVM(app: Application) : AndroidViewModel(app) {
                 carregar(ROTA_PERFIS, forcar = true)
             } catch (e: ErroApi) {
                 val msg = when {
-                    e.status == 401 || e.codigo == "codigo_invalido" -> "Código inválido ou vencido (vale 10 minutos e uma vez só). Mande !app de novo no privado do bot."
-                    e.status == 429 || e.codigo == "muitas_tentativas" -> "Muitas tentativas. Espere um pouco (são 5 por hora) e tente de novo."
+                    e.status == 401 || e.codigo == "codigo_invalido" -> "Código inválido ou vencido. Mande !app de novo."
+                    e.status == 429 || e.codigo == "muitas_tentativas" -> "Muitas tentativas. Espere um pouco."
                     else -> e.paraPessoa
                 }
                 _pareando.value = Pareando(erro = msg)
@@ -266,9 +266,15 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         fun rotaEventos(id: String, de: String, ate: String) = "/perfis/$id/eventos?de=$de&ate=$ate"
         fun rotaEvento(id: String, eid: String) = "/perfis/$id/eventos/$eid"
         fun rotaPesagens(id: String) = "/perfis/$id/pesagens"
+        /** Pesagens por intervalo (fase 3; até 366 dias): { pesagens: [{ dia, peso, gordura|null, fonte, hora|null }] }. */
+        fun rotaPesagensEntre(id: String, de: String, ate: String) = "/perfis/$id/pesagens?de=$de&ate=$ate"
         fun rotaProgresso(id: String) = "/perfis/$id/progresso"
         fun rotaCorpo(id: String) = "/perfis/$id/corpo"
         fun rotaNutri(id: String) = "/perfis/$id/nutri"
+        /** Fato que a Nutri sabe (fase 3): PUT { texto } corrige, DELETE apaga; a resposta traz o /nutri recalculado. */
+        fun rotaFato(id: String, fid: String) = "/perfis/$id/nutri/fatos/$fid"
+        /** Hipótese aberta (fase 3): DELETE descarta; a resposta traz o /nutri recalculado. */
+        fun rotaHipotese(id: String, hid: String) = "/perfis/$id/nutri/hipoteses/$hid"
         fun rotaResumos(id: String) = "/perfis/$id/resumos"
         const val ROTA_INTEGRACOES = "/integracoes"
     }

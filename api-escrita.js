@@ -12,7 +12,7 @@
 import { SLOTS, minutosDe, slotDaHora, diasAnteriores, fusoDe, TZ, agora as agoraEm, fusoValido } from './util.js';
 import { erroApi } from './api-auth.js';
 import { nomeDoSlot } from './resumo.js';
-import { termosDeLugar, montarEvento, montarHumor } from './api-montadores.js';
+import { termosDeLugar, montarEvento, montarHumor, hashCurto, FATOS_EDITAVEIS, FATOS_APAGAVEIS } from './api-montadores.js';
 
 /** Puro. `dia` + n dias (n pode ser negativo), em YYYY-MM-DD. */
 export const somarDias = (dia, n) => new Date(Date.parse(`${dia}T12:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
@@ -25,6 +25,8 @@ export const MAX_MINIATURA_CHARS = 32 * 1024; // base64 (~24 KB de JPEG)
 export const MAX_DIAS_ATRAS = 31;
 export const MAX_DIAS_FRENTE_EVENTO = 60;
 export const MAX_ANALISES_HORA = 60; // chamadas à IA por hora, no processo todo (custo; o token já limita quem chama)
+export const MAX_TEXTO_FATO = 400;
+export const MAX_DIAS_PESAGENS = 366; // GET /pesagens?de=&ate= (fase 3: 90 dias e 1 ano no gráfico)
 const SLOT_IDS = SLOTS.map((s) => s.id);
 const MIMES_FOTO = ['image/jpeg', 'image/png', 'image/webp'];
 
@@ -279,7 +281,7 @@ export function validarPerfil(corpo) {
   }
   if (c.altura != null && c.altura !== '') {
     const h = numero(c.altura);
-    if (!Number.isFinite(h) || h < 100 || h > 250) throw invalido('altura entre 100 e 250 cm');
+    if (!Number.isFinite(h) || h <= 100 || h >= 250) throw invalido('altura entre 101 e 249 cm'); // os mesmos limites do aplicarAtualizacao
     a.altura_cm = Math.round(h);
   }
   if (c.ritmo != null && c.ritmo !== '') {
@@ -288,6 +290,128 @@ export function validarPerfil(corpo) {
   }
   if (!Object.keys(a).length) throw invalido('nada para alterar');
   return a;
+}
+
+// ============================================================
+// Corrigir o que a Nutri sabe (fase 3, puras)
+// ============================================================
+/** Limite de cada fato editável: dieta e restrições como o aplicarAtualizacao (120); notas como pessoas.js (4000); rotina ~150 palavras. */
+export const LIMITE_FATO = { dieta: 120, restricoes: 120, rotina: 1500, notas: 4000 };
+
+/**
+ * Puro. Corpo do PUT /nutri/fatos/:fid → texto, com o limite do campo (400 quando passa; nunca trunca em silêncio) e as
+ * quebras de linha preservadas (as notas são uma lista; só espaços repetidos na mesma linha são juntados).
+ */
+export function validarFato(corpo, fid = '') {
+  const v = corpo && typeof corpo === 'object' ? corpo.texto : null;
+  if (typeof v !== 'string') throw invalido('texto vazio');
+  const t = v
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((l) => l.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (!t) throw invalido('texto vazio');
+  const max = LIMITE_FATO[String(fid)] || MAX_TEXTO_FATO;
+  if (t.length > max) throw invalido(`texto com mais de ${max} caracteres`);
+  return t;
+}
+
+/**
+ * Puro. A correção de um fato (texto novo, ou null = apagar) vira o patch pro salvarPerfil e a frase da correção do dia.
+ * ids: 'dieta' | 'restricoes' | 'rotina' | 'notas' (editam e apagam), 'girias' (só apaga), 'produto:<hash>' e
+ * 'anotacao:<hash>' (só apagam; o hash é o de api-montadores.hashCurto sobre o nome/texto gravado). 400 quando o id não
+ * permite a operação; 404 quando não existe no perfil.
+ */
+export function aplicarCorrecaoFato(perfil, fid, textoNovo, hoje) {
+  const id = String(fid || '');
+  const [campo, hash] = id.split(':');
+  const apagar = textoNovo == null;
+  const naoEncontrado = () => erroApi(404, 'fato_nao_encontrado', 'fato não encontrado');
+  const patch = { jids: perfil.jids, atualizacoes: { ...(perfil.atualizacoes || {}) } };
+  const quem = perfil.nome;
+  if (campo === 'produto' || campo === 'anotacao') {
+    if (!apagar) throw erroApi(400, 'fato_nao_editavel', 'esse fato só pode ser apagado');
+    const lista = Array.isArray(perfil[campo === 'produto' ? 'produtos' : 'anotacoes']) ? perfil[campo === 'produto' ? 'produtos' : 'anotacoes'] : [];
+    const chave = (x) => hashCurto(campo === 'produto' ? x?.nome : x?.texto);
+    const alvo = lista.find((x) => chave(x) === hash);
+    if (!hash || !alvo) throw naoEncontrado();
+    patch[campo === 'produto' ? 'produtos' : 'anotacoes'] = lista.filter((x) => chave(x) !== hash);
+    // a linha da correção vai pro resumo do dia, que o grupo lê: o conteúdo de uma anotação é privado e não entra
+    const oQue = campo === 'produto' ? `o produto fixo "${alvo.nome}"` : 'uma anotação da Nutri sobre ela(e) (conteúdo privado; não citar)';
+    return { patch, correcao: `${quem} apagou pelo app ${oQue}` };
+  }
+  if (hash !== undefined) throw naoEncontrado();
+  if (!FATOS_APAGAVEIS.includes(campo)) {
+    // objetivo, meta, peso e altura existem como fatos, mas se editam na tela Perfil (PUT /perfis/:id)
+    throw erroApi(400, apagar ? 'fato_nao_apagavel' : 'fato_nao_editavel', `${campo === 'girias' ? 'as gírias só podem ser apagadas' : 'esse fato se altera na tela Perfil'}`);
+  }
+  const atual = campo === 'girias' ? (Array.isArray(perfil.girias) && perfil.girias.length ? perfil.girias : null) : perfil[campo] || null;
+  if (atual == null) throw naoEncontrado();
+  if (apagar) {
+    patch[campo] = campo === 'girias' ? [] : null;
+    patch.atualizacoes[campo] = hoje;
+    return { patch, correcao: `${quem} apagou pelo app ${campo === 'girias' ? 'as gírias' : campo === 'notas' ? 'as notas da Nutri sobre ela(e)' : campo === 'rotina' ? 'a ficha de rotina' : `o campo ${campo}`}` };
+  }
+  if (!FATOS_EDITAVEIS.includes(campo)) throw erroApi(400, 'fato_nao_editavel', 'as gírias só podem ser apagadas');
+  const novo = campo === 'dieta' ? textoNovo.toLowerCase() : textoNovo;
+  if (novo === atual) return { patch: null, correcao: null };
+  patch[campo] = novo;
+  patch.atualizacoes[campo] = hoje;
+  // dieta e restrições já ficam no bloco PERFIS DO GRUPO (decisão D2); notas e rotina são privadas e não vão pro resumo
+  return { patch, correcao: `${quem} corrigiu pelo app ${campo === 'notas' ? 'as notas da Nutri sobre ela(e) (conteúdo privado; não citar)' : campo === 'rotina' ? 'a ficha de rotina (conteúdo privado; não citar)' : `${campo}: "${novo.slice(0, 120)}"`}` };
+}
+
+/**
+ * Puro. A pessoa descarta uma hipótese aberta: sai de perfil.hipoteses e vai, fechada como 'descartada', pra coleção
+ * `hipoteses` (o mesmo destino das que a reflexão de domingo fecha). 404 se não está aberta.
+ */
+export function aplicarDescarteHipotese(perfil, hid, hoje) {
+  const abertas = Array.isArray(perfil.hipoteses) ? perfil.hipoteses : [];
+  const alvo = abertas.find((h) => h?.id && String(h.id) === String(hid || '') && (h.status || 'aberta') === 'aberta');
+  if (!alvo) throw erroApi(404, 'hipotese_nao_encontrada', 'hipótese não encontrada');
+  const fechada = { ...alvo, status: 'descartada', evidencia: 'descartada pela pessoa no app', fechadaEm: hoje, jid: perfil.jids?.[0], nome: perfil.nome };
+  return {
+    patch: { jids: perfil.jids, hipoteses: abertas.filter((h) => h !== alvo) },
+    fechada,
+    correcao: `${perfil.nome} descartou pelo app uma hipótese da reflexão (conteúdo privado; não citar)`,
+  };
+}
+
+/**
+ * Puro. Nome do arquivo da foto no Drive (fase 3): "<dia> <hora> <slot>.jpg" com a hora sem ':' (nome de arquivo).
+ * A pasta é "Fotos/<AAAA-MM>" dentro da pasta da pessoa.
+ */
+export function nomeDaFoto({ dia, horaLocal, slot, mimeType, id }) {
+  const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
+  // o fim do _id entra no nome: dois almoços na mesma hora (retroativos sem hora caem na hora padrão do slot) não podem
+  // dividir o mesmo arquivo (salvarEmPasta sobrescreve pelo nome)
+  const sufixo = id ? ` ${String(id).slice(-6)}` : '';
+  return { pasta: String(dia).slice(0, 7), nome: `${dia} ${String(horaLocal || '').replace(':', 'h')} ${nomeDoSlot(slot)}${sufixo}.${ext}` };
+}
+
+/**
+ * Sobe a primeira foto do registro pra pasta da pessoa no Drive (Fotos/<AAAA-MM>/) e anota { driveId, nome } no registro.
+ * Roda DEPOIS da resposta ao app (o Drive leva segundos e o app não espera); qualquer falha vira só um aviso no log.
+ * `drive` = { pastaDe(perfil), subpasta(id, nome), salvarEmPasta(id, nome, buffer, mime), lixeira(id) };
+ * `atualizarRefeicao` (Mongo) devolve quantos registros casaram: se a refeição foi apagada enquanto a foto subia, a foto
+ * vai pra lixeira em vez de ficar órfã no Drive.
+ */
+export async function guardarFotoNoDrive({ drive, atualizarRefeicao, perfil, registroId, registro, foto }) {
+  if (!drive || !foto?.data?.length || !registroId) return null;
+  const raiz = await drive.pastaDe(perfil);
+  const fotos = await drive.subpasta(raiz, 'Fotos');
+  const { pasta, nome } = nomeDaFoto({ ...registro, mimeType: foto.mimeType, id: registroId });
+  const mes = await drive.subpasta(fotos, pasta);
+  const driveId = await drive.salvarEmPasta(mes, nome, foto.data, foto.mimeType);
+  if (!driveId) return null;
+  const casou = await atualizarRefeicao(registroId, { foto: { driveId, nome } });
+  if (casou === 0) {
+    if (drive.lixeira) await drive.lixeira(driveId).catch(() => {});
+    return null;
+  }
+  return { driveId, nome };
 }
 
 /**
@@ -353,7 +477,7 @@ export function criarLimiteAnalises({ max = MAX_ANALISES_HORA, agora = () => Dat
  * Registra as rotas de escrita no roteador `r` (já autenticado). `perfilDo(req)` e `hojeDe(perfil, perfis, dia)` vêm do api.js
  * (o mesmo /hoje que a leitura monta); `escrita` = escritaPadrao() ou um dublê; `ia.estimarRefeicaoApp` idem.
  */
-export function rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, lerJsonFoto = (_req, _res, next) => next(), agora = () => new Date(), temHevyDe = () => false, adminJid = '', montarPerfil, montarRefeicao, podeAnalisar = criarLimiteAnalises() }) {
+export function rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, nutriDe = async () => null, lerJsonFoto = (_req, _res, next) => next(), agora = () => new Date(), temHevyDe = () => false, adminJid = '', montarPerfil, montarRefeicao, podeAnalisar = criarLimiteAnalises() }) {
   const dono = (perfil, doc) => doc && Array.isArray(perfil.jids) && perfil.jids.includes(doc.jid);
 
   // ---------- refeição ----------
@@ -395,6 +519,10 @@ export function rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, lerJsonFoto =
     if (v.dia === hoje) await escrita.lembrar({ hora: registro.hora, jid: perfil.jids[0], nome: perfil.nome, texto: `(registro pelo app) ${descricao}`, tipo: 'texto', refeicao: slot }).catch(() => {});
     const salvo = (id && (await escrita.refeicaoPorId(id))) || { _id: id, ...registro };
     res.status(201).json({ refeicao: montarRefeicao({ ...salvo, ...(v.miniatura ? { miniatura: v.miniatura } : {}) }, termos(perfis)), hoje: await hojeDe(perfil, perfis, v.dia) });
+    // fase 3 (D6): a primeira foto vai pra pasta da pessoa no Drive, depois da resposta; o link aparece na próxima leitura
+    if (v.fotos.length && id && escrita.guardarFoto) {
+      escrita.guardarFoto({ perfil, registroId: id, registro, foto: v.fotos[0] }).catch((e) => console.warn('[api] foto não foi pro Drive:', e?.message || e));
+    }
   });
 
   r.put('/perfis/:id/refeicoes/:rid', async (req, res) => {
@@ -451,6 +579,8 @@ export function rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, lerJsonFoto =
     if (!dono(perfil, atual)) throw erroApi(404, 'refeicao_nao_encontrada', 'refeição não encontrada');
     await escrita.apagarRefeicaoPorId(atual._id);
     await escrita.apagarMiniatura(atual._id).catch(() => {});
+    // a foto no Drive vai pra lixeira (reversível); falha ali não desfaz o apagamento do registro
+    if (atual.foto?.driveId && escrita.lixeiraDrive) escrita.lixeiraDrive(atual.foto.driveId).catch((e) => console.warn('[api] foto não foi pra lixeira do Drive:', e?.message || e));
     await escrita.registrarCorrecao({ dia: atual.dia, pessoa: atual.nome, texto: `${perfil.nome} apagou pelo app a refeição das ${atual.horaLocal || atual.hora} (${nomeDoSlot(atual.slot)}, ${Math.round(Number(atual.estimativa?.kcal) || 0)} kcal)` }).catch(() => {});
     res.json({ apagada: true, hoje: await hojeDe(perfil, perfis, atual.dia) });
   });
@@ -508,6 +638,51 @@ export function rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, lerJsonFoto =
     }
     res.json({ perfil: montarPerfil(novo, { temHevy: temHevyDe(novo), adminJid }) });
   });
+
+  // ---------- o que a Nutri sabe (fase 3): corrigir e apagar fatos, descartar hipótese ----------
+  // a gravação é a mesma da conversa (salvarPerfil) e a correção vai pra correcoes_dia, que o fechamento do dia lê
+  // as notas da Nutri moram em três lugares (Mongo, o cache de pessoas.js e Nutri-Notas.md no Drive): a reescrita noturna
+  // parte do cache, então a correção passa por salvarNotas, senão a noite devolve o texto antigo por cima da correção
+  const gravarFato = async (perfil, patch, correcao, hoje) => {
+    // as notas vão PRIMEIRO (cache + Drive + Mongo); se o Drive falhar, nada do Mongo muda e o app recebe 503 pra tentar
+    // de novo (gravar só no Mongo e responder 200 deixaria a correção pra noite desfazer)
+    if ('notas' in patch && escrita.salvarNotas) {
+      await escrita.salvarNotas(perfil, patch.notas || '', hoje).catch((e) => {
+        console.warn('[api] notas não foram pro Drive:', e?.message || e);
+        throw erroApi(503, 'drive_indisponivel', 'não consegui gravar as notas agora; tente de novo em instantes');
+      });
+    }
+    await escrita.salvarPerfil(patch);
+    await escrita.registrarCorrecao({ dia: hoje, pessoa: perfil.nome, texto: correcao }).catch(() => {});
+  };
+
+  r.put('/perfis/:id/nutri/fatos/:fid', async (req, res) => {
+    const { perfil, perfis, hoje } = await perfilDo(req);
+    const { patch, correcao } = aplicarCorrecaoFato(perfil, req.params.fid, validarFato(req.body, req.params.fid), hoje);
+    let novo = perfil;
+    if (patch) {
+      await gravarFato(perfil, patch, correcao, hoje);
+      novo = { ...perfil, ...patch };
+    }
+    res.json({ nutri: await nutriDe(novo, perfis) });
+  });
+
+  r.delete('/perfis/:id/nutri/fatos/:fid', async (req, res) => {
+    const { perfil, perfis, hoje } = await perfilDo(req);
+    const { patch, correcao } = aplicarCorrecaoFato(perfil, req.params.fid, null, hoje);
+    await gravarFato(perfil, patch, correcao, hoje);
+    res.json({ apagado: true, nutri: await nutriDe({ ...perfil, ...patch }, perfis) });
+  });
+
+  r.delete('/perfis/:id/nutri/hipoteses/:hid', async (req, res) => {
+    const { perfil, perfis, hoje } = await perfilDo(req);
+    const { patch, fechada, correcao } = aplicarDescarteHipotese(perfil, req.params.hid, hoje);
+    // primeiro a cópia fechada na coleção, depois sai do perfil: se o insert falhar, a hipótese não some dos dois lugares
+    await escrita.guardarHipoteseFechada(fechada);
+    await escrita.salvarPerfil(patch);
+    await escrita.registrarCorrecao({ dia: hoje, pessoa: perfil.nome, texto: correcao }).catch(() => {});
+    res.json({ apagado: true, nutri: await nutriDe({ ...perfil, ...patch }, perfis) });
+  });
 }
 const termos = (perfis) => termosDeLugar(perfis);
 
@@ -542,6 +717,18 @@ export function escritaPadrao() {
     aplicarAtualizacao: (...args) => aplicarAtualizacaoPura(...args),
     salvarPerfil: de('./mongo.js', 'salvarPerfil'),
     lembrar: de('./dia.js', 'lembrar'),
+    guardarHipoteseFechada: de('./mongo.js', 'guardarHipoteseFechada'),
+    salvarNotas: de('./pessoas.js', 'salvarNotas'),
+    // fase 3: foto da refeição na pasta da pessoa no Drive (só com DRIVE_FOLDER_ID; sem ele, nada sobe)
+    guardarFoto: async ({ perfil, registroId, registro, foto }) => {
+      if (!(process.env.DRIVE_FOLDER_ID || '').trim()) return null;
+      const [d, p, m] = await Promise.all([import('./drive.js'), import('./pessoas.js'), import('./mongo.js')]);
+      return guardarFotoNoDrive({ drive: { pastaDe: p.pastaDe, subpasta: d.subpasta, salvarEmPasta: d.salvarEmPasta, lixeira: d.lixeira }, atualizarRefeicao: m.atualizarRefeicao, perfil, registroId, registro, foto });
+    },
+    lixeiraDrive: async (fileId) => {
+      if (!(process.env.DRIVE_FOLDER_ID || '').trim()) return;
+      await (await import('./drive.js')).lixeira(fileId);
+    },
   };
 }
 // aplicarAtualizacao é pura e síncrona (perfis.js não importa nada daqui)

@@ -1,10 +1,5 @@
 package br.nutribot.relogio.ui.telas
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -50,8 +44,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -79,15 +71,19 @@ import br.nutribot.relogio.ui.componentes.BarraFaixa
 import br.nutribot.relogio.ui.componentes.BarraMacro
 import br.nutribot.relogio.ui.componentes.Brotinho
 import br.nutribot.relogio.ui.componentes.Cartao
+import br.nutribot.relogio.ui.componentes.CartaoResumo
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
 import br.nutribot.relogio.ui.componentes.Humor
+import br.nutribot.relogio.ui.componentes.LinhaValor
 import br.nutribot.relogio.ui.componentes.Link
 import br.nutribot.relogio.ui.componentes.Mascote
 import br.nutribot.relogio.ui.componentes.MascoteHumor
 import br.nutribot.relogio.ui.componentes.Pilula
 import br.nutribot.relogio.ui.componentes.Pose
+import br.nutribot.relogio.ui.componentes.TamanhoVisual
 import br.nutribot.relogio.ui.componentes.TituloSecao
 import br.nutribot.relogio.ui.componentes.Vazio
+import br.nutribot.relogio.ui.componentes.alturaResumo
 import br.nutribot.relogio.ui.componentes.animaAte
 import br.nutribot.relogio.ui.componentes.tracejado
 import br.nutribot.relogio.ui.componentes.sangrar
@@ -129,10 +125,13 @@ private fun tomDe(tom: String?): Triple<String, Color, Color> = when (tom) {
     else -> Triple("ATENÇÃO", Cores.AtencaoFundo, Cores.AtencaoTinta)
 }
 
+/** A primeira frase de um texto (até o primeiro ponto, exclamação ou interrogação seguido de espaço). */
+private fun primeiraFrase(texto: String): String = texto.trim().split(Regex("(?<=[.!?])\\s+")).firstOrNull()?.ifBlank { texto } ?: texto
+
 private val itensMenu = listOf(
     Triple(Rotas.PERFIL, "Perfil", "dados, objetivo e meta"),
     Triple(Rotas.AGENDA, "Agenda", "treinos e refeições por dia"),
-    Triple(Rotas.RESUMOS, "Resumos", "semana (domingo) e mês (dia 1º)"),
+    Triple(Rotas.RESUMOS, "Resumos", "semana e mês"),
     Triple(Rotas.INTEGRACOES, "Integrações", "de onde vêm os dados"),
     Triple(Rotas.NUTRI, "O que a Nutri sabe", "fatos, diário, avaliações"),
 )
@@ -218,7 +217,7 @@ fun TelaHoje(vm: AppVM, perfisCarga: Carga, perfis: List<Perfil>, perfil: Perfil
         Column {
             SeletorPerfis(perfis, null, null, vm::escolherPerfil, nav)
             ConteudoCarga(perfisCarga, { vm.carregar(AppVM.ROTA_PERFIS, forcar = true) }) {
-                Vazio("Nenhum perfil liberado para este aparelho ainda.")
+                Vazio("Nenhum perfil liberado para este celular.")
             }
         }
         return
@@ -235,6 +234,10 @@ fun TelaHoje(vm: AppVM, perfisCarga: Carga, perfis: List<Perfil>, perfil: Perfil
     ) { j -> ConteudoHoje(vm, j, perfil, nav) }
 }
 
+/**
+ * Ordem do Hoje: saudação → Como você está? → recados → Calorias → Macros → Energia → Notas → Brotinho → Refeições →
+ * Resumo da semana → Peso → relógio. Todo cartão de resumo tem a mesma altura fechado; tocar abre o detalhe.
+ */
 @Composable
 private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String) -> Unit) {
     val dia = Formato.dia(j.str("dia")) ?: java.time.LocalDate.now()
@@ -243,14 +246,13 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
     val murcho = broto.bool("murcho") ?: false
     val brotoDias = broto.int("dias") ?: 0
     val kcal = j.obj("kcal")
-    val situacao = kcal.str("situacao")
 
     // saudação e mascote
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("${Formato.saudacao(horaAgora)}, ${perfil.primeiroNome}", style = MaterialTheme.typography.headlineLarge)
             Text(
-                Formato.diaLongo(dia) + (horaAgora?.let { " · $it" } ?: "") + (j.str("fuso")?.takeIf { it != perfil.fuso && perfil.fuso != null }?.let { " (fuso $it)" } ?: ""),
+                Formato.diaLongo(dia) + (horaAgora?.let { " · $it" } ?: "") + (j.str("fuso")?.takeIf { it != perfil.fuso && perfil.fuso != null }?.let { " · fuso $it" } ?: ""),
                 style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3,
             )
         }
@@ -260,10 +262,11 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
     // como você está? (humor, energia e sono de hoje, que a Nutri lê na conversa)
     CartaoHumor(vm, perfil.id, Formato.iso(dia), j.obj("humor"))
 
-    // recados (avisos) em carrossel
+    // recados (avisos) em carrossel: mesma altura dos cartões de resumo; o toque leva para "O que a Nutri sabe"
     val avisos = j.arr("avisos").objs()
     if (avisos.isNotEmpty()) {
         val estado = rememberLazyListState()
+        val alturaRecado = alturaResumo()
         LazyRow(
             state = estado,
             flingBehavior = rememberSnapFlingBehavior(estado),
@@ -274,8 +277,12 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
             itemsIndexed(avisos) { i, a ->
                 val tom = a.str("tom")
                 val (rotulo, fundo, tinta) = tomDe(tom)
-                Cartao(Modifier.width(286.dp).heightIn(min = 96.dp), cor = fundo, forma = RoundedCornerShape(26.dp), padding = PaddingValues(start = 8.dp, end = 14.dp, top = 12.dp, bottom = 12.dp), atraso = i * 60, aoTocar = { nav(Rotas.NUTRI) }) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Cartao(
+                    Modifier.width(286.dp), cor = fundo, forma = RoundedCornerShape(26.dp),
+                    padding = PaddingValues(start = 8.dp, end = 14.dp, top = 16.dp, bottom = 16.dp), atraso = i * 60,
+                    aoTocar = { nav(Rotas.NUTRI) }, rotuloToque = "Abrir o que a Nutri sabe",
+                ) {
+                    Row(Modifier.height(alturaRecado), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         when (tom) {
                             "bom" -> Mascote(Pose.LontraTrofeu, 64.dp)
                             "cuidado" -> Mascote(Pose.CorgiDormindo, 50.dp)
@@ -283,8 +290,8 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
                         }
                         Column(Modifier.weight(1f)) {
                             Pilula(rotulo, Cores.Branco, tinta)
-                            a.str("titulo")?.let { Text(it, style = MaterialTheme.typography.titleMedium, fontSize = 15.sp, modifier = Modifier.padding(top = 3.dp)) }
-                            a.str("texto")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352), modifier = Modifier.padding(top = 2.dp)) }
+                            a.str("titulo")?.let { Text(it, style = MaterialTheme.typography.titleMedium, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp)) }
+                            a.str("texto")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp)) }
                         }
                     }
                 }
@@ -292,63 +299,16 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
         }
     }
 
-    // anel de kcal com faixa da meta e banda de incerteza
+    // calorias (anel pequeno no cabeçalho; faixa, margem e estimativa no detalhe)
     val consumido = kcal.num("consumido") ?: 0.0
     val faixa = kcal.obj("faixa")
     val fMin = faixa.num("min")
     val fMax = faixa.num("max")
-    // kcal.err é a folga da incerteza da META (S-api §3), não da comida. A banda listrada em volta do consumido vem
-    // da soma das faixas das refeições do dia (cada refeição traz faixa {min,max}); é a incerteza da estimativa.
-    val folgaMeta = kcal.num("err")
     val refsDia = Refeicao.lista(j)
-    val somaMin = refsDia.sumOf { it.faixaMin ?: it.kcal ?: 0.0 }
-    val somaMax = refsDia.sumOf { it.faixaMax ?: it.kcal ?: 0.0 }
-    val err = if (refsDia.isEmpty() || somaMax <= somaMin) null else maxOf(consumido - somaMin, somaMax - consumido)
-    Cartao(forma = Formas.Grande, padding = PaddingValues(18.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            AnelKcal(consumido, fMin, fMax, err)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (fMin != null && fMax != null) {
-                    Column {
-                        Text("Restam", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp)
-                        Text("≈ ${Formato.kcal(max((fMin + fMax) / 2 - consumido, 0.0))} kcal", style = MaterialTheme.typography.headlineMedium)
-                    }
-                    Column {
-                        Text("Faixa da meta", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp)
-                        Text("${Formato.kcal(fMin)}–${Formato.kcal(fMax)} kcal", style = MaterialTheme.typography.labelLarge)
-                        if (folgaMeta != null && folgaMeta > 0) Text("folga ±${Formato.kcal(folgaMeta)} kcal", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp)
-                    }
-                } else {
-                    Text("Ainda sem faixa de meta.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
-                }
-                if (err != null && err > 0) Text("comida entre ${Formato.kcal(somaMin)} e ${Formato.kcal(somaMax)}", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4)
-                val (txt, fundo, tinta) = when (situacao) {
-                    // situacao = julgamento da última semana de dias completos contra a meta (não o parcial de hoje)
-                    "abaixo" -> Triple("semana abaixo da faixa", Color(0xFFFFE9D6), Color(0xFF8A4B12))
-                    "dentro" -> Triple("semana na faixa", Color(0xFFDDF5E8), Cores.BomTinta)
-                    "acima" -> Triple("semana acima da faixa", Cores.CuidadoFundo, Cores.CuidadoTinta)
-                    else -> Triple("incerto: poucos dados", Cores.Trilho, Cores.LilasTexto)
-                }
-                Pilula(txt, fundo, tinta, ponto = true)
-            }
-        }
-    }
+    CartaoCalorias(kcal, consumido, fMin, fMax, refsDia)
 
     // macros (cores fixas)
-    val macros = j.obj("macros")
-    Cartao(atraso = 80) {
-        Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
-            // meta vem como {min,max} (proteína 1,6 a 2,2 g/kg) ou null (carbo e gordura: o bot não tem meta para eles)
-            @Composable fun macro(nome: String, chave: String, cor: Color, trilho: Color, tinta: Color) {
-                val m = macros.obj(chave)
-                val metaObj = m.obj("meta")
-                BarraMacro(nome, m.num("g"), metaObj.num("min") ?: m.num("meta"), cor, trilho, tinta, metaMax = metaObj.num("max"))
-            }
-            macro("Proteína", "proteina", Cores.Proteina, Cores.ProteinaTrilho, Cores.ProteinaTinta)
-            macro("Carboidrato", "carbo", Cores.Carbo, Cores.CarboTrilho, Cores.CarboTinta)
-            macro("Gordura", "gordura", Cores.Gordura, Cores.GorduraTrilho, Cores.GorduraTinta)
-        }
-    }
+    CartaoMacros(j.obj("macros"))
 
     // nota de energia
     j.obj("energia")?.let { CartaoEnergia(it) }
@@ -357,25 +317,15 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
     NotasDoDia(j, consumido, fMin, fMax)
 
     // brotinho
-    Cartao(cor = if (murcho) Color(0xFFFFF1E8) else Cores.BomFundo, padding = PaddingValues(start = 6.dp, end = 6.dp, top = 14.dp, bottom = 8.dp), atraso = 140) {
-        Column(Modifier.padding(horizontal = 10.dp)) {
-            Text(if (murcho) "O brotinho murchou um pouco" else "$brotoDias ${if (brotoDias == 1) "dia" else "dias"} regando o brotinho", style = MaterialTheme.typography.titleMedium, fontSize = 17.sp)
-            Text(
-                if (murcho) "Ficou um dia sem registro. Caju e Lia estão tristes: registre hoje pra ele se recuperar."
-                else "Caju rega, Lia cuida: cada dia com as refeições registradas faz ele crescer.",
-                style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2,
-            )
-        }
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { Brotinho(brotoDias, murcho) }
-    }
+    CartaoBrotinho(brotoDias, murcho)
 
-    // refeições do dia
-    val refeicoes = Refeicao.lista(j)
+    // refeições do dia (lista de linhas compactas; não é cartão de resumo)
+    val refeicoes = refsDia
     TituloSecao("Refeições") { Link("ver diário") { nav(Rotas.comida(Formato.iso(dia))) } }
-    if (refeicoes.isEmpty()) Text("Nenhuma refeição registrada hoje ainda.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)
+    if (refeicoes.isEmpty()) Text("Nada registrado hoje ainda.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)
     val escalaRef = max(1100.0, refeicoes.maxOfOrNull { it.faixaMax ?: it.kcal ?: 0.0 } ?: 0.0)
     refeicoes.forEachIndexed { i, r ->
-        Cartao(forma = Formas.Cartao, padding = PaddingValues(12.dp), atraso = 160 + i * 40, aoTocar = { nav(Rotas.comida(Formato.iso(dia), r.id)) }) {
+        Cartao(forma = Formas.Cartao, padding = PaddingValues(12.dp), atraso = 160 + i * 40, aoTocar = { nav(Rotas.comida(Formato.iso(dia), r.id)) }, rotuloToque = "Abrir ${r.nome}") {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 IconePrato(r.slot)
                 Column(Modifier.weight(1f)) {
@@ -384,7 +334,7 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
                         r.hora?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3) }
                     }
                     Text(
-                        "≈ ${Formato.kcal(r.kcal)} kcal" + (if (r.faixaMin != null && r.faixaMax != null) " (${Formato.kcal(r.faixaMin)}–${Formato.kcal(r.faixaMax)})" else ""),
+                        "≈ ${Formato.kcal(r.kcal)} kcal" + (if (r.faixaMin != null && r.faixaMax != null) " · ${Formato.kcal(r.faixaMin)} a ${Formato.kcal(r.faixaMax)}" else ""),
                         style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
                     )
                     BarraFaixa(r.kcal, r.faixaMin, r.faixaMax, escalaRef)
@@ -408,34 +358,33 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
 
     // resumo da semana
     j.obj("resumoSemana").str("texto")?.let { texto ->
-        Cartao(pincel = Brush.linearGradient(listOf(Cores.Trilho, Cores.BomFundo)), padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp), atraso = 200, aoTocar = { nav(Rotas.RESUMOS) }) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Mascote(Pose.DuplaProgresso, 54.dp)
-                Column(Modifier.weight(1f)) {
-                    Text("Resumo da semana", style = MaterialTheme.typography.titleMedium)
-                    Text(texto, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                }
-                Icon(icone("M9 5l7 7-7 7"), contentDescription = null, tint = Cores.AcaiEscuro, modifier = Modifier.size(20.dp))
-            }
+        CartaoResumo(
+            "resumoSemana", "Resumo da semana", valor = null, resumo = primeiraFrase(texto),
+            pincel = Brush.linearGradient(listOf(Cores.Trilho, Cores.BomFundo)), atraso = 200,
+            visual = { Mascote(Pose.DuplaProgresso, TamanhoVisual) },
+        ) {
+            Text(texto, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2)
+            Link("ver resumos") { nav(Rotas.RESUMOS) }
         }
     }
 
     // peso com mini gráfico
     j.obj("peso")?.let { peso -> CartaoPeso(peso) { nav(Rotas.PROGRESSO) } }
 
-    // relógio: sono, passos, treino
+    // relógio: sono, passos, treino (três blocos pequenos, da mesma altura entre si)
     j.obj("relogio")?.let { r ->
         val treinos = r.arr("treinos").objs()
         val treino = treinos.firstOrNull()?.let { t ->
             listOfNotNull(t.str("nome"), t.int("min")?.let { "$it min" }, t.str("hora")?.let { "às $it" }).joinToString(" · ")
         } ?: "—"
+        val alturaBloco = 72.dp * LocalDensity.current.fontScale.coerceAtMost(1.3f)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             listOf(
                 Triple("Sono", Formato.sono(r.num("sonoMin")), Cores.Trilho),
                 Triple("Passos", Formato.inteiro(r.num("passos")), Cores.BomFundo),
                 Triple("Treino", treino, Cores.Pessego),
             ).forEach { (nome, valor, fundo) ->
-                Column(Modifier.weight(1f).clip(RoundedCornerShape(22.dp)).background(fundo).padding(12.dp)) {
+                Column(Modifier.weight(1f).height(alturaBloco).clip(RoundedCornerShape(22.dp)).background(fundo).padding(12.dp)) {
                     Text(nome, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, fontSize = 12.sp)
                     Text(valor, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = if (valor.length > 10) 14.sp else 18.sp)
                 }
@@ -443,6 +392,78 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
         }
     }
     Spacer(Modifier.height(4.dp))
+}
+
+/**
+ * Calorias: kcal.err é a margem da incerteza da META (S-api §3), não da comida. A estimativa da comida (min–max) vem da soma
+ * das faixas das refeições do dia; é a banda listrada do anel.
+ */
+@Composable
+private fun CartaoCalorias(kcal: JSONObject?, consumido: Double, fMin: Double?, fMax: Double?, refsDia: List<Refeicao>) {
+    val folgaMeta = kcal.num("err")
+    val situacao = kcal.str("situacao")
+    val somaMin = refsDia.sumOf { it.faixaMin ?: it.kcal ?: 0.0 }
+    val somaMax = refsDia.sumOf { it.faixaMax ?: it.kcal ?: 0.0 }
+    val err = if (refsDia.isEmpty() || somaMax <= somaMin) null else maxOf(consumido - somaMin, somaMax - consumido)
+    val temFaixa = fMin != null && fMax != null
+    val resumo = if (temFaixa) "restam ≈ ${Formato.kcal(max((fMin!! + fMax!!) / 2 - consumido, 0.0))} · meta ${Formato.kcal(fMin)}–${Formato.kcal(fMax)}" else "sem faixa de meta ainda"
+    val (txtSemana, fundoSemana, tintaSemana) = when (situacao) {
+        // situacao = julgamento da última semana de dias completos contra a meta (não o parcial de hoje)
+        "abaixo" -> Triple("semana abaixo da faixa", Color(0xFFFFE9D6), Color(0xFF8A4B12))
+        "dentro" -> Triple("semana na faixa", Color(0xFFDDF5E8), Cores.BomTinta)
+        "acima" -> Triple("semana acima da faixa", Cores.CuidadoFundo, Cores.CuidadoTinta)
+        else -> Triple("poucos dados", Cores.Trilho, Cores.LilasTexto)
+    }
+    CartaoResumo(
+        "calorias", "Calorias", "≈ ${Formato.kcal(consumido)} kcal", resumo, atraso = 60,
+        visual = { AnelKcal(consumido, fMin, fMax, err, tamanho = TamanhoVisual, mostrarCentro = false) },
+    ) {
+        if (temFaixa) LinhaValor("Faixa da meta", "${Formato.kcal(fMin)}–${Formato.kcal(fMax)} kcal")
+        if (folgaMeta != null && folgaMeta > 0) LinhaValor("Margem", "±${Formato.kcal(folgaMeta)} kcal")
+        if (err != null && err > 0) LinhaValor("Estimativa", "${Formato.kcal(somaMin)} a ${Formato.kcal(somaMax)} kcal")
+        Pilula(txtSemana, fundoSemana, tintaSemana, Modifier.padding(top = 6.dp), ponto = true)
+    }
+}
+
+/** Macros: três mini-barras no cabeçalho; as barras completas (com meta) no detalhe. */
+@Composable
+private fun CartaoMacros(macros: JSONObject?) {
+    data class Macro(val nome: String, val g: Double?, val meta: Double?, val metaMax: Double?, val cor: Color, val trilho: Color, val tinta: Color)
+    fun macro(nome: String, chave: String, cor: Color, trilho: Color, tinta: Color): Macro {
+        val m = macros.obj(chave)
+        // meta vem como {min,max} (proteína 1,6 a 2,2 g/kg) ou null (carbo e gordura: o bot não tem meta para eles)
+        val metaObj = m.obj("meta")
+        return Macro(nome, m.num("g"), metaObj.num("min") ?: m.num("meta"), metaObj.num("max"), cor, trilho, tinta)
+    }
+    val lista = listOf(
+        macro("Proteína", "proteina", Cores.Proteina, Cores.ProteinaTrilho, Cores.ProteinaTinta),
+        macro("Carboidrato", "carbo", Cores.Carbo, Cores.CarboTrilho, Cores.CarboTinta),
+        macro("Gordura", "gordura", Cores.Gordura, Cores.GorduraTrilho, Cores.GorduraTinta),
+    )
+    val p = lista[0]
+    val resumo = listOfNotNull(
+        p.meta?.let { "meta ${Formato.gramas(it)}${p.metaMax?.let { mx -> "–${Formato.gramas(mx)}" } ?: ""} g" },
+        "carbo ${Formato.gramas(lista[1].g)} g",
+        "gordura ${Formato.gramas(lista[2].g)} g",
+    ).joinToString(" · ")
+    CartaoResumo(
+        "macros", "Macros", "${Formato.gramas(p.g)} g de proteína", resumo, atraso = 80,
+        visual = {
+            Column(Modifier.size(TamanhoVisual), verticalArrangement = Arrangement.SpaceEvenly) {
+                lista.forEach { m ->
+                    val alvo = if (m.g == null || m.meta == null || m.meta <= 0) (if ((m.g ?: 0.0) > 0) 1f else 0f) else (m.g / m.meta).toFloat().coerceIn(0f, 1f)
+                    val f = animaAte(alvo, 900, 200)
+                    Box(Modifier.fillMaxWidth().height(10.dp).clip(Formas.Pilula).background(m.trilho)) {
+                        Box(Modifier.fillMaxWidth(f).height(10.dp).clip(Formas.Pilula).background(m.cor))
+                    }
+                }
+            }
+        },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+            lista.forEach { m -> BarraMacro(m.nome, m.g, m.meta, m.cor, m.trilho, m.tinta, metaMax = m.metaMax) }
+        }
+    }
 }
 
 /** energia: { nota, sono, recuperacao, carga, texto } — sono/recuperacao/carga podem vir como número (0–100) ou objeto { nota, texto }. */
@@ -458,40 +479,45 @@ private fun CartaoEnergia(e: JSONObject) {
     val media = total >= 60
     val tinta = if (boa) Cores.GorduraTinta else if (media) Cores.CarboTinta else Cores.ProteinaTinta
     val cor = if (boa) Cores.Verde else if (media) Color(0xFFFFC23D) else Cores.Proteina
-    Cartao(pincel = Brush.linearGradient(listOf(Color(0xFFFFF6DB), Color(0xFFFFE9F0))), forma = Formas.Grande, atraso = 80) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    val partes = listOf(Triple("Sono", "sono", Cores.LilasForte), Triple("Recuperação", "recuperacao", Cores.Gordura), Triple("Carga de ontem", "carga", Color(0xFFFFB59A)))
+        .map { (nome, chave, c) -> val (v, txt) = parte(chave); Triple(nome, v to txt, c) }
+        .filter { it.second.first != null || it.second.second != null }
+    val resumo = partes.joinToString(" · ") { (nome, vt, _) -> "${nome.substringBefore(" ").lowercase()} ${vt.second ?: vt.first?.let { Formato.inteiro(it) } ?: ""}" }.ifBlank { "sem detalhes hoje" }
+    val valor = nota?.let { "${Formato.inteiro(it)} de 100" + (if (boa) " · alta" else if (media) " · moderada" else " · baixa") } ?: "sem nota"
+    CartaoResumo(
+        "energia", "Energia", valor, resumo,
+        pincel = Brush.linearGradient(listOf(Color(0xFFFFF6DB), Color(0xFFFFE9F0))), atraso = 100,
+        visual = {
             AnelNumero(
-                fracao = (total / 100).toFloat(), centro = nota?.let { Formato.inteiro(it) } ?: "—",
-                selo = if (nota == null) null else if (boa) "ENERGIA ALTA" else if (media) "MODERADA" else "BAIXA",
+                fracao = (total / 100).toFloat(), centro = nota?.let { Formato.inteiro(it) } ?: "—", selo = null,
                 cor = cor, trilho = Color.White.copy(alpha = 0.8f), miolo = Color.White, tinta = tinta,
-                rotulo = "Nota de energia ${nota?.let { Formato.inteiro(it) } ?: "sem dado"} de 100", tamanho = 120.dp, espessuraRel = 0.11f,
+                rotulo = "Nota de energia ${nota?.let { Formato.inteiro(it) } ?: "sem dado"} de 100", tamanho = TamanhoVisual, espessuraRel = 0.14f,
             )
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text("Nota de energia", style = MaterialTheme.typography.titleLarge)
-                listOf(Triple("Sono", "sono", Cores.LilasForte), Triple("Recuperação", "recuperacao", Cores.Gordura), Triple("Carga de ontem", "carga", Color(0xFFFFB59A))).forEach { (nome, chave, c) ->
-                    val (v, txt) = parte(chave)
-                    if (v != null || txt != null) {
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Row {
-                                Text(nome, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                                Text(txt ?: v?.let { Formato.inteiro(it) } ?: "", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, fontSize = 12.sp)
-                            }
-                            val f = animaAte(((v ?: 0.0) / 100).toFloat().coerceIn(0f, 1f), 900, 200)
-                            Box(Modifier.fillMaxWidth().height(8.dp).clip(Formas.Pilula).background(Color.White)) {
-                                Box(Modifier.fillMaxWidth(f).height(8.dp).clip(Formas.Pilula).background(c))
-                            }
-                        }
+        },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            partes.forEach { (nome, vt, c) ->
+                val (v, txt) = vt
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Row {
+                        Text(nome, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                        Text(txt ?: v?.let { Formato.inteiro(it) } ?: "", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, fontSize = 12.sp)
+                    }
+                    val f = animaAte(((v ?: 0.0) / 100).toFloat().coerceIn(0f, 1f), 900, 200)
+                    Box(Modifier.fillMaxWidth().height(8.dp).clip(Formas.Pilula).background(Color.White)) {
+                        Box(Modifier.fillMaxWidth(f).height(8.dp).clip(Formas.Pilula).background(c))
                     }
                 }
             }
         }
-        e.str("texto")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF4A3B00), modifier = Modifier.padding(top = 12.dp)) }
+        e.str("texto")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF4A3B00), modifier = Modifier.padding(top = 10.dp)) }
     }
 }
 
 /**
  * Notas do dia: três anéis com o número no centro, todos tirados do /hoje (nenhuma nota inventada no app):
  * comida (kcal contra o meio da faixa), gasto (relógio contra o previsto) e treino (minutos de hoje).
+ * No cabeçalho: "Comida 85%" e "gasto 1.900 kcal · treino 45 min"; os anéis ficam no detalhe.
  */
 @Composable
 private fun NotasDoDia(j: JSONObject, consumido: Double, fMin: Double?, fMax: Double?) {
@@ -501,13 +527,24 @@ private fun NotasDoDia(j: JSONObject, consumido: Double, fMin: Double?, fMax: Do
     val treinos = r.arr("treinos").objs()
     val minTreino = treinos.sumOf { it.num("min") ?: 0.0 }
     if (fMin == null && gasto == null && treinos.isEmpty()) return
-    Cartao(atraso = 100) {
-        TituloSecao("Notas do dia")
-        Spacer(Modifier.height(10.dp))
+    val temComida = fMin != null && fMax != null && fMin + fMax > 0
+    val meio = if (temComida) (fMin!! + fMax!!) / 2 else 0.0
+    val pct = if (temComida) consumido / meio * 100 else 0.0
+    val partes = listOfNotNull(
+        if (temComida) "Comida ${Formato.inteiro(pct)}%" else null,
+        gasto?.let { "Gasto ${Formato.kcal(it)} kcal" },
+        "Treino ${Formato.inteiro(minTreino)} min",
+    )
+    CartaoResumo(
+        "notas", "Notas do dia", partes.first(), partes.drop(1).joinToString(" · ").lowercase().ifBlank { null }, atraso = 120,
+        visual = {
+            if (temComida) AnelNumero((pct / 100).toFloat().coerceIn(0f, 1f), "${Formato.inteiro(pct)}%", null, Cores.Acai, Color(0xFFF3EEFF), Color(0xFFF7F3FF), Cores.AcaiEscuro, "Comida ${Formato.inteiro(pct)}% da meta", TamanhoVisual, espessuraRel = 0.14f)
+            else if (gasto != null) AnelNumero(if (previsto != null && previsto > 0) (gasto / previsto).toFloat().coerceIn(0f, 1f) else 1f, Formato.kcal(gasto), null, Cores.Proteina, Color(0xFFFFF1E8), Color(0xFFFFF8F2), Cores.ProteinaTinta, "Gasto ${Formato.kcal(gasto)} kcal", TamanhoVisual, espessuraRel = 0.14f)
+            else AnelNumero(if (minTreino > 0) 1f else 0f, Formato.inteiro(minTreino), null, Cores.Verde, Cores.BomFundo, Color(0xFFF2FBF5), Cores.GorduraTinta, "Treino ${Formato.inteiro(minTreino)} min", TamanhoVisual, espessuraRel = 0.14f)
+        },
+    ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            if (fMin != null && fMax != null && fMin + fMax > 0) {
-                val meio = (fMin + fMax) / 2
-                val pct = (consumido / meio * 100)
+            if (temComida) {
                 NotaAnel(
                     "Comida", pct.toFloat() / 100f, "${Formato.inteiro(pct)}%", "DA META",
                     "${Formato.kcal(consumido)} de ~${Formato.kcal(meio)} kcal",
@@ -540,41 +577,49 @@ private fun NotaAnel(nome: String, f: Float, centro: String, selo: String, sub: 
     }
 }
 
-/** peso: { atual, kgSemana, ic: {min,max}, veredito, texto } — mini gráfico da tendência com a faixa de 95%. */
+/** Brotinho: o vaso pequeno no cabeçalho, os dias como valor; o desenho inteiro (com Caju e Lia) no detalhe. */
 @Composable
-private fun CartaoPeso(peso: JSONObject, aoTocar: () -> Unit) {
+private fun CartaoBrotinho(dias: Int, murcho: Boolean) {
+    val explicacao = if (murcho) "Um dia sem registro. Registre hoje e ele se recupera." else "Cada dia registrado faz ele crescer."
+    CartaoResumo(
+        "brotinho", if (murcho) "Brotinho murcho" else "Brotinho",
+        "$dias ${if (dias == 1) "dia" else "dias"}", if (murcho) "um dia sem registro" else "regando todo dia",
+        cor = if (murcho) Color(0xFFFFF1E8) else Cores.BomFundo, atraso = 140,
+        visual = { Brotinho(dias, murcho, escala = 0.37f, soVaso = true) },
+    ) {
+        Text(explicacao, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2)
+        Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) { Brotinho(dias, murcho) }
+    }
+}
+
+/** peso: { atual, kgSemana, ic: {min,max}, veredito, texto } — valor e tendência no cabeçalho; mini gráfico, faixa e texto no detalhe. */
+@Composable
+private fun CartaoPeso(peso: JSONObject, aoVerProgresso: () -> Unit) {
     val k = peso.num("kgSemana")
     val ic = peso.obj("ic")
-    Cartao(padding = PaddingValues(16.dp), atraso = 260, aoTocar = aoTocar) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Column(Modifier.weight(1f)) {
-                Text("Peso · tendência de 28 dias", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp)
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(Formato.decimal(peso.num("atual")), style = MaterialTheme.typography.headlineLarge, fontSize = 24.sp)
-                    Text(" kg", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)
+    CartaoResumo(
+        "peso", "Peso", "${Formato.decimal(peso.num("atual"))} kg",
+        k?.let { "${Formato.sinal(it)} kg/sem · 28 dias" } ?: "tendência ainda incerta", atraso = 260,
+        visual = { Mascote(Pose.CorgiBalanca, TamanhoVisual) },
+    ) {
+        if (k != null) {
+            val f = animaAte(1f, 1200)
+            Canvas(Modifier.fillMaxWidth().height(56.dp).semantics { contentDescription = "Tendência de ${Formato.sinal(k)} kg por semana" }) {
+                // inclinação em 4 semanas: a linha sobe/desce pelo kg/sem; a faixa abre com o IC nas pontas
+                val meioY = size.height / 2
+                val escala = size.height / 2 / maxOf(0.6, kotlin.math.abs((ic.num("max") ?: k) * 4), kotlin.math.abs((ic.num("min") ?: k) * 4)).toFloat()
+                fun y(kg: Double, t: Float) = meioY - (kg * 4 * (t - 0.5f)).toFloat() * escala
+                val lo = ic.num("min") ?: k
+                val hi = ic.num("max") ?: k
+                val banda = Path().apply {
+                    moveTo(0f, y(hi, 0f)); lineTo(size.width, y(hi, 1f)); lineTo(size.width, y(lo, 1f)); lineTo(0f, y(lo, 0f)); close()
                 }
-                Text(
-                    k?.let { "${Formato.sinal(it)} kg/sem" + (if (ic != null) " (${Formato.sinal(ic.num("min"))} a ${Formato.sinal(ic.num("max"))})" else "") } ?: "tendência ainda incerta",
-                    style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2,
-                )
-                peso.str("texto")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.AcaiEscuro, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp)) }
+                drawPath(banda, Cores.Lilas)
+                drawLine(Cores.Acai, Offset(0f, y(k, 0f)), Offset(size.width * f, y(k, f)), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
             }
-            if (k != null) {
-                val f = animaAte(1f, 1200)
-                Canvas(Modifier.size(130.dp, 56.dp)) {
-                    // inclinação em 4 semanas: a linha sobe/desce pelo kg/sem; a faixa abre com o IC nas pontas
-                    val meioY = size.height / 2
-                    val escala = size.height / 2 / maxOf(0.6, kotlin.math.abs((ic.num("max") ?: k) * 4), kotlin.math.abs((ic.num("min") ?: k) * 4)).toFloat()
-                    fun y(kg: Double, t: Float) = meioY - (kg * 4 * (t - 0.5f)).toFloat() * escala
-                    val lo = ic.num("min") ?: k
-                    val hi = ic.num("max") ?: k
-                    val banda = Path().apply {
-                        moveTo(0f, y(hi, 0f)); lineTo(size.width, y(hi, 1f)); lineTo(size.width, y(lo, 1f)); lineTo(0f, y(lo, 0f)); close()
-                    }
-                    drawPath(banda, Cores.Lilas)
-                    drawLine(Cores.Acai, Offset(0f, y(k, 0f)), Offset(size.width * f, y(k, f)), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
-                }
-            }
+            if (ic != null) LinhaValor("Faixa de 95%", "${Formato.sinal(ic.num("min"))} a ${Formato.sinal(ic.num("max"))} kg/sem")
         }
+        peso.str("texto")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.AcaiEscuro, modifier = Modifier.padding(top = 4.dp)) }
+        Link("ver progresso", aoVerProgresso)
     }
 }

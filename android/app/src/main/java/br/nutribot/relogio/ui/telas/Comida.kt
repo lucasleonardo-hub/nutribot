@@ -1,5 +1,7 @@
 package br.nutribot.relogio.ui.telas
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
@@ -44,6 +46,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -69,6 +72,7 @@ import br.nutribot.relogio.ui.componentes.Botao
 import br.nutribot.relogio.ui.componentes.Cabecalho
 import br.nutribot.relogio.ui.componentes.Cartao
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
+import br.nutribot.relogio.ui.componentes.Link
 import br.nutribot.relogio.ui.componentes.Mascote
 import br.nutribot.relogio.ui.componentes.Pose
 import br.nutribot.relogio.ui.componentes.Vazio
@@ -198,7 +202,7 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
         }
 
         val refeicoes = d?.refeicoes.orEmpty()
-        if (refeicoes.isEmpty()) Vazio(if (ehHoje) "Nada registrado hoje ainda." else "Nenhuma refeição registrada neste dia.", Pose.LontraTriste)
+        if (refeicoes.isEmpty()) Vazio(if (ehHoje) "Nada registrado hoje ainda." else "Nada registrado neste dia.", Pose.LontraTriste)
         refeicoes.forEach { r ->
             LinhaDoTempo(r.hora) {
                 CartaoRefeicao(r, r.id == aberta, aoTocar = { aberta = if (aberta == r.id) null else r.id }, aoAjustar = { ajustar = r.id }, aoApagar = { erroApagar = null; apagar = r.id })
@@ -233,7 +237,7 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Mascote(Pose.DuplaCelular, 54.dp)
-            Text("Registre aqui (foto ou texto) ou pelo WhatsApp (foto, texto ou áudio): tudo cai no mesmo diário, e dá para ajustar e apagar aqui.", style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352))
+            Text("Aqui ou no WhatsApp: tudo cai no mesmo diário.", style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352))
         }
     }
 
@@ -258,7 +262,7 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
             title = { Text("Apagar ${refApagar.nome}?", style = MaterialTheme.typography.headlineSmall) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Some do diário e das contas do dia. Não dá para desfazer.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+                    Text("Sai do diário e das contas do dia.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
                     erroApagar?.let { AvisoErro(it) }
                 }
             },
@@ -273,7 +277,7 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
                             if (aberta == refApagar.id) aberta = null
                             apagar = null
                         } catch (e: ErroApi) {
-                            erroApagar = if (e.semConexao) "O servidor está acordando (ou sem conexão). Tente de novo." else e.paraPessoa
+                            erroApagar = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
                         } catch (e: CancellationException) {
                             throw e
                         } finally {
@@ -350,6 +354,7 @@ private fun rotuloIncerteza(s: String?): String? = when (s) {
 @Composable
 private fun CartaoRefeicao(r: Refeicao, aberta: Boolean, aoTocar: () -> Unit, aoAjustar: () -> Unit, aoApagar: () -> Unit) {
     val giro by animateFloatAsState(if (aberta) 180f else 0f, label = "giro")
+    val ctx = LocalContext.current
     // a miniatura (160 px) é decodificada fora da thread principal; até chegar, o ícone do prato
     val miniatura by produceState<ImageBitmap?>(initialValue = null, r.miniatura) {
         value = r.miniatura?.let { m -> withContext(Dispatchers.IO) { Imagens.deDataUri(m) } }
@@ -400,6 +405,15 @@ private fun CartaoRefeicao(r: Refeicao, aberta: Boolean, aoTocar: () -> Unit, ao
                             Box(Modifier.fillMaxWidth().height(10.dp).clip(Formas.Pilula).background(Cores.Trilho)) {
                                 Box(Modifier.fillMaxWidth((it2.gramas / (maxG * 1.25)).toFloat().coerceIn(0.02f, 1f)).height(10.dp).clip(Formas.Pilula).background(Brush.horizontalGradient(listOf(Color(0xFFD9CEFA), Cores.LilasForte))))
                             }
+                        }
+                    }
+                }
+                // fase 3: a primeira foto fica no Drive; o link abre no navegador ou no app do Drive (sem app para abrir, ignora)
+                r.fotoUrl?.let { url ->
+                    Link("ver foto") {
+                        try {
+                            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        } catch (_: Exception) {
                         }
                     }
                 }

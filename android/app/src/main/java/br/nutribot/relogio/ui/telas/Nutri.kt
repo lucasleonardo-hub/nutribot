@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.foundation.layout.heightIn
@@ -22,6 +24,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -37,14 +41,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.nutribot.relogio.dados.Perfil
+import br.nutribot.relogio.dados.api.ErroApi
 import br.nutribot.relogio.dados.arr
+import br.nutribot.relogio.dados.bool
+import br.nutribot.relogio.dados.obj
 import br.nutribot.relogio.dados.objs
 import br.nutribot.relogio.dados.str
 import br.nutribot.relogio.ui.AppVM
 import br.nutribot.relogio.ui.Formato
+import br.nutribot.relogio.ui.componentes.AvisoErro
+import br.nutribot.relogio.ui.componentes.Botao
 import br.nutribot.relogio.ui.componentes.Cabecalho
 import br.nutribot.relogio.ui.componentes.Cartao
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
+import br.nutribot.relogio.ui.componentes.Link
 import br.nutribot.relogio.ui.componentes.Pilula
 import br.nutribot.relogio.ui.componentes.Pose
 import br.nutribot.relogio.ui.componentes.Segmentado
@@ -52,6 +62,8 @@ import br.nutribot.relogio.ui.componentes.Vazio
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
 import br.nutribot.relogio.ui.tema.Fredoka
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.time.LocalDate
 
@@ -75,6 +87,18 @@ private fun rotuloNatureza(n: String?): String = when (n) {
 
 private fun quando(s: String?): String? = Formato.dia(s)?.let { Formato.diaCurto(it) } ?: s
 
+/** Uma ação pendente sobre um fato ou hipótese (fase 3, A4): corrigir o texto, apagar o fato ou descartar a hipótese. */
+private sealed class AcaoNutri {
+    data class Corrigir(val fid: String, val texto: String) : AcaoNutri()
+    data class Apagar(val fid: String) : AcaoNutri()
+    data class Descartar(val hid: String) : AcaoNutri()
+}
+
+/**
+ * O que a Nutri sabe: fatos, hipóteses, diário e avaliações do /nutri. Fase 3: fatos com `editavel` ganham "corrigir",
+ * com `apagavel` ganham "apagar"; hipótese aberta com `apagavel` ganha "descartar". Toda resposta traz o /nutri recalculado,
+ * que entra no lugar do guardado (vm.semear).
+ */
 @Composable
 fun TelaNutri(vm: AppVM, perfil: Perfil?) {
     if (perfil == null) { Vazio("Escolha um perfil no Hoje."); return }
@@ -82,29 +106,39 @@ fun TelaNutri(vm: AppVM, perfil: Perfil?) {
     val carga by vm.carga(rota).collectAsStateWithLifecycle()
     LaunchedEffect(rota) { vm.carregar(rota) }
     var aba by rememberSaveable { mutableIntStateOf(0) }
+    var acao by remember { mutableStateOf<AcaoNutri?>(null) }
     ConteudoCarga(
         carga, { vm.carregar(rota, forcar = true) },
         topo = {
-            Cabecalho("O que a Nutri sabe", "sobre ${perfil.curto} · o diário é do grupo todo", Pose.DuplaConferindo, 60.dp)
+            Cabecalho("O que a Nutri sabe", "sobre ${perfil.curto} · diário do grupo", Pose.DuplaConferindo, 60.dp)
             Segmentado(listOf("Fatos", "Hipóteses", "Diário", "Avaliações"), aba, { aba = it }, Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp))
         },
     ) { j ->
         when (aba) {
-            0 -> ListaItens(j.arr("fatos").objs(), "Nenhum fato guardado ainda.") { f ->
-                f.str("texto") ?: f.str("campo") ?: ""
+            0 -> ListaItens(j.arr("fatos").objs(), "Nenhum fato guardado ainda.", texto = { f -> f.str("texto") ?: f.str("campo") ?: "" }) { f ->
+                val id = f.str("id")
+                // `valor` é o texto cru (sem o rótulo "Dieta: "), que é o que o PUT recebe de volta
+                if (id != null && f.bool("editavel") == true) Link("corrigir") { acao = AcaoNutri.Corrigir(id, f.str("valor") ?: f.str("texto") ?: "") }
+                if (id != null && f.bool("apagavel") == true) Link("apagar") { acao = AcaoNutri.Apagar(id) }
             }
-            1 -> ListaItens(j.arr("hipoteses").objs(), "Nenhuma hipótese aberta.") { h ->
-                h.str("texto") ?: ""
+            1 -> ListaItens(j.arr("hipoteses").objs(), "Nenhuma hipótese aberta.", texto = { h -> h.str("texto") ?: "" }) { h ->
+                val id = h.str("id")
+                if (id != null && h.bool("apagavel") == true) Link("descartar") { acao = AcaoNutri.Descartar(id) }
             }
             2 -> Diario(j)
-            else -> ListaItens(j.arr("avaliacoes").objs(), "Nenhuma reflexão ou pensamento recente.") { a -> a.str("texto") ?: "" }
+            else -> ListaItens(j.arr("avaliacoes").objs(), "Nenhuma avaliação recente.", texto = { a -> a.str("texto") ?: "" })
         }
-        Text("Corrigir e apagar o que a Nutri sabe chega na próxima versão.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4)
+    }
+    when (val a = acao) {
+        is AcaoNutri.Corrigir -> DialogoCorrigir(vm, perfil.id, a.fid, a.texto) { acao = null }
+        is AcaoNutri.Apagar -> DialogoApagarNutri(vm, AppVM.rotaFato(perfil.id, a.fid), perfil.id, "Apagar este fato?", "A Nutri deixa de usar.", "Apagar") { acao = null }
+        is AcaoNutri.Descartar -> DialogoApagarNutri(vm, AppVM.rotaHipotese(perfil.id, a.hid), perfil.id, "Descartar esta hipótese?", "A Nutri para de testar essa ideia.", "Descartar") { acao = null }
+        null -> {}
     }
 }
 
 @Composable
-private fun ListaItens(itens: List<JSONObject>, vazio: String, texto: (JSONObject) -> String) {
+private fun ListaItens(itens: List<JSONObject>, vazio: String, texto: (JSONObject) -> String, acoes: (@Composable (JSONObject) -> Unit)? = null) {
     if (itens.isEmpty()) { Vazio(vazio, Pose.CorgiLupa); return }
     itens.forEachIndexed { i, it ->
         val (fundo, tinta) = corNatureza(it.str("natureza"))
@@ -122,12 +156,106 @@ private fun ListaItens(itens: List<JSONObject>, vazio: String, texto: (JSONObjec
                 val aFavor = sinais.count { s -> s.str("direcao")?.contains("favor") == true || s.str("direcao") == "confirma" }
                 Text("${sinais.size} sinais · $aFavor a favor, ${sinais.size - aFavor} contra", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 2.dp))
             }
-            Text(
-                listOfNotNull(it.str("origem"), (it.str("dia")?.let { d -> quando(d) + (it.str("hora")?.let { h -> " $h" } ?: "") } ?: quando(it.str("atualizadoEm")))).joinToString(" · "),
-                style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                Text(
+                    listOfNotNull(it.str("origem"), (it.str("dia")?.let { d -> quando(d) + (it.str("hora")?.let { h -> " $h" } ?: "") } ?: quando(it.str("atualizadoEm")))).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.weight(1f),
+                )
+                acoes?.invoke(it)
+            }
         }
     }
+}
+
+/** Limite de cada fato (o mesmo do servidor): dieta e restrições 120; rotina 1500; notas 4000. */
+private fun limiteDoFato(fid: String): Int = when (fid) {
+    "dieta", "restricoes" -> 120
+    "rotina" -> 1500
+    "notas" -> 4000
+    else -> 400
+}
+
+/** Corrigir um fato de texto livre: PUT /perfis/:id/nutri/fatos/:fid { texto } -> { nutri }. As notas são uma lista: várias linhas. */
+@Composable
+private fun DialogoCorrigir(vm: AppVM, perfilId: String, fid: String, textoInicial: String, aoFechar: () -> Unit) {
+    val escopo = rememberCoroutineScope()
+    val limite = limiteDoFato(fid)
+    var texto by rememberSaveable { mutableStateOf(textoInicial) }
+    var enviando by remember { mutableStateOf(false) }
+    var erro by remember { mutableStateOf<String?>(null) }
+    fun salvar() {
+        val t = texto.trim()
+        if (t.isBlank()) { erro = "Escreva o texto corrigido."; return }
+        if (t == textoInicial.trim()) { aoFechar(); return }
+        escopo.launch {
+            enviando = true
+            erro = null
+            try {
+                val j = vm.escrever("PUT", AppVM.rotaFato(perfilId, fid), JSONObject().put("texto", t))
+                j.obj("nutri")?.let { vm.semear(AppVM.rotaNutri(perfilId), it) } ?: vm.carregar(AppVM.rotaNutri(perfilId), forcar = true)
+                aoFechar()
+            } catch (e: ErroApi) {
+                erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
+            } catch (e: CancellationException) {
+                throw e
+            } finally {
+                enviando = false
+            }
+        }
+    }
+    AlertDialog(
+        onDismissRequest = { if (!enviando) aoFechar() },
+        containerColor = Cores.Branco,
+        title = { Text("Corrigir", style = MaterialTheme.typography.headlineSmall) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(texto, { texto = it.take(limite) }, label = { Text("Como é de verdade?") }, minLines = 2, maxLines = if (limite > 400) 12 else 6, modifier = Modifier.fillMaxWidth())
+                Text("${texto.length}/$limite", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4)
+                erro?.let { AvisoErro(it) }
+            }
+        },
+        confirmButton = { Botao(if (enviando) "Salvando…" else "Salvar", habilitado = !enviando) { salvar() } },
+        dismissButton = { Botao("Cancelar", suave = true, habilitado = !enviando) { aoFechar() } },
+    )
+}
+
+/** Confirmação antes de apagar um fato ou descartar uma hipótese: DELETE na rota -> { apagado, nutri }. */
+@Composable
+private fun DialogoApagarNutri(vm: AppVM, rota: String, perfilId: String, titulo: String, texto: String, botao: String, aoFechar: () -> Unit) {
+    val escopo = rememberCoroutineScope()
+    var enviando by remember { mutableStateOf(false) }
+    var erro by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!enviando) aoFechar() },
+        containerColor = Cores.Branco,
+        title = { Text(titulo, style = MaterialTheme.typography.headlineSmall) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(texto, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+                erro?.let { AvisoErro(it) }
+            }
+        },
+        confirmButton = {
+            Botao(if (enviando) "Enviando…" else botao, habilitado = !enviando) {
+                escopo.launch {
+                    enviando = true
+                    erro = null
+                    try {
+                        val j = vm.escrever("DELETE", rota, null)
+                        j.obj("nutri")?.let { vm.semear(AppVM.rotaNutri(perfilId), it) } ?: vm.carregar(AppVM.rotaNutri(perfilId), forcar = true)
+                        aoFechar()
+                    } catch (e: ErroApi) {
+                        erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
+                    } catch (e: CancellationException) {
+                        throw e
+                    } finally {
+                        enviando = false
+                    }
+                }
+            }
+        },
+        dismissButton = { Botao("Cancelar", suave = true, habilitado = !enviando) { aoFechar() } },
+    )
 }
 
 /** Diário da Nutri: agenda simples por dia (calendário do mês; tocar num dia mostra as notas). É do grupo todo. */
@@ -184,7 +312,7 @@ private fun Diario(j: JSONObject) {
     Text(Formato.diaLongo(sel).replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleLarge)
     val doDia = porDia[sel].orEmpty()
     if (doDia.isEmpty()) {
-        Text("Nenhuma nota neste dia. A Nutri escreve à noite quando o grupo conversou.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)
+        Text("Sem nota neste dia.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)
     } else {
         doDia.forEach { n ->
             Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp)) {

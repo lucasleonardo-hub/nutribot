@@ -114,6 +114,18 @@ async function criarOuAcharPasta(nome, parentId) {
   return id;
 }
 
+/** Subpasta (criada se faltar) dentro de uma pasta pelo ID: ex. a pasta "Fotos/2026-10" da pessoa (app, fase 3). */
+export async function subpasta(parentId, nome) {
+  iniciarDrive();
+  return garantirPasta(nome, parentId);
+}
+
+/** Manda um arquivo para a lixeira do Drive (reversível por 30 dias; nada é apagado de vez). */
+export async function lixeira(fileId) {
+  iniciarDrive();
+  await drive.files.update({ fileId, requestBody: { trashed: true }, supportsAllDrives: true });
+}
+
 /** Resolve caminho tipo "Diario/2026-09-15" criando as subpastas que faltarem. */
 async function resolverCaminho(caminho) {
   let parent = ROOT_ID;

@@ -7,7 +7,10 @@ import org.json.JSONObject
  * docs/app/2026-10-14-plano-fase2.md). Os nomes de campos são os do contrato. O resto das respostas é lido direto do JSON em cada tela.
  */
 
-/** Perfil = { id, nome, primeiroNome, apelido, fuso, objetivo, metaPeso, metaPrazo, temRelogio, temHevy, ehDono } */
+/**
+ * Perfil = { id, nome, primeiroNome, apelido, fuso, objetivo, metaPeso, metaPrazo, temRelogio, temHevy, ehDono,
+ *            altura (cm, fase 3), ritmo ("maximo" | "medio" | "minimo", fase 3) }
+ */
 data class Perfil(
     val id: String,
     val nome: String,
@@ -20,12 +23,19 @@ data class Perfil(
     val temRelogio: Boolean,
     val temHevy: Boolean,
     val ehDono: Boolean,
+    val altura: Double? = null,
+    val ritmo: String? = null,
 ) {
     /** Nome curto para os chips do topo. */
     val curto: String get() = apelido ?: primeiroNome
     val inicial: String get() = curto.take(1).uppercase()
 
     companion object {
+        /** Ritmos que a API aceita (sem acento) e o rótulo para a tela. */
+        val ritmos: List<Pair<String, String>> = listOf("maximo" to "máximo", "medio" to "médio", "minimo" to "mínimo")
+
+        fun rotuloRitmo(r: String?): String? = ritmos.firstOrNull { it.first == r }?.second ?: r
+
         fun de(j: JSONObject): Perfil? {
             val id = j.str("id", "_id") ?: return null
             val nome = j.str("nome") ?: j.str("primeiroNome") ?: "Perfil"
@@ -41,6 +51,8 @@ data class Perfil(
                 temRelogio = j.bool("temRelogio") ?: false,
                 temHevy = j.bool("temHevy") ?: false,
                 ehDono = j.bool("ehDono") ?: false,
+                altura = j.num("altura"),
+                ritmo = j.str("ritmo"),
             )
         }
 
@@ -53,7 +65,8 @@ data class Item(val nome: String, val gramas: Double?, val kcal: Double?, val p:
 
 /**
  * Refeicao = { id, dia, slot, nome, hora, kcal, faixa: {min,max}, p, c, g, descricao, origem, incerteza,
- *              itens: [{ nome, gramas|null, kcal|null, p|null, c|null, g|null }], miniatura: "data:image/jpeg;base64,..."|null }
+ *              itens: [{ nome, gramas|null, kcal|null, p|null, c|null, g|null }], miniatura: "data:image/jpeg;base64,..."|null,
+ *              foto: { url } | null (fase 3: a primeira foto fica no Drive) }
  */
 data class Refeicao(
     val id: String,
@@ -72,6 +85,7 @@ data class Refeicao(
     val incerteza: String?,
     val miniatura: String?,
     val itens: List<Item>,
+    val fotoUrl: String? = null,
 ) {
     companion object {
         fun de(j: JSONObject, indice: Int = 0): Refeicao {
@@ -93,6 +107,7 @@ data class Refeicao(
                 incerteza = j.str("incerteza"),
                 miniatura = j.str("miniatura"),
                 itens = j.arr("itens").objs().mapNotNull { i -> i.str("nome")?.let { Item(it, i.num("gramas"), i.num("kcal"), i.num("p"), i.num("c"), i.num("g")) } },
+                fotoUrl = j.obj("foto").str("url"),
             )
         }
 

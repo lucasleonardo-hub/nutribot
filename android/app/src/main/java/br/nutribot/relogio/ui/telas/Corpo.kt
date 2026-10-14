@@ -224,7 +224,7 @@ private fun Boneco(costas: Boolean, series: Map<Regiao, Double>) {
 @Composable
 private fun LegendaMusculos(series: Map<Regiao, Double>, temTreino: Boolean) {
     if (!temTreino) {
-        Text("Sem Hevy ligado: os brilhos dos músculos aparecem quando houver treino de força registrado.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 8.dp))
+        Text("Sem treino de força registrado ainda.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 8.dp))
         return
     }
     FlowRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -327,7 +327,7 @@ private fun CartaoSugestoes(lista: List<JSONObject>) {
             }
         }
         Text(
-            "Sugestões do NutriBot a partir do Hevy: sobe carga quando você fecha o topo das repetições com folga; sobe repetição quando o esforço já está alto.",
+            "Sugestões a partir dos treinos do Hevy.",
             style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp),
         )
     }
@@ -347,7 +347,7 @@ private fun CartaoBio(medicoes: List<Medicao>) {
         }
         Segmentado(listOf("Gordura", "Massa magra"), aba, { aba = it }, Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp))
         if (serie.isEmpty()) {
-            Text("Nenhuma medição com ${if (ehGordura) "gordura" else "massa magra"} ainda (balança com bioimpedância ou avaliação em PDF).", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3, modifier = Modifier.padding(vertical = 16.dp))
+            Text("Nenhuma medição de ${if (ehGordura) "gordura" else "massa magra"} ainda.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3, modifier = Modifier.padding(vertical = 16.dp))
             return@Cartao
         }
         val cor = if (ehGordura) Color(0xFFFF8A65) else Cores.Verde
@@ -442,5 +442,5 @@ private fun GraficoBio(pontos: List<Pair<LocalDate, Double>>, doc: List<Boolean>
             drawCircle(if (doc[i]) Cores.Acai else cor, r, c)
         }
     }
-    Text("Toque num ponto para ver a medição. Pontos roxos: avaliação em documento.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp)
+    Text("Toque num ponto para ver. Roxo: avaliação em documento.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp)
 }

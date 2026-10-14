@@ -166,7 +166,7 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
         val itens = refeicoes.map { ItemDia(it.hora, "Refeição", it.nome, "≈ ${Formato.kcal(it.kcal)} kcal" + (it.descricao?.let { d -> " · $d" } ?: ""), Color(0xFFFFF1EA), Cores.ProteinaTinta) } +
             treinos.map { ItemDia(it.str("hora"), "Treino", it.str("nome") ?: "Treino", it.int("min")?.let { m -> "$m min" }, Color(0xFFEEFAF3), Cores.GorduraTinta) } +
             eventos.map { e -> val (f, t) = corDoTipo(e.tipo); ItemDia(e.hora, Evento.rotulo(e.tipo), e.titulo, e.nota, f, t, eventoId = e.id) }
-        if (itens.isEmpty()) Vazio(if (sel.isAfter(hoje)) "Nada marcado ainda. Conte à Nutri o que vem: jantar fora, viagem, festa." else "Dia livre: nada registrado.", Pose.DuplaDescansando)
+        if (itens.isEmpty()) Vazio(if (sel.isAfter(hoje)) "Nada marcado. Conte o que vem: jantar fora, viagem, festa." else "Dia livre: nada registrado.", Pose.DuplaDescansando)
         itens.sortedBy { it.hora ?: "99:99" }.forEach { e ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(e.hora ?: "—", style = MaterialTheme.typography.labelMedium, color = Cores.Tinta2, modifier = Modifier.width(42.dp).padding(top = 14.dp))
@@ -188,7 +188,7 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
             }
         }
         Text(
-            "A Nutri lê os eventos de hoje e dos próximos dias na conversa (um jantar fora muda a dica do almoço). Os eventos do Google Agenda continuam fora do app; os treinos do relógio aparecem só no dia de hoje.",
+            "A Nutri lê seus eventos e adapta as dicas.",
             style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4,
         )
     }
@@ -220,7 +220,7 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
                             vm.invalidar(perfil.id)
                             apagar = null
                         } catch (e: ErroApi) {
-                            erroApagar = if (e.semConexao) "O servidor está acordando (ou sem conexão). Tente de novo." else e.paraPessoa
+                            erroApagar = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
                         } catch (e: CancellationException) {
                             throw e
                         } finally {
@@ -271,7 +271,7 @@ private fun FolhaNovoEvento(vm: AppVM, perfilId: String, dia: String, aoFechar: 
                 val j = vm.escrever("POST", "/perfis/$perfilId/eventos", corpo)
                 aoCriar(j.obj("evento")?.let { Evento.de(it) })
             } catch (e: ErroApi) {
-                erro = if (e.semConexao) "O servidor está acordando (ou sem conexão). Tente de novo em instantes." else e.paraPessoa
+                erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
             } catch (e: CancellationException) {
                 throw e
             } finally {

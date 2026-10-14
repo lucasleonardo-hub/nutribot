@@ -34,13 +34,14 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import br.nutribot.relogio.dados.api.ErroApi
 import br.nutribot.relogio.dados.int
 import br.nutribot.relogio.dados.obj
 import br.nutribot.relogio.dados.str
 import br.nutribot.relogio.ui.AppVM
-import br.nutribot.relogio.ui.componentes.Cartao
+import br.nutribot.relogio.ui.componentes.CartaoExpansivel
 import br.nutribot.relogio.ui.componentes.Chip
 import br.nutribot.relogio.ui.componentes.Link
 import br.nutribot.relogio.ui.tema.Cores
@@ -55,6 +56,7 @@ private val nomesHumor = listOf("muito mal", "mal", "mais ou menos", "bem", "mui
  * Cartão "Como você está?" do Hoje: humor (5 carinhas), energia e sono (1 a 5) e um texto curto opcional.
  * Cada toque manda PUT /perfis/:id/humor, juntando as mudanças de ~800 ms; o texto vai quando a pessoa toca em "salvar".
  * O estado inicial vem de hoje.humor; o /hoje devolvido pelo servidor entra no lugar do guardado (sem recarregar tudo).
+ * Fase 3: no cabeçalho (altura padrão dos cartões) ficam o título e as carinhas; energia, sono e o texto ficam no detalhe.
  */
 @Composable
 fun CartaoHumor(vm: AppVM, perfilId: String, dia: String, inicial: JSONObject?) {
@@ -70,7 +72,7 @@ fun CartaoHumor(vm: AppVM, perfilId: String, dia: String, inicial: JSONObject?) 
 
     LaunchedEffect(tocado) {
         if (tocado == 0) return@LaunchedEffect
-        if (humor == 0) { estado = "escolha uma carinha para salvar"; return@LaunchedEffect }
+        if (humor == 0) { estado = "escolha uma carinha"; return@LaunchedEffect }
         delay(800)
         estado = "salvando…"
         try {
@@ -84,28 +86,34 @@ fun CartaoHumor(vm: AppVM, perfilId: String, dia: String, inicial: JSONObject?) 
             // o /hoje já recalculado vem na resposta: entra no lugar do guardado, sem buscar tudo de novo
             j.obj("hoje")?.let { vm.semear(AppVM.rotaHoje(perfilId), it) }
         } catch (e: ErroApi) {
-            estado = if (e.semConexao) "sem conexão agora; toque de novo depois" else e.paraPessoa
+            estado = if (e.semConexao) "sem conexão; tente depois" else e.paraPessoa
         } catch (e: CancellationException) {
             throw e
         }
     }
 
-    Cartao(atraso = 40) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Como você está?", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            estado?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (it == "salvo") Cores.BomTinta else Cores.Tinta3) }
-        }
-        Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            (1..5).forEach { n ->
-                val ativa = humor == n
-                Box(
-                    Modifier.size(52.dp).clip(CircleShape).clickable(role = Role.RadioButton, onClickLabel = "Humor ${nomesHumor[n - 1]}") { humor = n; tocado++ }
-                        .semantics { selected = ativa; contentDescription = "Humor ${nomesHumor[n - 1]}" },
-                    contentAlignment = Alignment.Center,
-                ) { Carinha(n, ativa) }
+    CartaoExpansivel(
+        "humor", atraso = 40,
+        cabecalho = {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Como você está?", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    estado?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (it == "salvo") Cores.BomTinta else Cores.Tinta3, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    (1..5).forEach { n ->
+                        val ativa = humor == n
+                        Box(
+                            Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.RadioButton, onClickLabel = "Humor ${nomesHumor[n - 1]}") { humor = n; tocado++ }
+                                .semantics { selected = ativa; contentDescription = "Humor ${nomesHumor[n - 1]}" },
+                            contentAlignment = Alignment.Center,
+                        ) { Carinha(n, ativa) }
+                    }
+                }
             }
-        }
-        Text(if (humor > 0) "Humor: ${nomesHumor[humor - 1]}" else "Toque numa carinha.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 2.dp))
+        },
+    ) {
+        Text(if (humor > 0) "Humor: ${nomesHumor[humor - 1]}" else "Toque numa carinha.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
         LinhaNota("Energia", energia) { energia = it; tocado++ }
         LinhaNota("Sono", sono) { sono = it; tocado++ }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
@@ -132,7 +140,7 @@ private fun LinhaNota(nome: String, valor: Int, aoEscolher: (Int) -> Unit) {
 private fun Carinha(nivel: Int, ativa: Boolean) {
     val cor = if (ativa) coresHumor[nivel - 1] else Cores.Trilho
     val tinta = if (ativa) Cores.Tinta else Cores.Tinta4
-    Canvas(Modifier.size(if (ativa) 46.dp else 40.dp)) {
+    Canvas(Modifier.size(if (ativa) 44.dp else 38.dp)) {
         val r = size.minDimension / 2
         val c = Offset(r, r)
         drawCircle(cor, r, c)

@@ -12,8 +12,8 @@
 import express from 'express';
 import { listarPerfis, refeicoesDesde, pesagensDesde, colecao, humorDe, eventosDe, comMiniaturas } from './mongo.js';
 import { authPadrao, erroApi, ipDe, criarDiagnosticoXff } from './api-auth.js';
-import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, termosDeLugar } from './api-montadores.js';
-import { rotasDeEscrita, escritaPadrao } from './api-escrita.js';
+import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, montarPesagens, termosDeLugar } from './api-montadores.js';
+import { rotasDeEscrita, escritaPadrao, diaValido, MAX_DIAS_PESAGENS } from './api-escrita.js';
 import { estimarRefeicaoApp } from './gemini.js';
 import { marcaDeTempo, diasAnteriores } from './util.js';
 import { temHevy } from './treino.js';
@@ -74,6 +74,9 @@ export function dadosPadrao() {
       const vistos = new Set(doIntervalo.map((r) => String(r._id)));
       return [...(await comMiniaturas(doIntervalo)), ...base.filter((r) => !vistos.has(String(r._id)))];
     },
+
+    /** Pesagens de um intervalo fechado, uma por dia (fase 3: 90 dias e 1 ano no gráfico do app). */
+    pesagensEntre: (perfil, de, ate) => pesagensDesde(perfil.jids || [], de, ate),
 
     /** Progresso e resumos: os 31 dias de acompanhamento.dadosDe. */
     async de31(perfil, dia) {
@@ -232,9 +235,24 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
     res.json(montarCorpo({ perfil, dia, ...d, catalogo, temHevy: comHevy }));
   });
 
+  /** O /nutri de um perfil (a leitura e as correções da fase 3 devolvem o mesmo objeto). */
+  async function nutriDe(perfil, perfis) {
+    return montarNutri({ perfil, ...(await dados.daNutri(perfil)), termosLocal: termosDeLugar(perfis) });
+  }
   r.get('/perfis/:id/nutri', async (req, res) => {
     const { perfil, perfis } = await perfilDo(req);
-    res.json(montarNutri({ perfil, ...(await dados.daNutri(perfil)), termosLocal: termosDeLugar(perfis) }));
+    res.json(await nutriDe(perfil, perfis));
+  });
+
+  /** Fase 3: pesagens de [de, ate] (≤ 366 dias, ate ≤ hoje), uma por dia, pro gráfico de 90 dias e 1 ano. */
+  r.get('/perfis/:id/pesagens', async (req, res) => {
+    const { perfil, hoje } = await perfilDo(req);
+    if (req.query.de == null || req.query.de === '') throw erroApi(400, 'pedido_invalido', 'de é obrigatório (YYYY-MM-DD)');
+    const ate = diaValido(req.query.ate, hoje, { atras: MAX_DIAS_PESAGENS * 2, frente: 0, rotulo: 'ate' });
+    const de = diaValido(req.query.de, hoje, { atras: MAX_DIAS_PESAGENS * 2, frente: 0, rotulo: 'de' });
+    if (de > ate) throw erroApi(400, 'intervalo_invalido', 'de depois de ate');
+    if (diasAnteriores(ate, MAX_DIAS_PESAGENS)[0] > de) throw erroApi(400, 'intervalo_invalido', `no máximo ${MAX_DIAS_PESAGENS} dias por pedido`);
+    res.json({ pesagens: montarPesagens(await dados.pesagensEntre(perfil, de, ate)) });
   });
 
   r.get('/perfis/:id/resumos', async (req, res) => {
@@ -250,7 +268,7 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
   });
 
   // ---------- escrita (fase 2): refeição, humor, eventos, pesagem, perfil ----------
-  rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, lerJsonFoto: jsonFoto, agora, temHevyDe, adminJid, montarPerfil, montarRefeicao, ...(podeAnalisar ? { podeAnalisar } : {}) });
+  rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, nutriDe, lerJsonFoto: jsonFoto, agora, temHevyDe, adminJid, montarPerfil, montarRefeicao, ...(podeAnalisar ? { podeAnalisar } : {}) });
 
   // ---------- o resto: 404 e erros no formato do contrato ----------
   r.use((_req, res) => enviarErro(res, 404, 'rota_inexistente', 'rota inexistente na API v1'));

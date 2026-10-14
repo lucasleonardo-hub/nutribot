@@ -22,14 +22,14 @@ class ErroApi(val status: Int, val codigo: String, mensagem: String) : Exception
     val paraPessoa: String
         get() = when {
             codigo == "url_insegura" || codigo == "url_invalida" || codigo == "token_local" -> message ?: "Erro no aparelho."
-            status in 300..399 -> "O servidor respondeu com um redirecionamento ($status). Confira o endereço da API."
-            status == 0 && codigo == "tempo_esgotado" -> "O servidor não respondeu em 90 segundos. Ele pode estar acordando; tente de novo."
-            status == 0 -> "Sem conexão com o servidor. Confira a internet."
-            status == 503 || status == 502 || status == 504 -> "O servidor está acordando ou reiniciando. Tente de novo em instantes."
-            status == 401 -> "Este aparelho não está mais autorizado. Pareie de novo com !app no privado do bot."
-            status == 403 -> "Este aparelho não pode ver esse perfil."
-            status == 404 -> "Ainda não há esses dados no servidor."
-            status == 429 -> "Muitas tentativas. Espere um pouco e tente de novo."
+            status in 300..399 -> "O endereço do servidor redirecionou. Confira o endereço."
+            status == 0 && codigo == "tempo_esgotado" -> "O servidor não respondeu. Tente de novo."
+            status == 0 -> "Sem conexão. Confira a internet."
+            status == 503 || status == 502 || status == 504 -> "Acordando o servidor. Tente de novo em instantes."
+            status == 401 -> "Este celular foi desconectado. Mande !app no privado do bot para ligar de novo."
+            status == 403 -> "Este celular não pode ver esse perfil."
+            status == 404 -> "Ainda não há esses dados."
+            status == 429 -> "Muitas tentativas. Espere um pouco."
             else -> message?.takeIf { it.isNotBlank() } ?: "Erro $status no servidor."
         }
 }
@@ -90,7 +90,7 @@ object Api {
                 return try {
                     if (texto.isBlank()) JSONObject() else JSONObject(texto)
                 } catch (e: Exception) {
-                    throw ErroApi(status, "resposta_invalida", "O servidor respondeu algo que não é JSON.")
+                    throw ErroApi(status, "resposta_invalida", "Resposta inesperada do servidor.")
                 }
             }
             val erro = runCatching { JSONObject(texto).optJSONObject("erro") }.getOrNull()
@@ -102,9 +102,9 @@ object Api {
         } catch (e: ErroApi) {
             throw e
         } catch (e: SocketTimeoutException) {
-            throw ErroApi(0, "tempo_esgotado", "O servidor não respondeu em 90 s.")
+            throw ErroApi(0, "tempo_esgotado", "O servidor não respondeu.")
         } catch (e: UnknownHostException) {
-            throw ErroApi(0, "sem_rede", "Sem internet (${e.message}).")
+            throw ErroApi(0, "sem_rede", "Sem internet.")
         } catch (e: ConnectException) {
             throw ErroApi(0, "sem_rede", "Não consegui conectar ao servidor.")
         } catch (e: IOException) {

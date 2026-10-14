@@ -84,6 +84,7 @@ fun Cartao(
     padding: PaddingValues = PaddingValues(16.dp),
     atraso: Int = 0,
     aoTocar: (() -> Unit)? = null,
+    rotuloToque: String? = null,
     conteudo: @Composable ColumnScope.() -> Unit,
 ) {
     val parado = LocalReduzirMovimento.current
@@ -96,7 +97,7 @@ fun Cartao(
         }
         .clip(forma)
         .let { if (pincel != null) it.background(pincel) else it.background(cor) }
-    if (aoTocar != null) m = m.clickable(role = Role.Button, onClick = aoTocar)
+    if (aoTocar != null) m = m.clickable(role = Role.Button, onClickLabel = rotuloToque, onClick = aoTocar)
     Column(m.padding(padding), content = conteudo)
 }
 
@@ -225,13 +226,13 @@ fun Esqueleto(modifier: Modifier = Modifier, blocos: List<Dp> = listOf(180.dp, 9
     }
 }
 
-/** Faixa no topo: "acordando o servidor…" (Render grátis) ou "mostrando dados de há X". */
+/** Faixa no topo: "acordando o servidor" (Render grátis) ou "mostrando dados de há X". */
 @Composable
 fun FaixaEstado(carga: Carga) {
     AnimatedVisibility(carga.acordando || (carga.erro != null && carga.dados != null) || (carga.carregando && carga.dados != null), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
         val (fundo, tinta, texto) = when {
-            carga.acordando -> Triple(Cores.AtencaoFundo, Cores.AtencaoTinta, "Acordando o servidor… pode levar até 1 minuto." + (carga.salvoEm?.let { " Mostrando o que estava guardado (${Formato.haMs(it)})." } ?: ""))
-            carga.erro != null -> Triple(Cores.CuidadoFundo, Cores.CuidadoTinta, carga.erro.paraPessoa + (carga.salvoEm?.let { " Mostrando os dados de ${Formato.haMs(it)}." } ?: ""))
+            carga.acordando -> Triple(Cores.AtencaoFundo, Cores.AtencaoTinta, "Acordando o servidor. Leva até 1 minuto." + (carga.salvoEm?.let { " Mostrando dados de ${Formato.haMs(it)}." } ?: ""))
+            carga.erro != null -> Triple(Cores.CuidadoFundo, Cores.CuidadoTinta, carga.erro.paraPessoa + (carga.salvoEm?.let { " Mostrando dados de ${Formato.haMs(it)}." } ?: ""))
             else -> Triple(Cores.Trilho, Cores.LilasTexto, "Atualizando…")
         }
         Row(
@@ -270,7 +271,7 @@ private fun AcordandoSemCache() {
     Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Mascote(Pose.DuplaDescansando, 100.dp)
         Text("Acordando o servidor…", style = MaterialTheme.typography.titleLarge)
-        Text("O servidor gratuito dorme quando ninguém usa e pode levar até 1 minuto para acordar. Já já aparece.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+        Text("Leva até 1 minuto. Já já aparece.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
         CircularProgressIndicator(color = Cores.Acai)
     }
 }
@@ -360,7 +361,7 @@ fun Esperando(texto: String, escrita: Escrita, pose: Pose = Pose.CorgiLupa) {
     Column(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Mascote(pose, 96.dp)
         Text(texto, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-        if (escrita.acordando) Text("O servidor está acordando: pode levar até 1 minuto.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, textAlign = TextAlign.Center)
+        if (escrita.acordando) Text("Acordando o servidor. Leva até 1 minuto.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, textAlign = TextAlign.Center)
         CircularProgressIndicator(color = Cores.Acai)
     }
 }

@@ -76,7 +76,7 @@ fun TelaPareamento(vm: AppVM, aoAbrirRelogio: () -> Unit) {
             Text("Parear este celular", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(6.dp))
             Text(
-                "No WhatsApp, mande !app no privado do bot. Ele responde com um código de 6 dígitos, que vale 10 minutos e uma vez só.",
+                "Mande !app no privado do bot. Ele responde com um código de 6 dígitos.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Cores.Tinta2,
             )
@@ -111,7 +111,7 @@ fun TelaPareamento(vm: AppVM, aoAbrirRelogio: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     CircularProgressIndicator(Modifier.size(18.dp), color = Cores.Acai, strokeWidth = 2.dp)
                     Text(
-                        if (estado.acordando) "Acordando o servidor… o gratuito dorme e pode levar até 1 minuto." else "Conferindo o código…",
+                        if (estado.acordando) "Acordando o servidor. Leva até 1 minuto." else "Conferindo o código…",
                         style = MaterialTheme.typography.bodySmall,
                         color = Cores.Tinta2,
                     )
@@ -133,9 +133,9 @@ fun TelaPareamento(vm: AppVM, aoAbrirRelogio: () -> Unit) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Text("Padrão: o mesmo servidor do Relógio, em /api/v1.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+            Text("Padrão: o servidor do Relógio.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
         }
-        Link("Ajustes do relógio (Health Connect, localização, cupom)") { aoAbrirRelogio() }
+        Link("Ajustes do relógio") { aoAbrirRelogio() }
         Spacer(Modifier.height(24.dp))
     }
 }
