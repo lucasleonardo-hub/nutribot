@@ -1,6 +1,6 @@
 // comandos.js - Comandos do grupo (!id, !nome, !perfil, !dossie, !fontes, !estudar, !persona, !status, !reset, !resumo, !ajuda).
 
-import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDosDias, registrarRefeicao, refeicoesDesde, refeicoesGrupoDesde, pesagensDesde, habitosDosDias, salvarConfig, apagarRefeicaoPorId, registrarCorrecao, carregarAprendizados } from './mongo.js';
+import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDosDias, registrarRefeicao, refeicoesDesde, refeicoesGrupoDesde, pesagensDesde, habitosDosDias, salvarConfig, apagarRefeicaoPorId, registrarCorrecao, carregarAprendizados, guardarPlano } from './mongo.js';
 import { configGrafico, renderizar } from './graficos.js';
 import { salvarEmPasta } from './drive.js';
 import { pastaDe } from './pessoas.js';
@@ -131,6 +131,8 @@ export async function gerarPlano({ perfil, jidGrupo, msg, dia, pedidoArg = '' })
     await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(plano da semana de ${perfil.nome} enviado)`, tipo: 'bot' });
     const pastaId = await pastaDe(perfil);
     await salvarEmPasta(pastaId, 'Nutri-Plano.md', `---\ntipo: plano-semanal\npessoa: ${perfil.nome}\ngerado: ${dia}\nsemana: ${semana.inicio} a ${semana.fim}\ntags: [nutribot, pessoa, plano]\n---\n\n# Plano da semana de ${perfil.nome} (${semana.inicio} a ${semana.fim})\n\n${plano}\n`).catch((e) => console.error('[plano] Drive:', e.message));
+    // o app (tela Plano, fase 4) lê o último plano do Mongo; o Drive continua sendo a cópia da pessoa
+    await guardarPlano({ jid: perfil.jids?.[0], nome: perfil.nome, semana: `${semana.inicio}/${semana.fim}`, de: semana.inicio, ate: semana.fim, texto: plano }).catch((e) => console.error('[plano] mongo:', e.message));
     return true;
   } catch (e) {
     console.error('[plano]', e.message);

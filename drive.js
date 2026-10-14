@@ -120,6 +120,31 @@ export async function subpasta(parentId, nome) {
   return garantirPasta(nome, parentId);
 }
 
+/**
+ * Só leitura: o arquivo mais recente de uma pasta da raiz cujo nome começa com o prefixo (ex.: "Resumos", "Semana-").
+ * Não cria pasta nem lista a pasta inteira (a pasta Resumos tem um .md por dia). null se a pasta ou o arquivo não existem.
+ */
+export async function ultimoArquivo(nomePasta, prefixo) {
+  iniciarDrive();
+  const pastas = await drive.files.list({
+    q: `name = '${escapar(nomePasta)}' and '${ROOT_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    fields: 'files(id)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  const pastaId = pastas.data.files?.[0]?.id;
+  if (!pastaId) return null;
+  const { data } = await drive.files.list({
+    q: `name contains '${escapar(prefixo)}' and '${pastaId}' in parents and trashed = false`,
+    fields: 'files(id,name,mimeType,modifiedTime)',
+    orderBy: 'modifiedTime desc',
+    pageSize: 10,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  return (data.files || []).find((f) => f.name.startsWith(prefixo)) || null;
+}
+
 /** Manda um arquivo para a lixeira do Drive (reversível por 30 dias; nada é apagado de vez). */
 export async function lixeira(fileId) {
   iniciarDrive();

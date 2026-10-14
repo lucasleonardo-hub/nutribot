@@ -51,6 +51,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.nutribot.relogio.dados.DiaSerie
 import br.nutribot.relogio.dados.Evento
 import br.nutribot.relogio.dados.Perfil
 import br.nutribot.relogio.dados.Refeicao
@@ -114,9 +115,13 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
     val rotaEv = AppVM.rotaEventos(perfil.id, Formato.iso(ini.minusDays(3)), Formato.iso(minOf(fimSemana.plusDays(4), limiteFuturo)))
     val cargaEv by vm.carga(rotaEv).collectAsStateWithLifecycle()
     val cargaRef by (rotaRef?.let { vm.carga(it) } ?: vm.carga(rotaEv)).collectAsStateWithLifecycle()
+    // fase 4: o sono de cada dia vem do /dias (uma chamada por semana visível; só até hoje)
+    val rotaDias = if (ini.isAfter(hoje)) null else AppVM.rotaDias(perfil.id, Formato.iso(ini), Formato.iso(fimRef))
+    val cargaDias by (rotaDias?.let { vm.carga(it) } ?: vm.carga(rotaEv)).collectAsStateWithLifecycle()
     LaunchedEffect(rotaEv, rotaRef) {
         vm.carregar(rotaEv)
         rotaRef?.let { vm.carregar(it) }
+        rotaDias?.let { vm.carregar(it) }
         vm.carregar(AppVM.rotaHoje(perfil.id))
     }
     var selStr by rememberSaveable { mutableStateOf(Formato.iso(hoje)) }
@@ -127,7 +132,7 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
     var apagando by remember { mutableStateOf(false) }
 
     ConteudoCarga(
-        cargaEv, { vm.carregar(rotaEv, forcar = true); rotaRef?.let { vm.carregar(it, forcar = true) } },
+        cargaEv, { vm.carregar(rotaEv, forcar = true); rotaRef?.let { vm.carregar(it, forcar = true) }; rotaDias?.let { vm.carregar(it, forcar = true) } },
         topo = { CabecalhoVoltar("Agenda", "${perfil.curto} · o que aconteceu e o que vem", Pose.LontraRelogio, voltar) },
     ) { jEv ->
         val alturaChip = 56.dp * LocalDensity.current.fontScale.coerceAtMost(1.3f)
@@ -156,6 +161,19 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(if (sel == hoje) "Hoje" else Formato.diaLongo(sel).replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             Botao("Novo evento", suave = true, habilitado = !sel.isAfter(limiteFuturo)) { novo = true }
+        }
+        // sono da noite de que a pessoa acordou neste dia (fase 4)
+        if (rotaDias != null) {
+            DiaSerie.lista(cargaDias.dados).firstOrNull { it.dia == Formato.iso(sel) }?.let { d ->
+                val min = d.sonoMin?.takeIf { it > 0 }
+                if (min != null) {
+                    val horas = listOfNotNull(d.sonoInicio, d.sonoFim).takeIf { it.size == 2 }?.let { " (${it[0]}–${it[1]})" } ?: ""
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Pilula("Sono", Cores.Trilho, Cores.LilasTexto)
+                        Text("${Formato.sono(min)}$horas", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+                    }
+                }
+            }
         }
 
         val diaRef = cargaRef.dados.arr("dias").objs().firstOrNull { Formato.dia(it.str("dia")) == sel }

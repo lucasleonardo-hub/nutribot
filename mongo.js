@@ -46,6 +46,7 @@ export async function garantirIndices() {
     // app (fase 2): humor é um por {jid, dia}; eventos criados pela pessoa, lidos por dia
     colecao('humor').createIndex({ jid: 1, dia: 1 }, { unique: true }),
     colecao('eventos_app').createIndex({ jid: 1, dia: 1 }),
+    colecao('planos').createIndex({ jid: 1, criadoEm: -1 }),
   ]).catch((e) => console.warn('[mongo] índices:', e.message));
 }
 
@@ -343,6 +344,14 @@ export async function registrarCorrecao({ dia, pessoa, texto }) {
 }
 export async function correcoesDoDia(dia) {
   return colecao('correcoes_dia').find({ dia }).sort({ em: 1 }).toArray();
+}
+
+// ---------- Plano da semana (fase 4 do app: o texto que a Nutri mandou fica guardado pra tela Plano; índice em conectarMongo) ----------
+export async function guardarPlano({ jid, nome, semana, de, ate, texto }) {
+  await colecao('planos').insertOne({ jid, nome, semana, de, ate, texto: String(texto || '').slice(0, 12_000), criadoEm: new Date() });
+}
+export async function ultimoPlano(jids) {
+  return colecao('planos').find({ jid: { $in: jids } }).sort({ criadoEm: -1 }).limit(1).next();
 }
 
 /** Hipótese fechada fora da reflexão de domingo (a pessoa descartou pelo app): vai pra coleção `hipoteses` como as outras. */

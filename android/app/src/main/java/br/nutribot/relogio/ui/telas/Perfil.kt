@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import br.nutribot.relogio.BuildConfig
 import br.nutribot.relogio.dados.Perfil
@@ -46,6 +47,7 @@ import br.nutribot.relogio.ui.componentes.Cartao
 import br.nutribot.relogio.ui.componentes.Chip
 import br.nutribot.relogio.ui.componentes.LinhaValor
 import br.nutribot.relogio.ui.componentes.Link
+import br.nutribot.relogio.ui.componentes.Pilula
 import br.nutribot.relogio.ui.componentes.Pose
 import br.nutribot.relogio.ui.componentes.TituloSecao
 import br.nutribot.relogio.ui.componentes.Vazio
@@ -53,6 +55,30 @@ import br.nutribot.relogio.ui.tema.Cores
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.time.Instant
+import java.time.ZoneId
+
+/**
+ * "America/Sao_Paulo" vira "São Paulo (GMT−3)": a cidade do id (sem underscore; acentos nos nomes mais comuns do Brasil)
+ * e o deslocamento de agora. Id desconhecido volta como veio.
+ */
+fun fusoLegivel(fuso: String?): String {
+    if (fuso.isNullOrBlank()) return "—"
+    val zona = runCatching { ZoneId.of(fuso) }.getOrNull() ?: return fuso
+    val cidade = fuso.substringAfterLast('/').replace('_', ' ').let { acentos[it] ?: it }
+    val seg = zona.rules.getOffset(Instant.now()).totalSeconds
+    val h = kotlin.math.abs(seg) / 3600
+    val m = kotlin.math.abs(seg) % 3600 / 60
+    val sinal = if (seg < 0) "−" else "+"
+    val gmt = if (seg == 0) "GMT" else "GMT$sinal$h" + (if (m > 0) ":%02d".format(m) else "")
+    return "$cidade ($gmt)"
+}
+
+private val acentos = mapOf(
+    "Sao Paulo" to "São Paulo", "Belem" to "Belém", "Cuiaba" to "Cuiabá", "Maceio" to "Maceió", "Santarem" to "Santarém",
+    "Araguaina" to "Araguaína", "Eirunepe" to "Eirunepé", "Noronha" to "Fernando de Noronha", "Lisbon" to "Lisboa", "Madrid" to "Madri",
+    "London" to "Londres", "New York" to "Nova York", "Buenos Aires" to "Buenos Aires",
+)
 
 /** Perfil (menu do nome): o que o /perfis traz, e a edição de objetivo, meta, prazo, altura e ritmo (PUT /perfis/:id). */
 @Composable
@@ -62,17 +88,21 @@ fun TelaPerfil(vm: AppVM, perfil: Perfil?, voltar: () -> Unit, nav: (String) -> 
         CabecalhoVoltar("Perfil", perfil?.nome, Pose.DuplaFeliz, voltar)
         if (perfil == null) { Vazio("Nenhum perfil escolhido."); return@Column }
         Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            // cabeçalho sem frases coladas com " · " (fase 4): apelido em pílula, objetivo em linha própria
             Cartao {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     Box(Modifier.size(64.dp).clip(CircleShape).background(Color(0xFFC9B8FF)), contentAlignment = Alignment.Center) {
                         Text(perfil.inicial, style = MaterialTheme.typography.headlineLarge)
                     }
-                    Column {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(perfil.nome, style = MaterialTheme.typography.headlineMedium)
-                        Text(
-                            listOfNotNull(perfil.apelido?.let { "\"$it\"" }, perfil.objetivo, if (perfil.ehDono) "você administra o grupo" else null).joinToString(" · "),
-                            style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3,
-                        )
+                        if (perfil.apelido != null || perfil.ehDono) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                perfil.apelido?.let { Pilula(it, Cores.Trilho, Cores.LilasTexto) }
+                                if (perfil.ehDono) Pilula("administra o grupo", Cores.BomFundo, Cores.BomTinta)
+                            }
+                        }
+                        perfil.objetivo?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, maxLines = 3, overflow = TextOverflow.Ellipsis) }
                     }
                 }
             }
@@ -86,7 +116,7 @@ fun TelaPerfil(vm: AppVM, perfil: Perfil?, voltar: () -> Unit, nav: (String) -> 
             }
             Cartao(atraso = 100) {
                 TituloSecao("Dados e fontes")
-                LinhaValor("Fuso", perfil.fuso ?: "—")
+                LinhaValor("Fuso", fusoLegivel(perfil.fuso))
                 LinhaValor("Relógio", if (perfil.temRelogio) "ligado" else "não")
                 LinhaValor("Hevy", if (perfil.temHevy) "ligado" else "não")
                 LinhaValor("App neste celular", BuildConfig.VERSION_NAME)

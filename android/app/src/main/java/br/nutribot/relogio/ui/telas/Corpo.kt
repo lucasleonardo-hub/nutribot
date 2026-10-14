@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -177,7 +178,7 @@ private fun ConteudoCorpo(j: JSONObject) {
     }
 
     if (treino != null) CartaoTreino(treino, j.obj("forca"))
-    CartaoSugestoes(j.arr("sugestoesCarga").objs())
+    CartaoSugestoes(j.arr("sugestoesCarga").objs(), j.obj("contextoTreino"))
     CartaoBio(medicoesDe(j))
 }
 
@@ -296,19 +297,60 @@ private fun CartaoTreino(t: JSONObject, forca: JSONObject?) {
     }
 }
 
-/** sugestoesCarga: [{ exercicio, deKg, deReps, paraKg, paraReps, status, feitaEm, batidaEm, como }] */
+/** O que o dia diz para o treino (fase 4): comida dos últimos dias, no rótulo da pessoa. */
+private fun rotuloComida(c: String?): String? = when (c) {
+    "abaixo" -> "comeu abaixo da meta"
+    "dentro" -> "comeu na meta"
+    "acima" -> "comeu acima da meta"
+    else -> null
+}
+
+/** A pílula do `hoje` de uma sugestão (fase 4): subir = verde, manter = âmbar, repetir = lilás. Sem `hoje` (servidor antigo), nada. */
+private fun pilulaHoje(hoje: String?): Triple<String, Color, Color>? = when (hoje) {
+    "subir" -> Triple("sobe hoje", Cores.BomFundo, Cores.BomTinta)
+    "manter" -> Triple("mantém", Cores.AtencaoFundo, Cores.AtencaoTinta)
+    "repetir" -> Triple("repete", Cores.Trilho, Cores.LilasTexto)
+    else -> null
+}
+
+/**
+ * sugestoesCarga: [{ exercicio, deKg, deReps, paraKg, paraReps, status, feitaEm, batidaEm, como, hoje, motivo }]
+ * contextoTreino (fase 4): { energia, sonoMin, comida: abaixo|dentro|acima, texto } — como o dia de hoje pesa no próximo treino.
+ */
 @Composable
-private fun CartaoSugestoes(lista: List<JSONObject>) {
+private fun CartaoSugestoes(lista: List<JSONObject>, contexto: JSONObject?) {
     if (lista.isEmpty()) return
     Cartao(atraso = 80) {
         TituloSecao("Sugestões de carga")
+        contexto.str("texto")?.let { texto ->
+            Row(
+                Modifier.fillMaxWidth().padding(top = 10.dp).clip(Formas.Pequeno).background(Color(0xFFF3EEFF)).padding(start = 6.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Mascote(Pose.CorgiHalter, 48.dp)
+                Column(Modifier.weight(1f)) {
+                    Text(texto, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta)
+                    val sinais = listOfNotNull(
+                        contexto.num("energia")?.let { "energia ${Formato.inteiro(it)}" },
+                        contexto.num("sonoMin")?.let { "sono ${Formato.sono(it)}" },
+                        rotuloComida(contexto.str("comida")),
+                    )
+                    if (sinais.isNotEmpty()) Text(sinais.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                }
+            }
+        }
         lista.forEach { s ->
             Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text(s.str("exercicio") ?: "Exercício", style = MaterialTheme.typography.labelLarge)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(s.str("exercicio") ?: "Exercício", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f, fill = false))
+                        pilulaHoje(s.str("hoje"))?.let { (rot, fundo, tinta) -> Pilula(rot, fundo, tinta) }
+                    }
                     val de = s.num("deKg")?.let { "${Formato.decimal(it)} kg" + (s.num("deReps")?.let { r -> " × ${Formato.inteiro(r)}" } ?: "") }
                     de?.let { Text("última: $it", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp) }
-                    s.str("como")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, fontSize = 12.sp) }
+                    s.str("motivo")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+                    s.str("como")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp) }
                 }
                 val status = s.str("status")
                 val (fundo, tinta) = when (status) {

@@ -307,9 +307,19 @@ fun ConteudoCarga(
     }
 }
 
-/** Linha "rótulo ........ valor". */
+/**
+ * Linha "rótulo ........ valor". Valor longo (mais de `quebraEm` caracteres) vai para a linha de baixo, inteiro,
+ * em vez de dividir a largura com o rótulo e cortar (fase 4: fuso, objetivo).
+ */
 @Composable
-fun LinhaValor(rotulo: String, valor: String, modifier: Modifier = Modifier) {
+fun LinhaValor(rotulo: String, valor: String, modifier: Modifier = Modifier, quebraEm: Int = 18) {
+    if (valor.length > quebraEm) {
+        Column(modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+            Text(rotulo, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+            Text(valor, style = MaterialTheme.typography.labelLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+        return
+    }
     Row(modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(rotulo, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2, modifier = Modifier.weight(1f))
         Spacer(Modifier.width(8.dp))

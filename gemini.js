@@ -1285,6 +1285,59 @@ export async function revisarRespostaReserva({ perfil, texto, imagem, mimeType, 
   };
 }
 
+/**
+ * Sugestão para a PRÓXIMA refeição da pessoa (app, fase 4): 2 a 3 opções que cabem no que resta da faixa de kcal do dia,
+ * partindo do que ela costuma comer nesse horário, do que tem na despensa, de onde ela deve estar (rotina/agenda, nunca
+ * endereço) e do humor de hoje. JSON estrito; `_gerar` injetável nos testes.
+ */
+export async function sugerirRefeicao({ perfil, slot, nomeSlot, hora = null, horaAgora = null, restam = null, faixa = null, padraoSlot = '', registradasHoje = '', despensa = '', agenda = '', lugares = '', eventos = '', humor = '', persona = '', dia, _gerar = gerar }) {
+  const primeiro = String(perfil?.nome || 'a pessoa').split(' ')[0];
+  const texto =
+    (persona ? `${persona}\n\n` : '') +
+    `Você vai sugerir a PRÓXIMA refeição de ${primeiro} (${nomeSlot || slot}${hora ? `, por volta das ${hora}` : ''}${horaAgora ? `; agora são ${horaAgora}` : ''}), ${dia ? `hoje ${dataExtenso(dia)}` : 'hoje'}.\n` +
+    `PESSOA: ${perfil?.peso ? `${perfil.peso} kg · ` : ''}${perfil?.altura ? `${perfil.altura} cm · ` : ''}objetivo: ${perfil?.objetivo || '?'} · dieta: ${perfil?.dieta || 'onívora'}${perfil?.restricoes ? ` · restrições: ${perfil.restricoes}` : ''}\n` +
+    (perfil?.produtos?.length ? `PRODUTOS FIXOS QUE ELA(E) TEM (rótulo lido): ${perfil.produtos.map((p) => `${p.nome} (${p.kcal} kcal/${p.porcao || 'porção'})`).join(', ')}\n` : '') +
+    (perfil?.notas ? `SUAS NOTAS SOBRE A PESSOA (preferências, aversões): ${String(perfil.notas).slice(0, 900)}\n` : '') +
+    (padraoSlot ? `O QUE ELA(E) COSTUMA COMER NESSE HORÁRIO: ${padraoSlot}\n` : '') +
+    (registradasHoje ? `JÁ COMEU HOJE: ${registradasHoje}\n` : 'Ainda não registrou nada hoje.\n') +
+    (faixa ? `FAIXA DO DIA: ${faixa.min} a ${faixa.max} kcal${restam != null ? `; restam cerca de ${Math.max(0, Math.round(restam))} kcal pro resto do dia` : ''}.\n` : '') +
+    (despensa ? `${despensa}\n` : '') +
+    (lugares ? `${lugares}\n(encaixe pelo lugar: em casa cozinha; fora de casa, o que pedir ou o que levar; nunca cite endereço, bairro ou nome de rua)\n` : '') +
+    (agenda ? `AGENDA DE HOJE: ${agenda}\n` : '') +
+    (eventos ? `MARCADO NO APP: ${eventos}\n` : '') +
+    (humor ? `COMO ELA(E) ESTÁ HOJE (pelo app): ${humor}\n` : '') +
+    `\nRegras: 2 a 3 opções, cada uma com nome curto (até 8 palavras), por que cabe hoje (uma frase, ligada ao objetivo, ao que já comeu, ao lugar ou ao humor), kcal e proteína em gramas, "onde" = casa (prepara e come em casa), levar (prepara em casa e leva) ou fora (pede/compra no lugar), e o preparo em até 2 frases (só quando é em casa ou pra levar). ` +
+    `Prefira o que já está na despensa e o que ela(e) já come; não prescreva comida que ela(e) nunca registrou sem dizer por quê. Se a próxima refeição for fora de casa, "levar" diz em uma frase o que deixar pronto; senão null. "dica" é uma frase curta, opcional, no seu personagem, sem emoji. Português do Brasil; sem markdown.`;
+  const json = await _gerar({
+    contents: [{ role: 'user', parts: [{ text: texto }] }],
+    config: {
+      temperature: 0.6,
+      pensar: false,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          opcoes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { nome: { type: 'string' }, porque: { type: 'string' }, kcal: { type: 'number' }, proteina_g: { type: 'number' }, onde: { type: 'string', enum: ['casa', 'levar', 'fora'] }, preparo: { type: 'string', nullable: true } },
+              required: ['nome', 'porque', 'kcal', 'proteina_g', 'onde'],
+            },
+          },
+          levar: { type: 'string', nullable: true },
+          dica: { type: 'string', nullable: true },
+        },
+        required: ['opcoes'],
+      },
+      maxOutputTokens: 900,
+    },
+  });
+  const d = parseJsonTolerante(json);
+  if (!d || typeof d !== 'object' || !Array.isArray(d.opcoes) || !d.opcoes.length) throw new Error('sugestão de refeição sem JSON');
+  return d;
+}
+
 /** Momentos memoráveis do dia (vexames, acertos, frases, promessas) -> memória de longo prazo que só cresce. */
 export async function extrairMomentos({ dia, perfis, historico, refeicoes, contexto }) {
   if (!historico?.length || !perfis?.length) return [];

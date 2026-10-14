@@ -200,6 +200,8 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
             }
             Botao("Registrar refeição", Modifier.fillMaxWidth().padding(top = 12.dp)) { slotRegistrar = null; registrar = true }
         }
+        // fase 4: a sugestão da IA para a próxima refeição, só no dia de hoje
+        if (ehHoje) CartaoProximaRefeicao(vm, perfil.id)
 
         val refeicoes = d?.refeicoes.orEmpty()
         if (refeicoes.isEmpty()) Vazio(if (ehHoje) "Nada registrado hoje ainda." else "Nada registrado neste dia.", Pose.LontraTriste)

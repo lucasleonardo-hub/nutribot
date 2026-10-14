@@ -210,6 +210,85 @@ test('grafico.png: o PNG do !grafico com a config do WhatsApp, guardado 1 h por 
   }
 });
 
+test('fase 4: /dias (≤ 92 dias, de obrigatório), /plano (Mongo ou nulo), /sugestao-refeicao (IA injetada, cache 1 h por slot, 503 quando falha)', async () => {
+  const pedidosIa = [];
+  let falharIa = false;
+  const ia = {
+    estimarRefeicaoApp: async () => null,
+    sugerirRefeicao: async (p) => {
+      pedidosIa.push(p);
+      if (falharIa) throw new Error('ia caiu');
+      return { opcoes: [{ nome: `Opção pro ${p.slot}`, porque: 'cabe', kcal: 600, proteina_g: 40, onde: 'casa', preparo: null }], levar: null, dica: 'Vai dar certo.' };
+    },
+  };
+  const dadosF4 = {
+    ...dados,
+    diasEntre: async (perfil, de, ate) => ({ refeicoes: [refeicao(ate, 'almoco', 750, 900)], pesagens: [{ dia: ate, peso: 70.4 }], saude: { sonos: [{ dia: ate, total: 420, inicio: '23:30', fim: '06:30' }], atividades: [] }, base: { refeicoes: [], pesagens: [] } }),
+    relatorios: async () => ({ semana: { nome: 'Semana-2030-W13.md', modifiedTime: '2030-03-30T03:00:00Z', texto: '# Semana 2030-W13\n\nSemana boa.\n' }, mes: null }),
+    planoDe: async (perfil) => (perfil.nome === 'Pessoa A' ? { semana: '2030-03-31/2030-04-06', de: '2030-03-31', ate: '2030-04-06', texto: 'Seg: arroz.', criadoEm: new Date('2030-03-28T12:00:00Z') } : null),
+    registrosSugestao: async () => ({ refeicoes: [refeicao(somarDias(DIA, -1), 'almoco', 750, 900), refeicao(DIA, 'cafe', 480, 400)], pesagens: [] }),
+    contextoSugestao: async () => (contextos.push(1), { humor: { humor: 4 }, eventos: [], despensa: '', agenda: 'Reunião no bairro Secreto às 15h', lugares: 'Agora ela(e) está em casa.', persona: '' }),
+  };
+  const contextos = [];
+  const app = express();
+  app.use('/f', criarApi({ auth, dados: dadosF4, ia, agora: () => AGORA, adminJid: 'a@s.whatsapp.net', temHevyDe: () => false, ehDonoDaAgendaDe: () => false }));
+  const srv = await new Promise((ok) => { const s = app.listen(0, '127.0.0.1', () => ok(s)); });
+  const b = `http://127.0.0.1:${srv.address().port}`;
+  const get = async (c) => { const r = await fetch(`${b}/f${c}`, { headers: { authorization: `Bearer ${token}` } }); return { status: r.status, corpo: await r.json() }; };
+  try {
+    let r = await get(`/perfis/${ID}/dias?de=${somarDias(DIA, -2)}&ate=${DIA}`);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.corpo.dias.map((d) => [d.dia, d.kcal, d.peso, d.sonoMin]), [[somarDias(DIA, -2), null, null, null], [somarDias(DIA, -1), null, null, null], [DIA, 900, 70.4, 420]]);
+    assert.ok('meta' in r.corpo);
+    r = await get(`/perfis/${ID}/dias?ate=${DIA}`);
+    assert.deepEqual([r.status, r.corpo.erro.codigo], [400, 'pedido_invalido']);
+    r = await get(`/perfis/${ID}/dias?de=${somarDias(DIA, -100)}&ate=${DIA}`);
+    assert.deepEqual([r.status, r.corpo.erro.codigo], [400, 'intervalo_invalido']);
+
+    r = await get(`/perfis/${ID}/resumos`);
+    assert.equal(r.corpo.relatorio.semana.titulo, 'Semana 2030-W13');
+    r = await get(`/perfis/${ID}/plano`);
+    assert.deepEqual([r.status, r.corpo.plano.de, r.corpo.plano.texto], [200, '2030-03-31', 'Seg: arroz.']);
+    r = await get(`/perfis/bbbbbbbbbbbbbbbbbbbbbbbb/plano`);
+    assert.deepEqual([r.status, r.corpo.plano], [200, null]);
+
+    // 12:00 em São Paulo, café já registrado hoje: a próxima é o almoço (rotina de 21 dias: almoço às 12:30)
+    r = await get(`/perfis/${ID}/sugestao-refeicao`);
+    assert.equal(r.status, 200, JSON.stringify(r.corpo));
+    assert.deepEqual([r.corpo.slot, r.corpo.nome, r.corpo.hora, r.corpo.opcoes.length, r.corpo.opcoes[0].nome, r.corpo.dica], ['almoco', 'Almoço', '12:30', 1, 'Opção pro almoco', 'Vai dar certo.']);
+    assert.deepEqual([pedidosIa.length, pedidosIa[0].slot, pedidosIa[0].registradasHoje.includes('Café da manhã')], [1, 'almoco', true]);
+    // a agenda vai pra IA filtrada de localização; os lugares só como tipo
+    assert.equal(pedidosIa[0].agenda.includes('Secreto'), false);
+    assert.equal(pedidosIa[0].lugares, 'Agora ela(e) está em casa.');
+    r = await get(`/perfis/${ID}/sugestao-refeicao`);
+    assert.deepEqual([r.status, pedidosIa.length, contextos.length], [200, 1, 1]); // cache: nem o contexto caro é buscado
+    r = await get(`/perfis/${ID}/sugestao-refeicao?slot=jantar`);
+    assert.deepEqual([r.status, r.corpo.slot, r.corpo.hora, pedidosIa.length], [200, 'jantar', '20:00', 2]); // sem rotina de jantar: hora padrão
+    r = await get(`/perfis/${ID}/sugestao-refeicao?slot=jantar`);
+    assert.deepEqual([r.status, pedidosIa.length, contextos.length], [200, 2, 2]);
+    r = await get(`/perfis/${ID}/sugestao-refeicao?slot=brunch`);
+    assert.equal(r.status, 400);
+    // dois pedidos no mesmo instante no mesmo slot = uma chamada de IA
+    const [d1, d2] = await Promise.all([get(`/perfis/${ID}/sugestao-refeicao?slot=lanche`), get(`/perfis/${ID}/sugestao-refeicao?slot=lanche`)]);
+    assert.deepEqual([d1.status, d2.status, pedidosIa.length], [200, 200, 3]);
+    falharIa = true;
+    r = await get(`/perfis/${ID}/sugestao-refeicao?slot=ceia`);
+    assert.deepEqual([r.status, r.corpo.erro.codigo], [503, 'ia_indisponivel']);
+    falharIa = false;
+    r = await get(`/perfis/${ID}/sugestao-refeicao?slot=ceia`); // a falha não ficou no cache
+    assert.equal(r.status, 200);
+    // teto por pessoa: 6 chamadas por hora (já foram 5: almoco, jantar, lanche, ceia×2)
+    r = await get(`/perfis/${ID}/sugestao-refeicao?slot=lanche_manha`);
+    assert.equal(r.status, 200);
+    r = await get(`/perfis/${ID}/sugestao-refeicao?slot=cafe`);
+    assert.deepEqual([r.status, r.corpo.erro.codigo], [429, 'muitas_analises']);
+    const anon = await fetch(`${b}/f/perfis/${ID}/sugestao-refeicao`);
+    assert.equal(anon.status, 401);
+  } finally {
+    srv.close();
+  }
+});
+
 test('rota inexistente na API = 404 no formato do contrato; erro inesperado = 500 sem vazar detalhe; banco fora = 503', async () => {
   let r = await json(await pedir('/api/v1/nada'));
   assert.deepEqual([r.status, r.corpo.erro.codigo], [404, 'rota_inexistente']);

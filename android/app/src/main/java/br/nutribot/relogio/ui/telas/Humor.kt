@@ -59,7 +59,7 @@ private val nomesHumor = listOf("muito mal", "mal", "mais ou menos", "bem", "mui
  * Fase 3: no cabeçalho (altura padrão dos cartões) ficam o título e as carinhas; energia, sono e o texto ficam no detalhe.
  */
 @Composable
-fun CartaoHumor(vm: AppVM, perfilId: String, dia: String, inicial: JSONObject?) {
+fun CartaoHumor(vm: AppVM, perfilId: String, dia: String, inicial: JSONObject?, aoTocar: () -> Unit = {}, aoFechar: (() -> Unit)? = null) {
     // chave do servidor: quando o /hoje muda (outro dia, ou o que acabou de ser salvo), o cartão parte do que veio
     val chave = "$dia|${inicial?.toString() ?: ""}"
     var humor by remember(chave) { mutableIntStateOf(inicial.int("humor") ?: 0) }
@@ -104,7 +104,7 @@ fun CartaoHumor(vm: AppVM, perfilId: String, dia: String, inicial: JSONObject?) 
                     (1..5).forEach { n ->
                         val ativa = humor == n
                         Box(
-                            Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.RadioButton, onClickLabel = "Humor ${nomesHumor[n - 1]}") { humor = n; tocado++ }
+                            Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.RadioButton, onClickLabel = "Humor ${nomesHumor[n - 1]}") { humor = n; tocado++; aoTocar() }
                                 .semantics { selected = ativa; contentDescription = "Humor ${nomesHumor[n - 1]}" },
                             contentAlignment = Alignment.Center,
                         ) { Carinha(n, ativa) }
@@ -114,15 +114,36 @@ fun CartaoHumor(vm: AppVM, perfilId: String, dia: String, inicial: JSONObject?) 
         },
     ) {
         Text(if (humor > 0) "Humor: ${nomesHumor[humor - 1]}" else "Toque numa carinha.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
-        LinhaNota("Energia", energia) { energia = it; tocado++ }
-        LinhaNota("Sono", sono) { sono = it; tocado++ }
+        LinhaNota("Energia", energia) { energia = it; tocado++; aoTocar() }
+        LinhaNota("Sono", sono) { sono = it; tocado++; aoTocar() }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
             OutlinedTextField(
                 texto, { texto = it.take(200) }, label = { Text("Quer contar algo?") }, singleLine = true,
                 modifier = Modifier.weight(1f),
             )
-            if (texto.trim() != textoSalvo) Link("salvar") { tocado++ }
+            if (texto.trim() != textoSalvo) Link("salvar") { tocado++; aoTocar() }
         }
+        // depois de responder, "pronto" recolhe o cartão para a linha pequena (fase 4)
+        if (aoFechar != null && humor > 0 && estado == "salvo") Link("pronto", aoFechar)
+    }
+}
+
+/**
+ * A linha pequena que fica no lugar do cartão depois que a pessoa respondeu (fase 4): "Hoje: bem · energia 4 · sono 3 · mudar".
+ * "mudar" reabre o cartão.
+ */
+@Composable
+fun LinhaHumor(humor: JSONObject?, aoMudar: () -> Unit) {
+    val h = humor.int("humor")?.coerceIn(1, 5) ?: return
+    val partes = listOfNotNull(
+        "Hoje: ${nomesHumor[h - 1]}",
+        humor.int("energia")?.let { "energia $it" },
+        humor.int("sono")?.let { "sono $it" },
+    )
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { Carinha(h, true) }
+        Text(partes.joinToString(" · "), style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Link("mudar", aoMudar)
     }
 }
 

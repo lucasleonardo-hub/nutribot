@@ -14,8 +14,8 @@ android {
         applicationId = "br.nutribot.relogio"
         minSdk = 28
         targetSdk = 36
-        versionCode = 11
-        versionName = "2.3" // 1.3: alta precisão (GNSS) e envio mais robusto · 1.4: leitor de cupom · 1.5: envio da nota pelo WorkManager · 1.6: página da SEFAZ visível quando a nota demora · 2.0: app NutriBot (Compose): Hoje, Comida, Progresso, Corpo, Nutri, lendo a API v1 do bot; o Relógio vira a tela Integrações · 2.1: registrar e ajustar refeição, humor, eventos, peso e meta pelo app · 2.2: cartões do Hoje com altura padrão e detalhe ao tocar, textos mais curtos, corrigir o que a Nutri sabe, altura e ritmo, 90 dias e 1 ano de peso, foto no Drive · 2.3: gráficos do Progresso separados (peso, tendência, calorias) com Cruzar, gráfico da Nutri no app, ícone com o Caju e a Lia
+        versionCode = 12
+        versionName = "2.4" // 1.3: alta precisão (GNSS) e envio mais robusto · 1.4: leitor de cupom · 1.5: envio da nota pelo WorkManager · 1.6: página da SEFAZ visível quando a nota demora · 2.0: app NutriBot (Compose): Hoje, Comida, Progresso, Corpo, Nutri, lendo a API v1 do bot; o Relógio vira a tela Integrações · 2.1: registrar e ajustar refeição, humor, eventos, peso e meta pelo app · 2.2: cartões do Hoje com altura padrão e detalhe ao tocar, textos mais curtos, corrigir o que a Nutri sabe, altura e ritmo, 90 dias e 1 ano de peso, foto no Drive · 2.3: gráficos do Progresso separados (peso, tendência, calorias) com Cruzar, gráfico da Nutri no app, ícone com o Caju e a Lia · 2.4: gráfico único nativo com camadas, recados e humor no lugar, sono por noite, Nutri por abas (Pensamentos, Plano, Diário visual), resumos com gráficos e o relatório da Nutri, sugestão da próxima refeição e cargas pelo sono e comida
     }
 
     // Assinatura estável (mesma chave em todo build, senão o Android recusa atualizar por cima):

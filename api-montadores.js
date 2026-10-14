@@ -9,7 +9,7 @@
 // ninguém (decisão do dono pra esta fase), e os objetos não levam campo fora do contrato (o app decodifica estrito).
 
 import { analisarProgresso, diasDeComida, validarPesagens } from './progresso.js';
-import { calcularVisao, faixaDaMeta, sequenciaDe, previsaoGastoDia, nomeDoSlot, diaCompleto } from './resumo.js';
+import { calcularVisao, faixaDaMeta, sequenciaDe, previsaoGastoDia, nomeDoSlot, diaCompleto, gastoAdaptativo } from './resumo.js';
 import { projecaoAteMeta } from './tendencia.js';
 import { energiaDoDia } from './saude.js';
 import { analisarTreinos, grupoEmPortugues } from './treino.js';
@@ -232,13 +232,18 @@ const LUGAR_GENERICO = new Set(['casa', 'trabalho', 'academia', 'mercado', 'supe
 const escapar = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Puro. Termos de lugar (bairro, nome não genérico, rua) aprendidos pela localização, de todos os perfis. */
+const PREFIXO_VIA = new Set(['rua', 'r', 'av', 'avenida', 'alameda', 'travessa', 'rodovia', 'estrada', 'servidao', 'servidão', 'praca', 'praça', 'beco', 'largo', 'via', 'dos', 'das', 'do', 'da', 'de', 'dr', 'prof', 'sao', 'santa', 'santo', 'nossa', 'senhora']);
 export function termosDeLugar(perfis = []) {
   const termos = new Set();
   for (const p of perfis || []) {
     for (const l of p?.lugares || []) {
-      for (const t of [l?.bairro, l?.nome, l?.rua]) {
+      for (const t of [l?.bairro, l?.nome, l?.rua, l?.cidade]) {
         const n = semAcento(t).trim();
         if (n.length >= 4 && !LUGAR_GENERICO.has(n)) termos.add(n);
+        // a IA abrevia ("R. Lauro Linhares") ou encurta ("na Garra"): cada palavra própria do nome/rua também é termo
+        if (t === l?.nome || t === l?.rua) {
+          for (const w of n.split(/[\s,.-]+/)) if (w.length >= 5 && !PREFIXO_VIA.has(w) && !LUGAR_GENERICO.has(w)) termos.add(w);
+        }
       }
     }
   }
@@ -252,7 +257,8 @@ export function tirarLocalizacao(texto, termos = []) {
   return String(texto || '')
     .split('\n')
     .map((linha) => {
-      const frases = linha.split(/(?<=[.!?…])\s+/);
+      // "R. Lauro Linhares", "Av. Beira-Mar", "Dr. X": a abreviação não fecha a frase (senão o pedaço antes dela ficava)
+      const frases = linha.split(/(?<=[.!?…])(?<!\b(?:R|Av|Dr|Dra|Prof|Sr|Sra|Pç|Al|Tv|Rod|Est)\.)\s+/i);
       const ficam = frases.filter((f) => !fala(f));
       if (ficam.length === frases.length) return linha;
       return ficam.join(' ').trim() || null; // linha que só falava de lugar some (não vira linha em branco)
@@ -514,9 +520,163 @@ export function montarCorpo({ perfil, dia, pesagens = [], refeicoes = [], saude 
     forca = { subindo: pf.subindo.map(ex), parados: pf.parados.map(ex), caindo: pf.caindo.map(ex) };
     sugestoesCarga = conferirSugestoes(perfil.sugestoesCarga || [], treinos)
       .filter((s) => s.status !== 'encerrada')
-      .map((s) => ({ exercicio: s.exercicio ?? null, deKg: s.deKg ?? null, deReps: s.deReps ?? null, paraKg: s.paraKg ?? null, paraReps: s.paraReps ?? null, status: s.status ?? null, feitaEm: s.feitaEm || null, batidaEm: s.batidaEm || null, como: s.como || null }));
+      .map((s) => ({ exercicio: s.exercicio ?? null, deKg: s.deKg ?? null, deReps: s.deReps ?? null, paraKg: s.paraKg ?? null, paraReps: s.paraReps ?? null, status: s.status ?? null, feitaEm: s.feitaEm || null, batidaEm: s.batidaEm || null, como: s.como || null, tentativas: s.tentativas ?? 0 }));
   }
-  return completar({ composicao, atual: composicao[composicao.length - 1] || null, ritmo, treino, forca, sugestoesCarga, medidas: [] });
+  // fase 4: como dormiu e como comeu entram na sugestão de hoje (subir, manter ou repetir a carga)
+  const ctx = contextoDoTreino({ perfil, dia, refeicoes, pesagens, saude });
+  const ajustadas = ajustarSugestoesPeloDia(sugestoesCarga, ctx).map(({ tentativas, ...s }) => s);
+  return completar({ composicao, atual: composicao[composicao.length - 1] || null, ritmo, treino, forca, sugestoesCarga: ajustadas, contextoTreino: ctx, medidas: [] });
+}
+
+/**
+ * Puro. O contexto do treino de hoje: energia e sono da noite (saude.energiaDoDia) e a comida dos 3 dias fechados antes
+ * de hoje contra a faixa de kcal (gastoAdaptativo). comida: 'abaixo' | 'dentro' | 'acima' | null (sem registro ou sem faixa).
+ */
+export function contextoDoTreino({ perfil, dia, refeicoes = [], pesagens = [], saude = null }) {
+  const e = saude ? energiaDoDia({ sonos: saude.sonos || [], atividades: saude.atividades || [], dia }) : null;
+  const noite = (saude?.sonos || []).find((s) => s?.dia === dia && Number(s.total) > 0);
+  const sonoMin = noite ? int(noite.total) : null;
+  const energia = Number.isFinite(Number(e?.nota)) ? int(e.nota) : null;
+  const tresDias = diasAnteriores(dia, 4).slice(0, 3);
+  const porDia = tresDias.map((d) => refeicoes.filter((r) => r.dia === d && Number(r.estimativa?.kcal) > 0).reduce((s, r) => s + Number(r.estimativa.kcal), 0)).filter((k) => k > 0);
+  const alvo = gastoAdaptativo({ refeicoes, pesagens, perfil, dia, gastos: perfil?.relogio?.gastos }).alvo;
+  let comida = null;
+  if (porDia.length >= 2 && alvo?.min && alvo?.max) {
+    const media = porDia.reduce((a, b) => a + b, 0) / porDia.length;
+    comida = media < alvo.min ? 'abaixo' : media > alvo.max ? 'acima' : 'dentro';
+  }
+  const fmtH = (m) => `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`;
+  const partes = [];
+  if (sonoMin != null) partes.push(`dormiu ${fmtH(sonoMin)}`);
+  if (energia != null) partes.push(`energia ${energia} de 100`);
+  if (comida) partes.push(comida === 'dentro' ? 'comeu na faixa nos últimos dias' : comida === 'abaixo' ? 'comeu abaixo da faixa nos últimos dias' : 'comeu acima da faixa nos últimos dias');
+  const pouco = (sonoMin != null && sonoMin < SONO_CURTO_MIN) || (energia != null && energia < 45);
+  const veredito = pouco ? 'Hoje é dia de segurar a carga e caprichar nas repetições.' : comida === 'abaixo' ? 'Sobe a carga quando a comida voltar à faixa.' : partes.length ? 'Dá para subir a carga hoje.' : 'Sem dados do relógio hoje: siga as sugestões como estão.';
+  return { energia, sonoMin, comida, texto: `${partes.length ? `${cap(partes.join(', '))}. ` : ''}${veredito}` };
+}
+
+/**
+ * Puro. Cada sugestão de carga ganha `hoje` e `motivo` pelo contexto do dia: sono < 6 h ou energia < 45 → manter; comida
+ * abaixo da faixa → manter; já tentou 2+ vezes sem bater → repetir (carga de partida com mais repetições); senão subir.
+ * Sugestão batida não muda.
+ */
+const SONO_CURTO_MIN = 390; // 6h30: o mesmo corte de "sono curto" do saude.js (leitura de força)
+export function ajustarSugestoesPeloDia(sugestoes = [], { sonoMin = null, energia = null, comida = null } = {}) {
+  return (sugestoes || []).map((s) => {
+    if (s.status === 'batida') return { ...s, hoje: null, motivo: null };
+    if (sonoMin != null && sonoMin < SONO_CURTO_MIN) return { ...s, hoje: 'manter', motivo: 'dormiu pouco: segura a carga e capricha nas repetições' };
+    if (energia != null && energia < 45) return { ...s, hoje: 'manter', motivo: 'energia baixa hoje: mantém a carga' };
+    if (comida === 'abaixo') return { ...s, hoje: 'manter', motivo: 'comeu abaixo da meta: sobe quando a energia voltar' };
+    if ((s.tentativas || 0) >= 2) return { ...s, hoje: 'repetir', motivo: `fez ${s.tentativas} vezes sem bater: repete ${s.deKg != null ? `${String(s.deKg).replace('.', ',')} kg` : 'a carga'} com mais repetições` };
+    return { ...s, hoje: 'subir', motivo: comida === 'dentro' ? 'dormiu e comeu bem: pode subir' : 'pode tentar subir hoje' };
+  });
+}
+
+// ============================================================
+// Série por dia (fase 4): a fonte do gráfico único do app
+// ============================================================
+/**
+ * Puro. Um item por dia de [de, ate] com kcal/proteína registradas (sem registro = null), gasto do relógio (atividades do
+ * saude_relogio; sem ele, perfil.relogio.gastos), pesagem consolidada (peso, gordura, massa magra), sono da noite de que
+ * acordou no dia, passos e minutos de treino. `meta` = a faixa de kcal (gastoAdaptativo) do dia `ate`.
+ */
+export function montarDias({ perfil = {}, de, ate, refeicoes = [], pesagens = [], saude = null, meta = null }) {
+  const kcal = new Map();
+  const prot = new Map();
+  for (const r of refeicoes) {
+    if (!r?.dia || !(Number(r.estimativa?.kcal) > 0)) continue;
+    kcal.set(r.dia, (kcal.get(r.dia) || 0) + Number(r.estimativa.kcal));
+    prot.set(r.dia, (prot.get(r.dia) || 0) + (Number(r.estimativa.p) || 0));
+  }
+  const peso = new Map(pesagens.filter((p) => p?.dia && Number(p.peso) > 0).map((p) => [p.dia, p]));
+  const sono = new Map((saude?.sonos || []).filter((s) => s?.dia).map((s) => [s.dia, s]));
+  const ativ = new Map((saude?.atividades || []).filter((a) => a?.dia).map((a) => [a.dia, a]));
+  const gastos = perfil?.relogio?.gastos || {};
+  // relogio.js grava inicio/fim como "AAAA-MM-DD HH:MM" (a noite pode começar na véspera); o app só precisa da hora
+  const hhmm = (v) => {
+    const m = /(\d{2}:\d{2})/.exec(String(v ?? ''));
+    return m ? m[1] : null;
+  };
+  const dias = diasEntre(de, ate).map((dia) => {
+    const p = peso.get(dia);
+    const g = p && p.gordura != null && Number(p.gordura) >= 2 && Number(p.gordura) <= 70 ? r1(p.gordura) : null;
+    const s = sono.get(dia);
+    const a = ativ.get(dia);
+    const gasto = Number(a?.calorias) > 800 ? int(a.calorias) : Number(gastos[dia]) > 800 ? int(gastos[dia]) : null;
+    return {
+      dia,
+      kcal: kcal.has(dia) ? int(kcal.get(dia)) : null,
+      proteina: prot.has(dia) ? int(prot.get(dia)) : null,
+      gasto,
+      peso: p ? r2(p.peso) : null,
+      gordura: g,
+      magra: p && g != null ? r1(Number(p.peso) * (1 - g / 100)) : null,
+      sonoMin: Number(s?.total) > 0 ? int(s.total) : null,
+      sonoInicio: hhmm(s?.inicio),
+      sonoFim: hhmm(s?.fim),
+      passos: a?.passos != null ? int(a.passos) : null,
+      treinoMin: a?.treinos?.length ? int((a.treinos || []).reduce((t, x) => t + (Number(x.min) || 0), 0)) : null,
+    };
+  });
+  return completar({ meta: meta?.min != null && meta?.max != null ? { min: int(meta.min), max: int(meta.max) } : null, dias });
+}
+
+// ============================================================
+// Plano da semana, relatórios da Nutri e sugestão de refeição (fase 4)
+// ============================================================
+/** Puro. O documento de `planos` (ou null) no formato do contrato; o texto passa pelo filtro de localização. */
+export function montarPlano(doc, termosLocal = []) {
+  if (!doc?.texto) return completar({ plano: null });
+  return completar({ plano: { semana: doc.semana || null, de: doc.de || null, ate: doc.ate || null, texto: tirarLocalizacao(doc.texto, termosLocal), criadoEm: iso(doc.criadoEm) || null } });
+}
+
+/** Puro. Um .md do Drive (Resumos/Semana-*.md ou Mes-*.md) vira { titulo, texto, criadoEm }: sem frontmatter nem rodapé de links. */
+export function montarRelatorio(arquivo, termosLocal = []) {
+  if (!arquivo?.texto) return null;
+  let t = String(arquivo.texto).replace(/^---[\s\S]*?---\s*/, '');
+  t = t.replace(/\n---\n(?:Dias:|## Números)[\s\S]*$/, ''); // os links pros dias e a tabela crua ficam no Drive
+  const m = /^#\s+(.+)$/m.exec(t);
+  const titulo = (m ? tirarLocalizacao(m[1].trim(), termosLocal) : '') || String(arquivo.nome || '').replace(/\.md$/i, '') || null;
+  if (m) t = t.replace(m[0], '');
+  const texto = tirarLocalizacao(t.trim(), termosLocal);
+  return texto ? { titulo, texto, criadoEm: iso(arquivo.modifiedTime) || null } : null;
+}
+
+const ORDEM_SLOTS = ['cafe', 'lanche_manha', 'almoco', 'lanche', 'jantar', 'ceia'];
+/**
+ * Puro. A próxima refeição do dia: o primeiro slot da rotina (padraoAlimentar.slots, hora habitual) ainda não registrado
+ * hoje cuja hora habitual é depois de agora menos 90 min; sem rotina, pelo horário (café até 10h, almoço até 14h30, lanche
+ * até 18h, jantar até 22h, senão ceia).
+ */
+export function proximoSlot({ slots = {}, registradosHoje = [], horaAgora = '12:00' }) {
+  const agoraMin = minutosDe(horaAgora);
+  const feitos = new Set(registradosHoje);
+  for (const s of ORDEM_SLOTS) {
+    const h = slots[s]?.hora;
+    if (!h || feitos.has(s)) continue;
+    if (minutosDe(h) >= agoraMin - 90) return { slot: s, hora: h };
+  }
+  const porHora = agoraMin < 10 * 60 ? 'cafe' : agoraMin < 14 * 60 + 30 ? 'almoco' : agoraMin < 18 * 60 ? 'lanche' : agoraMin < 22 * 60 ? 'jantar' : 'ceia';
+  const livre = ORDEM_SLOTS.slice(ORDEM_SLOTS.indexOf(porHora)).find((s) => !feitos.has(s)) || porHora;
+  return { slot: livre, hora: horaDoSlot(slots, livre) };
+}
+const horaDeMin = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+/** Puro. A hora habitual do slot (rotina) ou, sem rotina, a hora padrão do slot (util.SLOTS). */
+export function horaDoSlot(slots = {}, slot) {
+  if (slots?.[slot]?.hora) return slots[slot].hora;
+  const padrao = SLOTS.find((x) => x.id === slot)?.padrao;
+  return padrao != null ? horaDeMin(padrao) : null;
+}
+
+/** Puro. A resposta da IA (ia.sugerirRefeicao) no formato do contrato, filtrada de localização e com limites de tamanho. */
+export function montarSugestaoRefeicao({ slot, hora = null, restam = null, geradaEm = null, resposta = {}, termosLocal = [] }) {
+  const sem = (t, max) => (t == null ? null : tirarLocalizacao(String(t), termosLocal).slice(0, max) || null);
+  const onde = (v) => (['casa', 'levar', 'fora'].includes(String(v)) ? String(v) : 'casa');
+  const opcoes = (Array.isArray(resposta.opcoes) ? resposta.opcoes : [])
+    .slice(0, 3)
+    .map((o) => ({ nome: sem(o?.nome, 80), porque: sem(o?.porque, 160), kcal: int(o?.kcal), proteina: int(o?.proteina_g ?? o?.proteina), onde: onde(o?.onde), preparo: sem(o?.preparo, 300) }))
+    .filter((o) => o.nome);
+  return completar({ slot, nome: nomeDoSlot(slot), hora, restam: int(restam), geradaEm, opcoes, levar: sem(resposta.levar, 200), dica: sem(resposta.dica, 200) });
 }
 
 // ============================================================
@@ -611,7 +771,7 @@ export function montarNutri({ perfil, hipotesesFechadas = [], reflexoes = [], pe
  * (resumo.calcularVisao), mais dias com as refeições registradas (resumo.diaCompleto, a régua do placar) e dias com a
  * proteína batida (≥ 1,6 g/kg, a do placar). Os relatórios escritos pela IA estão só no Drive e não entram nesta fase.
  */
-export function montarResumos({ perfil, dia, refeicoes = [], pesagens = [] }) {
+export function montarResumos({ perfil, dia, refeicoes = [], pesagens = [], relatorios = null, termosLocal = [] }) {
   const d31 = diasAnteriores(dia, 31)[0];
   const r31 = refeicoes.filter((r) => r.dia >= d31 && r.dia <= dia);
   const p31 = pesagens.filter((p) => p.dia >= d31 && p.dia <= dia);
@@ -642,7 +802,9 @@ export function montarResumos({ perfil, dia, refeicoes = [], pesagens = [] }) {
       texto: x.comRegistro ? `${rotulo} (${dm(x.de)} a ${dm(x.ate)}): ${partes.join(' · ')}.` : `${rotulo} (${dm(x.de)} a ${dm(x.ate)}): sem registros.`,
     };
   };
-  return completar({ semana: v ? periodo(v.sete, 'Últimos 7 dias') : null, mes: v ? periodo(v.trinta, 'Últimos 30 dias') : null, sequencia: v ? v.sequencia : 0 });
+  // fase 4: o último resumo da semana e o último relatório do mês que a Nutri escreveu (Drive; textos sobre o grupo)
+  const relatorio = { semana: montarRelatorio(relatorios?.semana, termosLocal), mes: montarRelatorio(relatorios?.mes, termosLocal) };
+  return completar({ semana: v ? periodo(v.sete, 'Últimos 7 dias') : null, mes: v ? periodo(v.trinta, 'Últimos 30 dias') : null, sequencia: v ? v.sequencia : 0, relatorio });
 }
 
 // ============================================================

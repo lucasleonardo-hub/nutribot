@@ -116,6 +116,35 @@ data class Refeicao(
     }
 }
 
+/**
+ * Um dia da série do `/dias` (fase 4): tudo pode ser null quando falta. kcal/proteina = refeições registradas (sem registro =
+ * null, não zero); gasto = relógio; peso/gordura/magra = pesagem consolidada do dia; sonoMin = a noite de que acordou nesse dia.
+ */
+data class DiaSerie(
+    val dia: String,
+    val kcal: Double?,
+    val proteina: Double?,
+    val gasto: Double?,
+    val peso: Double?,
+    val gordura: Double?,
+    val magra: Double?,
+    val sonoMin: Double?,
+    val sonoInicio: String?,
+    val sonoFim: String?,
+    val passos: Double?,
+    val treinoMin: Double?,
+) {
+    companion object {
+        fun de(j: JSONObject): DiaSerie? {
+            val dia = j.str("dia") ?: return null
+            return DiaSerie(dia, j.num("kcal"), j.num("proteina"), j.num("gasto"), j.num("peso"), j.num("gordura"), j.num("magra"), j.num("sonoMin"), j.str("sonoInicio"), j.str("sonoFim"), j.num("passos"), j.num("treinoMin"))
+        }
+
+        /** `{ meta, dias }` → a lista em ordem de dia. */
+        fun lista(j: JSONObject?): List<DiaSerie> = j.arr("dias").objs().mapNotNull { de(it) }.sortedBy { it.dia }
+    }
+}
+
 /** Evento = { id, dia, hora|null, titulo, tipo, nota|null, criadoEm }; tipo em comer_fora|festa|viagem|treino|consulta|outro. */
 data class Evento(val id: String, val dia: String, val hora: String?, val titulo: String, val tipo: String, val nota: String?) {
     companion object {

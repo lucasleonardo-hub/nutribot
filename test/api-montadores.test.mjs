@@ -311,7 +311,7 @@ test('corpo: composição das pesagens com gordura (+ documento que não virou p
     sugestoesCarga: [{ id: 's1', exercicio: 'Agachamento', deKg: 80, deReps: 8, paraKg: 82.5, paraReps: 10, feitaEm: somarDias(DIA, -9), status: 'aberta', tentativas: 0 }],
   });
   const c = M.montarCorpo({ perfil, dia: DIA, pesagens: pesagens(), refeicoes: refeicoes(), saude: saude(), treinos, catalogo, temHevy: true });
-  assert.deepEqual(Object.keys(c), ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'medidas']);
+  assert.deepEqual(Object.keys(c), ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'medidas']);
   assert.deepEqual(ida(c), c);
   const doc = c.composicao.find((x) => x.fonte === 'documento');
   assert.deepEqual(doc, { dia: '2029-11-20', hora: null, fonte: 'documento', peso: 70, gordura: 17, magra: 58.1, confianca: 'alta' });
@@ -326,12 +326,85 @@ test('corpo: composição das pesagens com gordura (+ documento que não virou p
   assert.equal(c.treino.sessoes, 2);
   assert.ok(c.forca.parados.some((e) => e.exercicio === 'Agachamento'));
   assert.deepEqual(c.sugestoesCarga.map((s) => [s.exercicio, s.status]), [['Agachamento', 'tentando']]);
+  // fase 4: cada sugestão diz o que fazer HOJE pelo sono/energia/comida, e o contexto vem junto
+  assert.ok(['subir', 'manter', 'repetir'].includes(c.sugestoesCarga[0].hoje), JSON.stringify(c.sugestoesCarga[0]));
+  assert.equal(typeof c.sugestoesCarga[0].motivo, 'string');
+  assert.equal('tentativas' in c.sugestoesCarga[0], false); // campo interno não sai
+  assert.deepEqual(Object.keys(c.contextoTreino), ['energia', 'sonoMin', 'comida', 'texto']);
+  assert.equal(typeof c.contextoTreino.texto, 'string');
   assert.deepEqual(c.medidas, []);
 });
 
 test('corpo sem Hevy: treino e força null, sem sugestões', () => {
   const c = M.montarCorpo({ perfil: perfilBase(), dia: DIA, pesagens: [], refeicoes: [], temHevy: false });
-  assert.deepEqual(c, { composicao: [], atual: null, ritmo: null, treino: null, forca: null, sugestoesCarga: [], medidas: [] });
+  assert.deepEqual(c, { composicao: [], atual: null, ritmo: null, treino: null, forca: null, sugestoesCarga: [], contextoTreino: { energia: null, sonoMin: null, comida: null, texto: 'Sem dados do relógio hoje: siga as sugestões como estão.' }, medidas: [] });
+});
+
+test('ajustarSugestoesPeloDia: sono curto ou energia baixa seguram; comida abaixo segura; 2 tentativas = repetir; senão sobe; batida não muda', () => {
+  const s = [{ exercicio: 'A', deKg: 80, status: 'aberta', tentativas: 0 }, { exercicio: 'B', deKg: 40, status: 'tentando', tentativas: 2 }, { exercicio: 'C', status: 'batida' }];
+  const hoje = (ctx) => M.ajustarSugestoesPeloDia(s, ctx).map((x) => x.hoje);
+  assert.deepEqual(hoje({ sonoMin: 300, energia: 80, comida: 'dentro' }), ['manter', 'manter', null]);
+  assert.deepEqual(hoje({ sonoMin: 450, energia: 30, comida: 'dentro' }), ['manter', 'manter', null]);
+  assert.deepEqual(hoje({ sonoMin: 450, energia: 80, comida: 'abaixo' }), ['manter', 'manter', null]);
+  assert.deepEqual(hoje({ sonoMin: 450, energia: 80, comida: 'dentro' }), ['subir', 'repetir', null]);
+  assert.deepEqual(hoje({}), ['subir', 'repetir', null]);
+  assert.match(M.ajustarSugestoesPeloDia(s, { sonoMin: 300 })[0].motivo, /dormiu pouco/);
+  assert.match(M.ajustarSugestoesPeloDia(s, {})[1].motivo, /repete 40 kg/);
+});
+
+test('montarDias: um item por dia com null onde falta; kcal/proteína das refeições; gasto do relógio (ou perfil.relogio.gastos); magra; sono; meta', () => {
+  const perfil = perfilBase({ relogio: { gastos: { '2030-03-27': 2300, '2030-03-26': 500 } } });
+  const d = M.montarDias({
+    perfil,
+    de: '2030-03-26',
+    ate: '2030-03-29',
+    refeicoes: [{ dia: '2030-03-27', estimativa: { kcal: 600, p: 40 } }, { dia: '2030-03-27', estimativa: { kcal: 400.4, p: 20 } }, { dia: '2030-03-28', resumo: 'sem estimativa' }],
+    pesagens: [{ dia: '2030-03-27', peso: 78.456, gordura: 18.26 }, { dia: '2030-03-29', peso: 78.1, gordura: 150 }],
+    saude: { sonos: [{ dia: '2030-03-27', total: 430, inicio: '2030-03-26 23:40', fim: '2030-03-27 06:50' }, { dia: '2030-03-28', total: 0 }], atividades: [{ dia: '2030-03-28', passos: 9000, calorias: 2450, treinos: [{ nome: 'Corrida', min: 30 }, { nome: 'Caminhada', min: 20 }] }, { dia: '2030-03-29', passos: 100, calorias: 300 }] },
+    meta: { min: 2100.4, max: 2300 },
+  });
+  assert.deepEqual(d.meta, { min: 2100, max: 2300 });
+  assert.deepEqual(d.dias.map((x) => x.dia), ['2030-03-26', '2030-03-27', '2030-03-28', '2030-03-29']);
+  assert.deepEqual(d.dias[0], { dia: '2030-03-26', kcal: null, proteina: null, gasto: null, peso: null, gordura: null, magra: null, sonoMin: null, sonoInicio: null, sonoFim: null, passos: null, treinoMin: null }); // gasto 500 ≤ 800 = relógio fora do pulso
+  assert.deepEqual(d.dias[1], { dia: '2030-03-27', kcal: 1000, proteina: 60, gasto: 2300, peso: 78.46, gordura: 18.3, magra: 64.1, sonoMin: 430, sonoInicio: '23:40', sonoFim: '06:50', passos: null, treinoMin: null });
+  assert.deepEqual([d.dias[2].kcal, d.dias[2].gasto, d.dias[2].passos, d.dias[2].treinoMin, d.dias[2].sonoMin], [null, 2450, 9000, 50, null]);
+  assert.deepEqual([d.dias[3].peso, d.dias[3].gordura, d.dias[3].magra, d.dias[3].gasto], [78.1, null, null, null]); // gordura impossível e gasto baixo viram null
+  assert.deepEqual(M.montarDias({ de: '2030-03-29', ate: '2030-03-29' }).meta, null);
+});
+
+test('montarRelatorio, montarPlano, proximoSlot e montarSugestaoRefeicao (fase 4)', () => {
+  const r = M.montarRelatorio({ nome: 'Semana-2030-W13.md', modifiedTime: '2030-03-30T03:00:00Z', texto: '---\ntipo: resumo-semanal\n---\n\n# Semana 2030-W13\n\nSemana boa. A Pessoa A mora na Rua X.\n\n---\nDias: [[a]] · [[b]]\n' });
+  assert.deepEqual(r, { titulo: 'Semana 2030-W13', texto: 'Semana boa.', criadoEm: '2030-03-30T03:00:00.000Z' });
+  assert.equal(M.montarRelatorio(null), null);
+  assert.equal(M.montarRelatorio({ texto: '# Só título\n' }), null);
+  assert.deepEqual(M.montarPlano(null), { plano: null });
+  const p = M.montarPlano({ semana: '2030-03-31/2030-04-06', de: '2030-03-31', ate: '2030-04-06', texto: 'Seg: arroz.\nMora no bairro Y.', criadoEm: new Date('2030-03-29T15:00:00Z') });
+  assert.deepEqual(p.plano, { semana: '2030-03-31/2030-04-06', de: '2030-03-31', ate: '2030-04-06', texto: 'Seg: arroz.', criadoEm: '2030-03-29T15:00:00.000Z' });
+  const slots = { cafe: { hora: '08:00' }, almoco: { hora: '12:30' }, jantar: { hora: '20:00' } };
+  assert.deepEqual(M.proximoSlot({ slots, registradosHoje: ['cafe'], horaAgora: '10:00' }), { slot: 'almoco', hora: '12:30' });
+  assert.deepEqual(M.proximoSlot({ slots, registradosHoje: ['cafe', 'almoco'], horaAgora: '13:00' }), { slot: 'jantar', hora: '20:00' });
+  assert.deepEqual(M.proximoSlot({ slots, registradosHoje: [], horaAgora: '12:00' }).slot, 'almoco'); // café habitual já passou há mais de 90 min
+  assert.deepEqual(M.proximoSlot({ slots: {}, registradosHoje: ['almoco'], horaAgora: '12:00' }), { slot: 'lanche', hora: '16:00' }); // sem rotina: pelo horário, pulando o já feito
+  // 21h, jantar habitual às 19h e nada registrado: cai no fallback, mas a hora é a DA ROTINA, não a padrão (revisão, achado 2)
+  assert.deepEqual(M.proximoSlot({ slots: { jantar: { hora: '19:00' } }, registradosHoje: [], horaAgora: '21:00' }), { slot: 'jantar', hora: '19:00' });
+  assert.deepEqual([M.horaDoSlot({ cafe: { hora: '07:15' } }, 'cafe'), M.horaDoSlot({}, 'ceia'), M.horaDoSlot({}, 'x')], ['07:15', '23:00', null]);
+  // termos de lugar: cidade, e as palavras próprias de nome e rua (a IA abrevia "R. Lauro Linhares" ou encurta "na Garra")
+  const termos = M.termosDeLugar([{ lugares: [{ nome: 'Garra Academia', rua: 'Rua Lauro Linhares', cidade: 'Florianópolis', bairro: 'Trindade' }] }]);
+  for (const t of ['garra', 'lauro', 'linhares', 'florianopolis', 'trindade']) assert.ok(termos.includes(t), t);
+  assert.equal(termos.includes('rua'), false);
+  assert.equal(M.tirarLocalizacao('Passa na padaria da R. Lauro Linhares. Treino na Garra às 18h. Come em casa.', termos), 'Come em casa.');
+  // a resposta da IA vira o contrato: no máximo 3 opções, nome obrigatório, onde válido, números inteiros, localização fora
+  const s = M.montarSugestaoRefeicao({
+    slot: 'almoco', hora: '12:30', restam: 850.6, geradaEm: 'x', termosLocal: ['deltopolis'],
+    resposta: { opcoes: [{ nome: 'Arroz, feijão e frango', porque: 'cabe na faixa', kcal: 650.2, proteina_g: 45, onde: 'casa', preparo: 'Grelha o frango.' }, { nome: 'Marmita do RU', porque: 'Fica na Rua X, perto.', kcal: 700, proteina: 40, onde: 'rua' }, { nome: '', onde: 'fora' }, { nome: 'quarta', onde: 'casa' }, { nome: 'quinta', onde: 'casa' }], levar: 'Leva uma fruta.', dica: null },
+  });
+  assert.deepEqual(s, {
+    slot: 'almoco', nome: 'Almoço', hora: '12:30', restam: 851, geradaEm: 'x',
+    opcoes: [{ nome: 'Arroz, feijão e frango', porque: 'cabe na faixa', kcal: 650, proteina: 45, onde: 'casa', preparo: 'Grelha o frango.' }, { nome: 'Marmita do RU', porque: null, kcal: 700, proteina: 40, onde: 'casa', preparo: null }],
+    levar: 'Leva uma fruta.', dica: null,
+  });
+  s.opcoes.forEach((o) => confere(o, 'OpcaoRefeicao'));
+  confere(s, 'SugestaoRefeicao');
 });
 
 // ---------- nutri ----------
@@ -409,7 +482,10 @@ test('resumos: semana e mês = os 7 e 30 dias fechados da visão do !hoje', () =
   assert.equal(r.mes.diasComRegistro, 30);
   assert.equal(r.sequencia, v.sequencia);
   assert.match(r.semana.texto, /^Últimos 7 dias/);
-  assert.deepEqual(M.montarResumos({ perfil: { nome: 'B', jids: ['b'] }, dia: DIA }), { semana: null, mes: null, sequencia: 0 });
+  assert.deepEqual(M.montarResumos({ perfil: { nome: 'B', jids: ['b'] }, dia: DIA }), { semana: null, mes: null, sequencia: 0, relatorio: { semana: null, mes: null } });
+  // fase 4: o último resumo/relatório da Nutri (Drive) vem limpo e filtrado
+  const comRel = M.montarResumos({ perfil: { nome: 'B', jids: ['b'] }, dia: DIA, relatorios: { semana: { nome: 'Semana-2030-W13.md', modifiedTime: '2030-03-30T03:00:00Z', texto: '---\nx: 1\n---\n# Semana 2030-W13\n\nSemana boa.\n' }, mes: null } });
+  assert.deepEqual(comRel.relatorio, { semana: { titulo: 'Semana 2030-W13', texto: 'Semana boa.', criadoEm: '2030-03-30T03:00:00.000Z' }, mes: null });
 });
 
 // ---------- integrações ----------
@@ -480,11 +556,17 @@ const ESQUEMA = {
   DiaRefeicoes: ['dia', 'completo', 'kcal', 'p', 'c', 'g', 'refeicoes', 'eventos'],
   Progresso: ['pesagens', 'tendencia', 'veredito', 'meta', 'alertas', 'texto'],
   Pesagem: ['dia', 'peso', 'gordura', 'fonte', 'hora', 'descartada', 'motivo'],
-  Corpo: ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'medidas'],
+  Corpo: ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'medidas'],
+  ContextoTreino: ['energia', 'sonoMin', 'comida', 'texto'],
+  DiaSerie: ['dia', 'kcal', 'proteina', 'gasto', 'peso', 'gordura', 'magra', 'sonoMin', 'sonoInicio', 'sonoFim', 'passos', 'treinoMin'],
+  Relatorio: ['titulo', 'texto', 'criadoEm'],
+  Plano: ['semana', 'de', 'ate', 'texto', 'criadoEm'],
+  SugestaoRefeicao: ['slot', 'nome', 'hora', 'restam', 'geradaEm', 'opcoes', 'levar', 'dica'],
+  OpcaoRefeicao: ['nome', 'porque', 'kcal', 'proteina', 'onde', 'preparo'],
   Medicao: ['dia', 'hora', 'fonte', 'peso', 'gordura', 'magra', 'confianca'],
   Treino: ['sessoes', 'series', 'volumeKg', 'volumeAnteriorKg', 'variacaoVolume', 'rpeMedio', 'semanasComTreino', 'porGrupo', 'progressao'],
   Exercicio: ['exercicio', 'sessoes', 'melhorKg', 'reps', 'desdeKg', 'ultimaSubida', 'semanasParado'],
-  Sugestao: ['exercicio', 'deKg', 'deReps', 'paraKg', 'paraReps', 'status', 'feitaEm', 'batidaEm', 'como'],
+  Sugestao: ['exercicio', 'deKg', 'deReps', 'paraKg', 'paraReps', 'status', 'feitaEm', 'batidaEm', 'como', 'hoje', 'motivo'],
   Fato: ['id', 'campo', 'texto', 'natureza', 'origem', 'atualizadoEm', 'escopo', 'editavel', 'apagavel', 'valor'],
   Hipotese: ['id', 'texto', 'status', 'comoVerificar', 'evidencia', 'sinais', 'natureza', 'origem', 'atualizadoEm', 'escopo', 'apagavel'],
   PesagemSimples: ['dia', 'peso', 'gordura', 'fonte', 'hora'],

@@ -300,6 +300,12 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         fun rotaResumos(id: String) = "/perfis/$id/resumos"
         /** O gráfico da Nutri (2.3): PNG 1000×520 dos últimos `dias` dias, o mesmo do `!grafico` e do resumo de domingo. */
         fun rotaGrafico(id: String, dias: Int = 30) = "/perfis/$id/grafico.png?dias=$dias"
+        /** Fase 4: série por dia (kcal, gasto, peso, massa magra, sono, passos) e a faixa da meta; até 92 dias. */
+        fun rotaDias(id: String, de: String, ate: String) = "/perfis/$id/dias?de=$de&ate=$ate"
+        /** Fase 4: o último plano da semana que a Nutri mandou. */
+        fun rotaPlano(id: String) = "/perfis/$id/plano"
+        /** Fase 4: sugestão da IA para a próxima refeição (slot opcional). */
+        fun rotaSugestaoRefeicao(id: String, slot: String? = null) = "/perfis/$id/sugestao-refeicao" + (slot?.let { "?slot=$it" } ?: "")
         const val ROTA_INTEGRACOES = "/integracoes"
         private const val UMA_HORA_MS = 60L * 60 * 1000
     }

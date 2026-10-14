@@ -61,7 +61,8 @@ private val seta = icone("M6 9l6 6 6-6")
 
 /**
  * Cartão com cabeçalho de altura fixa e detalhe que abre ao tocar. O estado aberto/fechado sobrevive à rotação (chave = nome
- * do cartão). Sem animação quando a pessoa desligou as animações do sistema.
+ * do cartão). Sem animação quando a pessoa desligou as animações do sistema. `abertoInicial` = já começa aberto (fase 4:
+ * o cartão de Calorias, o mais importante do Hoje).
  */
 @Composable
 fun CartaoExpansivel(
@@ -71,11 +72,12 @@ fun CartaoExpansivel(
     pincel: Brush? = null,
     forma: Shape = Formas.Medio,
     atraso: Int = 0,
+    abertoInicial: Boolean = false,
     cabecalho: @Composable RowScope.() -> Unit,
     detalhe: @Composable ColumnScope.() -> Unit,
 ) {
     // a chave entra como input (não como key): cada cartão tem o seu estado, que sobrevive à rotação e zera se a chave mudar
-    var aberto by rememberSaveable(chave) { mutableStateOf(false) }
+    var aberto by rememberSaveable(chave) { mutableStateOf(abertoInicial) }
     val parado = LocalReduzirMovimento.current
     val giroAlvo = if (aberto) 180f else 0f
     val giro = if (parado) giroAlvo else animateFloatAsState(giroAlvo, label = "seta").value
@@ -118,11 +120,12 @@ fun CartaoResumo(
     cor: Color = Cores.Branco,
     pincel: Brush? = null,
     atraso: Int = 0,
+    abertoInicial: Boolean = false,
     visual: @Composable () -> Unit,
     detalhe: @Composable ColumnScope.() -> Unit,
 ) {
     CartaoExpansivel(
-        chave, modifier, cor = cor, pincel = pincel, atraso = atraso,
+        chave, modifier, cor = cor, pincel = pincel, atraso = atraso, abertoInicial = abertoInicial,
         cabecalho = {
             Box(Modifier.size(TamanhoVisual), contentAlignment = Alignment.Center) { visual() }
             Column(Modifier.weight(1f)) {

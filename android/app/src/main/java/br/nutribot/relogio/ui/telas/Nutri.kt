@@ -12,8 +12,11 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -53,11 +56,12 @@ import br.nutribot.relogio.ui.componentes.AvisoErro
 import br.nutribot.relogio.ui.componentes.Botao
 import br.nutribot.relogio.ui.componentes.Cabecalho
 import br.nutribot.relogio.ui.componentes.Cartao
+import br.nutribot.relogio.ui.componentes.Chip
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
 import br.nutribot.relogio.ui.componentes.Link
+import br.nutribot.relogio.ui.componentes.MarkdownSimples
 import br.nutribot.relogio.ui.componentes.Pilula
 import br.nutribot.relogio.ui.componentes.Pose
-import br.nutribot.relogio.ui.componentes.Segmentado
 import br.nutribot.relogio.ui.componentes.Vazio
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
@@ -66,6 +70,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.time.LocalDate
+import java.time.ZoneId
 
 /** natureza: declarado | medido | inferido | hipotese | opiniao */
 private fun corNatureza(n: String?): Pair<Color, Color> = when (n) {
@@ -85,7 +90,38 @@ private fun rotuloNatureza(n: String?): String = when (n) {
     else -> n ?: "—"
 }
 
-private fun quando(s: String?): String? = Formato.dia(s)?.let { Formato.diaCurto(it) } ?: s
+private val abasNutri = listOf("Fatos", "Hipóteses", "Pensamentos", "Plano", "Diário")
+
+private val soData = Regex("^\\d{4}-\\d{2}-\\d{2}$")
+
+/** O fuso da pessoa para mostrar instantes; sem fuso válido, o do celular. */
+private fun zona(fuso: String?): ZoneId = runCatching { ZoneId.of(fuso ?: "") }.getOrNull() ?: ZoneId.systemDefault()
+
+/** Um instante ou dia da API como "14/10 11:30" ou "14/10" (nunca ISO cru). */
+private fun quandoCurto(s: String?, fuso: String?): String? {
+    if (s.isNullOrBlank()) return null
+    if (soData.matches(s)) return Formato.dia(s)?.let { Formato.diaCurto(it) }
+    val i = Formato.instante(s) ?: return Formato.dia(s)?.let { Formato.diaCurto(it) }
+    val dt = i.atZone(zona(fuso))
+    return "%02d/%02d %02d:%02d".format(dt.dayOfMonth, dt.monthValue, dt.hour, dt.minute)
+}
+
+/** O dia (no fuso da pessoa) de um instante ou dia da API. */
+private fun diaDe(s: String?, fuso: String?): LocalDate? {
+    if (s.isNullOrBlank()) return null
+    if (soData.matches(s)) return Formato.dia(s)
+    return Formato.instante(s)?.atZone(zona(fuso))?.toLocalDate() ?: Formato.dia(s)
+}
+
+/** Origem curta: até o primeiro parêntese ou ponto e vírgula ("reflexão de domingo (IA); sinais..." vira "reflexão de domingo"). */
+private fun origemCurta(s: String?): String? = s?.substringBefore(" (")?.substringBefore(";")?.trim()?.takeIf { it.isNotBlank() }
+
+/** Rodapé de um item: "origem curta · 14/10 11:30" (dia + hora quando o item tem `dia`; senão `atualizadoEm`). */
+private fun rodape(it: JSONObject, fuso: String?): String {
+    val data = it.str("dia")?.let { d -> Formato.dia(d)?.let { Formato.diaCurto(it) }?.let { q -> q + (it.str("hora")?.let { h -> " $h" } ?: "") } }
+        ?: quandoCurto(it.str("atualizadoEm"), fuso)
+    return listOfNotNull(origemCurta(it.str("origem")), data).joinToString(" · ")
+}
 
 /** Uma ação pendente sobre um fato ou hipótese (fase 3, A4): corrigir o texto, apagar o fato ou descartar a hipótese. */
 private sealed class AcaoNutri {
@@ -95,9 +131,10 @@ private sealed class AcaoNutri {
 }
 
 /**
- * O que a Nutri sabe: fatos, hipóteses, diário e avaliações do /nutri. Fase 3: fatos com `editavel` ganham "corrigir",
- * com `apagavel` ganham "apagar"; hipótese aberta com `apagavel` ganha "descartar". Toda resposta traz o /nutri recalculado,
- * que entra no lugar do guardado (vm.semear).
+ * O que a Nutri sabe, em cinco abas (fase 4): Fatos | Hipóteses | Pensamentos | Plano | Diário. Fatos com `editavel` ganham
+ * "corrigir", com `apagavel` ganham "apagar"; hipótese aberta com `apagavel` ganha "descartar". Toda resposta traz o /nutri
+ * recalculado, que entra no lugar do guardado (vm.semear). Tudo o que tem data (diário, pensamentos, reflexões, anotações,
+ * hipóteses fechadas) aparece também no Diário. O Plano vem do /plano.
  */
 @Composable
 fun TelaNutri(vm: AppVM, perfil: Perfil?) {
@@ -107,26 +144,31 @@ fun TelaNutri(vm: AppVM, perfil: Perfil?) {
     LaunchedEffect(rota) { vm.carregar(rota) }
     var aba by rememberSaveable { mutableIntStateOf(0) }
     var acao by remember { mutableStateOf<AcaoNutri?>(null) }
+    val fuso = perfil.fuso
     ConteudoCarga(
         carga, { vm.carregar(rota, forcar = true) },
         topo = {
-            Cabecalho("O que a Nutri sabe", "sobre ${perfil.curto} · diário do grupo", Pose.DuplaConferindo, 60.dp)
-            Segmentado(listOf("Fatos", "Hipóteses", "Diário", "Avaliações"), aba, { aba = it }, Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp))
+            Cabecalho("O que a Nutri sabe", "sobre ${perfil.curto}", Pose.DuplaConferindo, 60.dp)
+            // cinco abas não cabem num segmentado: chips roláveis, nenhum texto cortado
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Abas" },
+            ) {
+                itemsIndexed(abasNutri) { i, nome -> Chip(nome, aba == i, papel = Role.Tab) { aba = i } }
+            }
         },
     ) { j ->
         when (aba) {
-            0 -> ListaItens(j.arr("fatos").objs(), "Nenhum fato guardado ainda.", texto = { f -> f.str("texto") ?: f.str("campo") ?: "" }) { f ->
-                val id = f.str("id")
-                // `valor` é o texto cru (sem o rótulo "Dieta: "), que é o que o PUT recebe de volta
-                if (id != null && f.bool("editavel") == true) Link("corrigir") { acao = AcaoNutri.Corrigir(id, f.str("valor") ?: f.str("texto") ?: "") }
-                if (id != null && f.bool("apagavel") == true) Link("apagar") { acao = AcaoNutri.Apagar(id) }
-            }
-            1 -> ListaItens(j.arr("hipoteses").objs(), "Nenhuma hipótese aberta.", texto = { h -> h.str("texto") ?: "" }) { h ->
+            // anotações com data vão para o Diário (com "apagar" lá); aqui ficam os fatos de cadastro e as fichas
+            0 -> ListaItens(j.arr("fatos").objs().filter { it.str("campo") != "anotacao" }, "Nenhum fato guardado ainda.", fuso, texto = { f -> f.str("texto") ?: f.str("campo") ?: "" }) { f -> AcoesFato(f) { acao = it } }
+            1 -> ListaItens(j.arr("hipoteses").objs(), "Nenhuma hipótese aberta.", fuso, texto = { h -> h.str("texto") ?: "" }) { h ->
                 val id = h.str("id")
                 if (id != null && h.bool("apagavel") == true) Link("descartar") { acao = AcaoNutri.Descartar(id) }
             }
-            2 -> Diario(j)
-            else -> ListaItens(j.arr("avaliacoes").objs(), "Nenhuma avaliação recente.", texto = { a -> a.str("texto") ?: "" })
+            2 -> Pensamentos(j, fuso)
+            3 -> Plano(vm, perfil.id)
+            else -> Diario(j, fuso) { acao = it }
         }
     }
     when (val a = acao) {
@@ -138,30 +180,101 @@ fun TelaNutri(vm: AppVM, perfil: Perfil?) {
 }
 
 @Composable
-private fun ListaItens(itens: List<JSONObject>, vazio: String, texto: (JSONObject) -> String, acoes: (@Composable (JSONObject) -> Unit)? = null) {
+private fun AcoesFato(f: JSONObject, aoEscolher: (AcaoNutri) -> Unit) {
+    val id = f.str("id")
+    // `valor` é o texto cru (sem o rótulo "Dieta: "), que é o que o PUT recebe de volta
+    if (id != null && f.bool("editavel") == true) Link("corrigir") { aoEscolher(AcaoNutri.Corrigir(id, f.str("valor") ?: f.str("texto") ?: "")) }
+    if (id != null && f.bool("apagavel") == true) Link("apagar") { aoEscolher(AcaoNutri.Apagar(id)) }
+}
+
+@Composable
+private fun ListaItens(itens: List<JSONObject>, vazio: String, fuso: String?, texto: (JSONObject) -> String, acoes: (@Composable (JSONObject) -> Unit)? = null) {
     if (itens.isEmpty()) { Vazio(vazio, Pose.CorgiLupa); return }
-    itens.forEachIndexed { i, it ->
-        val (fundo, tinta) = corNatureza(it.str("natureza"))
-        Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = (i * 30).coerceAtMost(300)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Pilula(rotuloNatureza(it.str("natureza")), fundo, tinta)
-                it.str("status")?.let { s -> Pilula(s, Cores.Lavanda, Cores.Tinta2) }
-                it.str("tipo")?.let { t -> Pilula(if (t == "reflexao") "reflexão" else t, Cores.Lavanda, Cores.Tinta2) }
-            }
-            Text(texto(it), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
-            it.str("comoVerificar")?.let { c -> Text("Como verificar: $c", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 4.dp)) }
-            it.str("evidencia")?.let { c -> Text("Evidência: $c", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 2.dp)) }
-            val sinais = it.arr("sinais").objs()
+    itens.forEachIndexed { i, it -> CartaoItem(it, texto(it), fuso, (i * 30).coerceAtMost(300), acoes) }
+}
+
+/**
+ * Cartão de fato, hipótese ou avaliação: pílulas, texto, UMA linha de rodapé (origem curta · 14/10 11:30) e as ações.
+ * Como verificar, evidência e sinais ficam dentro de "ver mais".
+ */
+@Composable
+private fun CartaoItem(it: JSONObject, texto: String, fuso: String?, atraso: Int = 0, acoes: (@Composable (JSONObject) -> Unit)? = null, pilulaExtra: String? = null) {
+    val (fundo, tinta) = corNatureza(it.str("natureza"))
+    val comoVerificar = it.str("comoVerificar")
+    val evidencia = it.str("evidencia")
+    val sinais = it.arr("sinais").objs()
+    val temMais = comoVerificar != null || evidencia != null || sinais.isNotEmpty()
+    var mais by rememberSaveable(it.str("id") ?: texto) { mutableStateOf(false) }
+    Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = atraso) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Pilula(rotuloNatureza(it.str("natureza")), fundo, tinta)
+            it.str("status")?.let { s -> Pilula(s, Cores.Lavanda, Cores.Tinta2) }
+            pilulaExtra?.let { p -> Pilula(p, Cores.Lavanda, Cores.Tinta2) }
+        }
+        Text(texto, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
+        if (temMais && mais) {
+            comoVerificar?.let { c -> Text("Como verificar: $c", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 4.dp)) }
+            evidencia?.let { c -> Text("Evidência: $c", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 2.dp)) }
             if (sinais.isNotEmpty()) {
                 val aFavor = sinais.count { s -> s.str("direcao")?.contains("favor") == true || s.str("direcao") == "confirma" }
                 Text("${sinais.size} sinais · $aFavor a favor, ${sinais.size - aFavor} contra", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 2.dp))
+                sinais.take(6).forEach { s ->
+                    val d = Formato.dia(s.str("dia"))?.let { Formato.diaCurto(it) }
+                    Text(listOfNotNull(d, s.str("direcao"), s.str("evidencia")).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 2.dp))
+                }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-                Text(
-                    listOfNotNull(it.str("origem"), (it.str("dia")?.let { d -> quando(d) + (it.str("hora")?.let { h -> " $h" } ?: "") } ?: quando(it.str("atualizadoEm")))).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.weight(1f),
-                )
-                acoes?.invoke(it)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+            Text(rodape(it, fuso), style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            if (temMais) Link(if (mais) "ver menos" else "ver mais") { mais = !mais }
+            acoes?.invoke(it)
+        }
+    }
+}
+
+/** Pensamentos: as avaliações do tipo pensamento e reflexão (a reflexão leva a pílula "reflexão de domingo"). */
+@Composable
+private fun Pensamentos(j: JSONObject, fuso: String?) {
+    val itens = j.arr("avaliacoes").objs().filter { it.str("tipo") == "pensamento" || it.str("tipo") == "reflexao" }
+    if (itens.isEmpty()) { Vazio("Nenhum pensamento da Nutri ainda.", Pose.CorgiLupa); return }
+    itens.forEachIndexed { i, it ->
+        CartaoItem(it, it.str("texto") ?: "", fuso, (i * 30).coerceAtMost(300), pilulaExtra = if (it.str("tipo") == "reflexao") "reflexão de domingo" else null)
+    }
+}
+
+/** Plano da semana: GET /plano -> { plano: { semana, de, ate, texto, criadoEm } | null }, em Markdown simples. */
+@Composable
+private fun Plano(vm: AppVM, perfilId: String) {
+    val rota = AppVM.rotaPlano(perfilId)
+    val carga by vm.carga(rota).collectAsStateWithLifecycle()
+    LaunchedEffect(rota) { vm.carregar(rota) }
+    val dados = carga.dados
+    val erro = carga.erro
+    when {
+        dados == null && erro != null -> {
+            Text(erro.paraPessoa, style = MaterialTheme.typography.bodyMedium, color = Cores.CuidadoTinta)
+            Link("tentar de novo") { vm.carregar(rota, forcar = true) }
+        }
+        dados == null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            CircularProgressIndicator(Modifier.size(18.dp), color = Cores.Acai, strokeWidth = 2.dp)
+            Text(if (carga.acordando) "Acordando o servidor. Leva até 1 minuto." else "Buscando o plano…", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+        }
+        else -> {
+            val plano = dados.obj("plano")
+            val texto = plano.str("texto")
+            if (plano == null || texto == null) {
+                Vazio("Sem plano ainda. Peça !plano no WhatsApp.", Pose.DuplaDescansando)
+            } else {
+                val de = Formato.dia(plano.str("de"))
+                val ate = Formato.dia(plano.str("ate"))
+                Cartao {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Plano da semana", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                        if (de != null && ate != null) Pilula("${Formato.diaCurto(de)} a ${Formato.diaCurto(ate)}", Cores.Trilho, Cores.LilasTexto)
+                    }
+                    MarkdownSimples(texto, Modifier.padding(top = 8.dp))
+                    plano.str("criadoEm")?.let { c -> Text("enviado ${quandoCurto(c, null) ?: ""}", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp)) }
+                }
             }
         }
     }
@@ -258,13 +371,41 @@ private fun DialogoApagarNutri(vm: AppVM, rota: String, perfilId: String, titulo
     )
 }
 
-/** Diário da Nutri: agenda simples por dia (calendário do mês; tocar num dia mostra as notas). É do grupo todo. */
+/** Um item com data no Diário: o tipo (pílula), as cores, o item cru e, nas anotações, o fato para o "apagar". */
+private data class ItemDiario(val dia: LocalDate, val tipo: String, val fundo: Color, val tinta: Color, val item: JSONObject, val texto: String, val fato: Boolean = false)
+
+/** Tudo o que tem data no /nutri: diário (grupo), pensamentos, reflexões, anotações e hipóteses fechadas. */
+private fun itensDoDiario(j: JSONObject, fuso: String?): List<ItemDiario> {
+    val saida = ArrayList<ItemDiario>()
+    (j.arr("diario").objs() + j.arr("diarioGrupo").objs()).forEach { n ->
+        val d = diaDe(n.str("dia"), fuso) ?: return@forEach
+        saida += ItemDiario(d, "diário da Nutri (grupo)", Cores.Trilho, Cores.LilasTexto, n, n.str("texto") ?: "")
+    }
+    j.arr("avaliacoes").objs().forEach { a ->
+        val d = diaDe(a.str("dia"), fuso) ?: diaDe(a.str("atualizadoEm"), fuso) ?: return@forEach
+        when (a.str("tipo")) {
+            "reflexao" -> saida += ItemDiario(d, "reflexão de domingo", Color(0xFFFFF0F5), Color(0xFF8A2448), a, a.str("texto") ?: "")
+            "pensamento" -> saida += ItemDiario(d, "pensamento", Cores.AtencaoFundo, Cores.AtencaoTinta, a, a.str("texto") ?: "")
+            else -> saida += ItemDiario(d, a.str("tipo") ?: "avaliação", Cores.Lavanda, Cores.Tinta2, a, a.str("texto") ?: "")
+        }
+    }
+    j.arr("fatos").objs().filter { it.str("campo") == "anotacao" }.forEach { f ->
+        val d = diaDe(f.str("atualizadoEm"), fuso) ?: return@forEach
+        saida += ItemDiario(d, "anotação", Cores.BomFundo, Cores.BomTinta, f, f.str("texto") ?: "", fato = true)
+    }
+    j.arr("hipoteses").objs().filter { it.str("status") != null && it.str("status") != "aberta" }.forEach { h ->
+        val d = diaDe(h.str("atualizadoEm"), fuso) ?: return@forEach
+        saida += ItemDiario(d, "hipótese ${h.str("status")}", Color(0xFFFFF0F5), Color(0xFF8A2448), h, h.str("texto") ?: "")
+    }
+    return saida.filter { it.texto.isNotBlank() }
+}
+
+/** Diário: calendário do mês marcando todo item com data; tocar num dia lista os itens, uma pílula por tipo. */
 @Composable
-private fun Diario(j: JSONObject) {
-    // o diário da Nutri é sempre do grupo todo (S-api §3): vem em "diario" (ou "diarioGrupo") e leva o rótulo de grupo
-    val notas = (j.arr("diario").objs() + j.arr("diarioGrupo").objs()).mapNotNull { n -> Formato.dia(n.str("dia"))?.let { it to n } }
-    val porDia = notas.groupBy({ it.first }, { it.second })
-    val ultimo = notas.maxOfOrNull { it.first } ?: LocalDate.now()
+private fun Diario(j: JSONObject, fuso: String?, aoEscolher: (AcaoNutri) -> Unit) {
+    val itens = itensDoDiario(j, fuso)
+    val porDia = itens.groupBy { it.dia }
+    val ultimo = itens.maxOfOrNull { it.dia } ?: LocalDate.now()
     var selStr by rememberSaveable { mutableStateOf(Formato.iso(ultimo)) }
     val sel = Formato.dia(selStr) ?: ultimo
     var mesStr by rememberSaveable { mutableStateOf(Formato.iso(ultimo.withDayOfMonth(1))) }
@@ -286,14 +427,15 @@ private fun Diario(j: JSONObject) {
             Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 for (i in 0 until 7) {
                     val d = semana.getOrNull(i)
+                    val quantos = d?.let { porDia[it]?.size } ?: 0
                     // a célula inteira (cerca de 48 dp) é o alvo do toque; o círculo é só o desenho
                     Box(
                         Modifier.weight(1f).heightIn(min = 48.dp).aspectRatio(1f)
-                            .let { m -> if (d != null) m.clickable(role = Role.Button) { selStr = Formato.iso(d) }.semantics { contentDescription = Formato.diaLongo(d) + if (porDia.containsKey(d)) ", com nota" else "" } else m },
+                            .let { m -> if (d != null) m.clickable(role = Role.Button) { selStr = Formato.iso(d) }.semantics { contentDescription = Formato.diaLongo(d) + if (quantos > 0) ", $quantos ${if (quantos == 1) "item" else "itens"}" else "" } else m },
                         contentAlignment = Alignment.Center,
                     ) {
                         if (d != null) {
-                            val tem = porDia.containsKey(d)
+                            val tem = quantos > 0
                             val ativo = d == sel
                             Box(
                                 Modifier.size(38.dp).clip(CircleShape)
@@ -312,13 +454,16 @@ private fun Diario(j: JSONObject) {
     Text(Formato.diaLongo(sel).replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleLarge)
     val doDia = porDia[sel].orEmpty()
     if (doDia.isEmpty()) {
-        Text("Sem nota neste dia.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)
+        Text("Nada anotado neste dia.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)
     } else {
-        doDia.forEach { n ->
-            Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp)) {
-                Pilula("diário da Nutri (grupo)", Cores.Trilho, Cores.LilasTexto, Modifier.padding(bottom = 6.dp))
-                Text(n.str("texto") ?: "", style = MaterialTheme.typography.bodyMedium)
-                n.str("origem")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp)) }
+        doDia.forEachIndexed { i, it ->
+            Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = (i * 30).coerceAtMost(300)) {
+                Pilula(it.tipo, it.fundo, it.tinta, Modifier.padding(bottom = 6.dp))
+                Text(it.texto, style = MaterialTheme.typography.bodyMedium)
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    Text(rodape(it.item, fuso), style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    if (it.fato) AcoesFato(it.item, aoEscolher)
+                }
             }
         }
     }

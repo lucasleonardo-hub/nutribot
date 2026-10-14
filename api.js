@@ -12,12 +12,12 @@
 import express from 'express';
 import { listarPerfis, refeicoesDesde, pesagensDesde, colecao, humorDe, eventosDe, comMiniaturas } from './mongo.js';
 import { authPadrao, erroApi, ipDe, criarDiagnosticoXff } from './api-auth.js';
-import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, montarPesagens, termosDeLugar } from './api-montadores.js';
-import { rotasDeEscrita, escritaPadrao, diaValido, MAX_DIAS_PESAGENS } from './api-escrita.js';
-import { estimarRefeicaoApp } from './gemini.js';
+import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, montarPesagens, montarDias, montarPlano, montarSugestaoRefeicao, proximoSlot, horaDoSlot, termosDeLugar, tirarLocalizacao } from './api-montadores.js';
+import { rotasDeEscrita, escritaPadrao, diaValido, MAX_DIAS_PESAGENS, criarLimiteAnalises } from './api-escrita.js';
+import { estimarRefeicaoApp, sugerirRefeicao } from './gemini.js';
 import { marcaDeTempo, diasAnteriores } from './util.js';
 import { configGrafico, renderizar } from './graficos.js';
-import { gastoAdaptativo } from './resumo.js';
+import { gastoAdaptativo, padraoAlimentar, nomeDoSlot as nomeDoSlotApi } from './resumo.js';
 import { temHevy } from './treino.js';
 import { ehDonoDaAgenda } from './agenda.js';
 import { ATRASO_COBRANCA_MIN } from './cobranca.js';
@@ -80,6 +80,60 @@ export function dadosPadrao() {
     /** Pesagens de um intervalo fechado, uma por dia (fase 3: 90 dias e 1 ano no gráfico do app). */
     pesagensEntre: (perfil, de, ate) => pesagensDesde(perfil.jids || [], de, ate),
 
+    /** Fase 4: tudo de um intervalo pra série por dia (refeições, pesagens consolidadas, relógio) e os 31 dias da meta. */
+    async diasEntre(perfil, de, ate) {
+      // uma consulta só, do que vier primeiro (de, ou 31 dias antes de ate, pra meta), e o intervalo é fatiado depois
+      const desde = diasAnteriores(ate, 31)[0] < de ? diasAnteriores(ate, 31)[0] : de;
+      const [refeicoes, pesagens, saude] = await Promise.all([
+        refeicoesDesde(perfil.jids || [], desde, ate),
+        pesagensDesde(perfil.jids || [], desde, ate),
+        colecao('saude_relogio').findOne({ _id: perfil.jids?.[0] }, { projection: { sonos: 1, atividades: 1 } }),
+      ]);
+      return { refeicoes: refeicoes.filter((r) => r.dia >= de), pesagens: pesagens.filter((p) => p.dia >= de), saude, base: { refeicoes, pesagens } };
+    },
+
+    /**
+     * Fase 4: o último Resumos/Semana-*.md e Mes-*.md do Drive (texto cru; o montador limpa), só leitura e sem listar a
+     * pasta inteira. null sem Drive. Com prazo: um Drive lento não pode segurar o /resumos.
+     */
+    async relatorios() {
+      if (!(process.env.DRIVE_FOLDER_ID || '').trim()) return null;
+      const d = await import('./drive.js');
+      const prazo = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('drive lento')), ms))]);
+      const ler = async (prefixo) => {
+        const f = await d.ultimoArquivo('Resumos', prefixo);
+        return f ? { nome: f.name, modifiedTime: f.modifiedTime, texto: (await d.baixarArquivo(f)).texto || '' } : null;
+      };
+      const [semana, mes] = await prazo(Promise.all([ler('Semana-'), ler('Mes-')]), 6000);
+      return { semana, mes };
+    },
+
+    /** Fase 4: o último plano da semana da pessoa (coleção `planos`). */
+    planoDe: async (perfil) => (await import('./mongo.js')).ultimoPlano(perfil.jids || []),
+
+    /** Fase 4: o que decide o slot e a faixa da sugestão (barato: só Mongo): 29 dias de refeições e 35 de pesagens. */
+    async registrosSugestao(perfil, hoje) {
+      const [refeicoes, pesagens] = await Promise.all([refeicoesDesde(perfil.jids || [], diasAnteriores(hoje, 29)[0], hoje), pesagensDesde(perfil.jids || [], diasAnteriores(hoje, 35)[0], hoje)]);
+      return { refeicoes, pesagens };
+    },
+
+    /**
+     * Fase 4: o resto do contexto da sugestão (só quando a IA vai ser chamada): humor e eventos de hoje, despensa, agenda
+     * e ONDE a pessoa está, só como tipo de lugar ("em casa", "na academia"): o bloco de lugares do WhatsApp tem rua e
+     * bairro e NÃO vai pra IA do app, porque a resposta volta pro app sem passar pelo filtro inteiro.
+     */
+    async contextoSugestao(perfil, hoje) {
+      const [humor, eventos, despensa, agenda, situacao] = await Promise.all([
+        humorDe(perfil.jids || [], hoje, hoje),
+        eventosDe(perfil.jids || [], hoje, hoje),
+        import('./despensa.js').then((m) => m.blocoDespensa(perfil)).catch(() => ''),
+        import('./agenda.js').then((m) => m.agendaDe(perfil, { dias: 1 })).then((a) => a?.bloco || '').catch(() => ''),
+        perfil.lugaresAtivo ? import('./lugares.js').then((m) => m.situacaoAtual(perfil)).catch(() => null) : null,
+      ]);
+      const { estado } = await import('./estado.js');
+      return { humor: humor[0] || null, eventos, despensa, agenda, lugares: ondeEstaGenerico(situacao), persona: estado.persona || '' };
+    },
+
     /** Progresso e resumos: os 31 dias de acompanhamento.dadosDe. */
     async de31(perfil, dia) {
       const desde = diasAnteriores(dia, 31)[0];
@@ -123,6 +177,21 @@ export function dadosPadrao() {
   };
 }
 
+/**
+ * Puro. A situação da localização (lugares.situacaoAtual) reduzida ao TIPO de lugar, sem nome, rua ou bairro:
+ * "em casa", "no trabalho", "na academia", "fora de casa". '' sem sinal.
+ */
+export function ondeEstaGenerico(s) {
+  if (!s || s.estado === 'sem_sinal') return '';
+  if (s.estado === 'casa') return 'Agora ela(e) está em casa.';
+  if (s.estado === 'lugar') {
+    const tipo = String(s.lugar?.papel || s.lugar?.tipo || '').toLowerCase();
+    const generico = /^(trabalho|academia|faculdade|escola|mercado|supermercado|restaurante|padaria|bar|cafe|shopping|parque|igreja|hospital|farmacia|praia|clinica)$/.test(tipo) ? tipo : null;
+    return generico ? `Agora ela(e) está fora de casa: ${generico}.` : 'Agora ela(e) está fora de casa, num lugar que costuma frequentar.';
+  }
+  return 'Agora ela(e) está fora de casa (na rua ou num lugar novo).';
+}
+
 // ============================================================
 // Roteador
 // ============================================================
@@ -134,8 +203,23 @@ function enviarErro(res, status, codigo, mensagem) {
  * Roteador da API v1. `auth` = api-auth.criarAuth (pareamento e token); `dados` = dadosPadrao() ou um dublê; `agora()` o
  * instante (dia e hora de cada pessoa saem dele, no fuso dela); `adminJid` marca o perfil do dono.
  */
-export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita = escritaPadrao(), ia = { estimarRefeicaoApp }, grafico = { configGrafico, renderizar }, agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda, podeAnalisar } = {}) {
+export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita = escritaPadrao(), ia = { estimarRefeicaoApp, sugerirRefeicao }, grafico = { configGrafico, renderizar }, agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda, podeAnalisar = criarLimiteAnalises() } = {}) {
   const r = express.Router();
+  // fase 4: a sugestão de refeição (IA) fica guardada 1 h por pessoa, dia e slot; a promessa entra no mapa (dois pedidos
+  // no mesmo instante = uma chamada), e cada pessoa tem no máximo 6 chamadas por hora além do limite do processo
+  const sugestoesProntas = new Map(); // `${id}|${dia}|${slot}` -> { corpo: Promise, em }
+  const SUGESTAO_CACHE_MS = 60 * 60_000;
+  const sugestoesPorPessoa = new Map(); // id -> [ms]
+  const podeSugerirPara = (id, agoraMs) => {
+    const l = (sugestoesPorPessoa.get(id) || []).filter((t) => agoraMs - t < 3600_000);
+    if (l.length >= 6) return false;
+    l.push(agoraMs);
+    sugestoesPorPessoa.set(id, l);
+    return true;
+  };
+  // os relatórios da Nutri (Drive) mudam uma vez por semana e por mês: 30 min de cache por processo
+  let relatoriosCache = null; // { em, valor }
+  const RELATORIOS_CACHE_MS = 30 * 60_000;
   // o PNG do gráfico da Nutri (QuickChart, serviço externo) fica guardado 1 h por pessoa e dia: o app pode pedir à vontade
   const graficosProntos = new Map(); // `${id}|${dia}|${dias}` -> { png, em }
   const GRAFICO_CACHE_MS = 60 * 60_000;
@@ -284,9 +368,102 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
   });
 
   r.get('/perfis/:id/resumos', async (req, res) => {
-    const { perfil, hoje } = await perfilDo(req);
+    const { perfil, perfis, hoje } = await perfilDo(req);
     const dia = diaDoPedido(req, hoje);
-    res.json(montarResumos({ perfil, dia, ...(await dados.de31(perfil, dia)) }));
+    const agoraMs = agora().getTime();
+    const relatoriosDe = async () => {
+      if (relatoriosCache && agoraMs - relatoriosCache.em < RELATORIOS_CACHE_MS) return relatoriosCache.valor;
+      const valor = dados.relatorios ? await dados.relatorios(perfil).catch((e) => (console.warn('[api] relatórios do Drive:', e?.message || e), null)) : null;
+      if (valor) relatoriosCache = { em: agoraMs, valor };
+      return valor;
+    };
+    const [d31, relatorios] = await Promise.all([dados.de31(perfil, dia), relatoriosDe()]);
+    res.json(montarResumos({ perfil, dia, ...d31, relatorios, termosLocal: termosDeLugar(perfis) }));
+  });
+
+  /** Fase 4: série por dia (kcal, gasto, peso, massa magra, sono, passos) de [de, ate], ≤ 92 dias, e a faixa da meta. */
+  r.get('/perfis/:id/dias', async (req, res) => {
+    const { perfil, hoje } = await perfilDo(req);
+    if (req.query.de == null || req.query.de === '') throw erroApi(400, 'pedido_invalido', 'de é obrigatório (YYYY-MM-DD)');
+    const ate = diaValido(req.query.ate, hoje, { atras: 732, frente: 0, rotulo: 'ate' });
+    const de = diaValido(req.query.de, hoje, { atras: 732, frente: 0, rotulo: 'de' });
+    if (de > ate) throw erroApi(400, 'intervalo_invalido', 'de depois de ate');
+    if (diasAnteriores(ate, 92)[0] > de) throw erroApi(400, 'intervalo_invalido', 'no máximo 92 dias por pedido');
+    const d = await dados.diasEntre(perfil, de, ate);
+    const meta = gastoAdaptativo({ refeicoes: d.base?.refeicoes || [], pesagens: d.base?.pesagens || [], perfil, dia: ate, gastos: perfil.relogio?.gastos }).alvo;
+    res.json(montarDias({ perfil, de, ate, refeicoes: d.refeicoes, pesagens: d.pesagens, saude: d.saude, meta }));
+  });
+
+  /** Fase 4: o último plano da semana que a Nutri mandou pra pessoa. */
+  r.get('/perfis/:id/plano', async (req, res) => {
+    const { perfil, perfis } = await perfilDo(req);
+    res.json(montarPlano(await dados.planoDe(perfil), termosDeLugar(perfis)));
+  });
+
+  /** Fase 4: sugestão da IA pra próxima refeição (ou pro ?slot=), guardada 1 h; conta no limite de análises por hora. */
+  r.get('/perfis/:id/sugestao-refeicao', async (req, res) => {
+    const { perfil, perfis, hoje, hora } = await perfilDo(req);
+    const pedido = req.query.slot == null || req.query.slot === '' ? null : String(req.query.slot);
+    if (pedido && !['cafe', 'lanche_manha', 'almoco', 'lanche', 'jantar', 'ceia'].includes(pedido)) throw erroApi(400, 'pedido_invalido', 'slot inválido');
+    const agoraMs = agora().getTime();
+    const fresca = (chave) => {
+      const p = sugestoesProntas.get(chave);
+      return p && agoraMs - p.em < SUGESTAO_CACHE_MS ? p.corpo : null;
+    };
+    // com ?slot= a chave já é conhecida: o cache responde antes de qualquer consulta
+    if (pedido) {
+      const c = fresca(`${perfil._id}|${hoje}|${pedido}`);
+      if (c) return res.json(await c);
+    }
+    const { refeicoes, pesagens } = await dados.registrosSugestao(perfil, hoje);
+    const padrao = padraoAlimentar(refeicoes.filter((x) => x.dia < hoje), { periodoDias: 29 });
+    const deHoje = refeicoes.filter((x) => x.dia === hoje);
+    const { slot, hora: horaSlot } = pedido ? { slot: pedido, hora: horaDoSlot(padrao.slots, pedido) } : proximoSlot({ slots: padrao.slots, registradosHoje: deHoje.map((x) => x.slot), horaAgora: hora });
+    const chave = `${perfil._id}|${hoje}|${slot}`;
+    const pronta = fresca(chave);
+    if (pronta) return res.json(await pronta);
+    if (!podeSugerirPara(String(perfil._id), agoraMs)) throw erroApi(429, 'muitas_analises', 'muitas sugestões na última hora; tente mais tarde');
+    if (!podeAnalisar()) throw erroApi(429, 'muitas_analises', 'muitas análises na última hora; tente mais tarde');
+    const faixa = gastoAdaptativo({ refeicoes, pesagens, perfil, dia: hoje, gastos: perfil.relogio?.gastos }).alvo;
+    const comido = deHoje.reduce((s, x) => s + (Number(x.estimativa?.kcal) || 0), 0);
+    const restam = faixa ? (faixa.min + faixa.max) / 2 - comido : null;
+    const p = padrao.slots[slot];
+    const termos = termosDeLugar(perfis);
+    const gerar = async () => {
+    const ctx = await dados.contextoSugestao(perfil, hoje);
+    const resposta = await ia
+      .sugerirRefeicao({
+        perfil,
+        slot,
+        nomeSlot: nomeDoSlotApi(slot),
+        hora: horaSlot,
+        horaAgora: hora,
+        restam,
+        faixa,
+        padraoSlot: p ? `${p.itens.join(', ')}${p.kcal ? ` (em média ${p.kcal} kcal)` : ''}` : '',
+        registradasHoje: deHoje.map((x) => `${nomeDoSlotApi(x.slot)} ${x.horaLocal || x.hora || ''}: ${x.descricao || x.resumo || ''}${x.estimativa?.kcal ? ` (${Math.round(x.estimativa.kcal)} kcal)` : ''}`).join(' · '),
+        despensa: ctx.despensa,
+        agenda: tirarLocalizacao(ctx.agenda || '', termos),
+        lugares: ctx.lugares,
+        eventos: (ctx.eventos || []).map((e) => `${e.hora ? `${e.hora} ` : ''}${e.titulo} (${e.tipo})${e.nota ? ` — ${e.nota}` : ''}`).join('; '),
+        humor: ctx.humor ? `humor ${ctx.humor.humor}/5${ctx.humor.energia ? `, energia ${ctx.humor.energia}/5` : ''}${ctx.humor.sono ? `, sono ${ctx.humor.sono}/5` : ''}` : '',
+        persona: ctx.persona,
+        dia: hoje,
+      })
+      .catch((e) => {
+        console.error('[api] sugestão de refeição falhou:', e?.message || e);
+        throw erroApi(503, 'ia_indisponivel', 'a Nutri não conseguiu pensar na refeição agora; tente de novo em instantes');
+      });
+    const corpo = montarSugestaoRefeicao({ slot, hora: horaSlot, restam, geradaEm: agora().toISOString(), resposta, termosLocal: termos });
+    // sem opção que sobreviva ao filtro: não é resposta (e não fica no cache)
+    if (!corpo.opcoes.length) throw erroApi(503, 'ia_indisponivel', 'a Nutri não conseguiu pensar na refeição agora; tente de novo em instantes');
+    return corpo;
+    };
+    const promessa = gerar();
+    sugestoesProntas.set(chave, { corpo: promessa, em: agoraMs });
+    promessa.catch(() => sugestoesProntas.delete(chave)); // falha não fica guardada
+    for (const [k, v] of sugestoesProntas) if (agoraMs - v.em >= SUGESTAO_CACHE_MS) sugestoesProntas.delete(k);
+    res.json(await promessa);
   });
 
   r.get('/integracoes', async (_req, res) => {
