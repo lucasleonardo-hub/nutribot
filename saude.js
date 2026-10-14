@@ -214,8 +214,79 @@ export function recuperacao(atividades, hoje) {
     status,
     hrvMedia: hrvMedia ? Math.round(hrvMedia) : null,
     hrvUltimo: hrvUltimo?.hrv || null,
+    hrvBaixo: Boolean(hrvBaixo), // só a HRV do MESMO dia do último batimento, abaixo de 80% da média
     frase: frase + (hrvBaixo ? ` HRV ${hrvUltimo.hrv} ms bem abaixo da sua média (${Math.round(hrvMedia)}): reforça o sinal de estresse.` : ''),
     curta: curta + (hrvBaixo ? `, HRV baixa` : ''),
+  };
+}
+
+// ============================================================
+// Energia do dia (card do app): uma nota 0-100 a partir do que o relógio já manda
+// ============================================================
+const SONO_CHEIO_MIN = 450; // 7h30 ou mais = sono cheio (100)
+const SONO_VAZIO_MIN = 240; // 4h ou menos = 0
+const SONO_CURTO_MIN = 390; // menos de 6h30 é "sono curto" (o mesmo corte do aviso da tendência e da leitura de força)
+const PESOS_ENERGIA = { sono: 0.4, recuperacao: 0.35, carga: 0.25 };
+const limitar = (x) => Math.max(0, Math.min(100, x));
+
+/**
+ * Puro. Energia do dia (0-100) pro app: sono da noite que terminou em `dia` (40%), recuperação pelo batimento de repouso
+ * contra a média de 14 dias (35%, a mesma conta de `recuperacao`) e carga de ontem (25%, invertida: ontem pesado = menos
+ * energia hoje). Cada componente sai em 0-100: `sono` e `recuperacao` quanto maior melhor; `carga` quanto maior, mais pesado
+ * foi ontem (treinos em minutos, caminhada pela metade, mais os passos acima de 10 mil; 200 min-equivalentes = 100).
+ * Componente sem dado fica null e os pesos dos outros são redistribuídos; sem sono e sem batimento (sem relógio) = null.
+ * Batimento só vale se a última medição for de hoje ou de ontem. Não entra em conta de calorias: é leitura de prontidão.
+ * @returns {{ nota, sono, recuperacao, carga, texto } | null}
+ */
+export function energiaDoDia({ sonos = [], atividades = [], dia } = {}) {
+  if (!dia) return null;
+  const noite = (sonos || []).find((s) => s?.dia === dia && Number(s.total) > 0) || null;
+  const sono = noite ? limitar(((Number(noite.total) - SONO_VAZIO_MIN) / (SONO_CHEIO_MIN - SONO_VAZIO_MIN)) * 100) : null;
+
+  const rec = recuperacao(atividades, dia);
+  const recente = rec && rec.dias[0] && rec.dias[0].dia >= diasAtras(dia, 1);
+  let recup = null;
+  if (recente) {
+    // −5 bpm (ou menos) contra a média = 100; +8 bpm (ou mais) = 0; acima do normal há 2+ dias segura em 40; HRV baixa tira 15
+    recup = limitar(100 - ((rec.delta + 5) * 100) / 13);
+    if (rec.status === 'acima') recup = Math.min(recup, 40);
+    // HRV baixa só conta se for do mesmo dia do batimento (revisão M7: uma HRV velha baixava a energia de hoje)
+    if (rec.hrvBaixo) recup = Math.max(0, recup - 15);
+  }
+
+  const ontem = (atividades || []).find((a) => a?.dia === diasAtras(dia, 1)) || null;
+  let carga = null;
+  if (ontem) {
+    const treinoMin = (ontem.treinos || []).reduce((s, t) => s + (Number(t.min) > 0 ? Number(t.min) : 30) * (/walk|caminh/i.test(t.nome || '') ? 0.5 : 1), 0);
+    const passosExtra = Math.max(0, (Number(ontem.passos) || 0) - 10000) / 150;
+    carga = limitar((treinoMin + passosExtra) * 0.5);
+  }
+
+  if (sono == null && recup == null) return null;
+  const partes = [
+    [sono, PESOS_ENERGIA.sono],
+    [recup, PESOS_ENERGIA.recuperacao],
+    [carga == null ? null : 100 - carga, PESOS_ENERGIA.carga],
+  ].filter(([v]) => v != null);
+  const soma = partes.reduce((a, [, p]) => a + p, 0);
+  const nota = Math.round(partes.reduce((a, [v, p]) => a + v * p, 0) / soma);
+
+  const frases = [];
+  if (noite) frases.push(Number(noite.total) >= SONO_CURTO_MIN ? `dormiu ${hm(Number(noite.total))}` : `sono curto (${hm(Number(noite.total))})`);
+  if (recente) {
+    if (rec.status === 'acima') frases.push(`batimento de repouso acima do normal há ${rec.diasAcima} dias (${rec.ultimo} bpm, média ${rec.media14})`);
+    else if (rec.status === 'abaixo') frases.push(`batimento de repouso abaixo da média (${rec.ultimo} bpm): recuperação boa`);
+    else frases.push(`batimento de repouso na média (${rec.ultimo} bpm)`);
+  }
+  if (carga != null) frases.push(carga >= 60 ? 'ontem foi pesado' : carga <= 20 ? 'ontem foi leve' : 'ontem foi moderado');
+  const juntas = frases.length > 1 ? `${frases.slice(0, -1).join(', ')} e ${frases[frases.length - 1]}` : frases[0];
+  const rotulo = nota >= 70 ? 'Energia boa' : nota >= 45 ? 'Energia média' : 'Energia baixa';
+  return {
+    nota,
+    sono: sono == null ? null : Math.round(sono),
+    recuperacao: recup == null ? null : Math.round(recup),
+    carga: carga == null ? null : Math.round(carga),
+    texto: `${rotulo}: ${juntas}.`,
   };
 }
 

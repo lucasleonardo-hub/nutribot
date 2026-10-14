@@ -1,4 +1,4 @@
-package br.nutribot.relogio
+package br.nutribot.relogio.legado
 
 import android.content.Context
 

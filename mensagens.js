@@ -38,6 +38,7 @@ export const falaDeTreino = (t) => RE_TREINO.test(String(t || ''));
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 import { notaDeAtraso, atrasoEmMinutos, ATRASO_DESCULPAS_MIN, RESGATE_IDADE_MAX_H } from './retomada.js';
+import { comandoApp } from './api-auth.js';
 
 const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood após o bot voltar do sleep)
 // Pedido de desculpas pela demora: uma vez por "volta" (não em cada mensagem atrasada do mesmo lote)
@@ -544,6 +545,14 @@ async function tratarPrivado(msg) {
     const cmd = texto.toLowerCase().split(/\s+/)[0];
     if (cmd === '!resumo') {
       await enviar(jidPrivado, 'O !resumo fecha o dia e manda no GRUPO. Se for pra valer, roda lá.', msg, { rapido: true });
+      return;
+    }
+    // app NutriBot: "!app" gera o código de pareamento (6 dígitos, 10 min, uso único) e "!app sair" revoga os aparelhos.
+    // Só aqui no privado do administrador: o código nunca passa pelo grupo nem pelo log.
+    if (cmd === '!app') {
+      console.log(`[privado] !app${/\bsair\b/i.test(texto) ? ' sair' : ''} do administrador`);
+      const resposta = await comandoApp(texto).catch((e) => `Não consegui agora (${String(e.message).slice(0, 80)}). Tenta de novo em instantes.`);
+      await enviar(jidPrivado, resposta, msg, { rapido: true });
       return;
     }
     console.log(`[privado] comando do administrador: ${texto.slice(0, 60)}`);

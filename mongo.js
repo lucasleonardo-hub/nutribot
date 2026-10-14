@@ -293,8 +293,10 @@ export async function apagarRefeicaoEm({ jid, dia, slot, minutos }) {
   return r.deletedCount || 0;
 }
 
-export async function refeicoesDesde(jids, diaInicial) {
-  return colecao('refeicoes').find({ jid: { $in: jids }, dia: { $gte: diaInicial } }).sort({ dia: 1, minutos: 1 }).toArray();
+/** Refeições desde um dia (e até `diaFinal`, opcional: a API do app consulta janelas fechadas). */
+export async function refeicoesDesde(jids, diaInicial, diaFinal = null) {
+  const dia = diaFinal ? { $gte: diaInicial, $lte: diaFinal } : { $gte: diaInicial };
+  return colecao('refeicoes').find({ jid: { $in: jids }, dia }).sort({ dia: 1, minutos: 1 }).toArray();
 }
 
 export async function refeicoesDoDia(dia) {
@@ -334,8 +336,9 @@ export async function ultimaPesagem(jids) {
 }
 
 /** Pesagens desde um dia, UMA por dia (as fontes do mesmo dia consolidadas em progresso.pesagensPorDia), em ordem de data. */
-export async function pesagensDesde(jids, diaInicial) {
-  return pesagensPorDia(await colecao('pesagens').find({ jid: { $in: jids }, dia: { $gte: diaInicial } }).sort({ dia: 1 }).toArray());
+export async function pesagensDesde(jids, diaInicial, diaFinal = null) {
+  const dia = diaFinal ? { $gte: diaInicial, $lte: diaFinal } : { $gte: diaInicial };
+  return pesagensPorDia(await colecao('pesagens').find({ jid: { $in: jids }, dia }).sort({ dia: 1 }).toArray());
 }
 
 // ---------- Diário pessoal da Nutri (ela escreve toda noite; só acrescenta) ----------

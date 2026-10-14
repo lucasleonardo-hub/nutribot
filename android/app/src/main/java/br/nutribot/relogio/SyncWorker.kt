@@ -1,4 +1,9 @@
 package br.nutribot.relogio
+import br.nutribot.relogio.legado.Cupom
+import br.nutribot.relogio.legado.Envio
+import br.nutribot.relogio.legado.Leitor
+import br.nutribot.relogio.legado.Local
+import br.nutribot.relogio.legado.Prefs
 
 import android.content.Context
 import androidx.work.BackoffPolicy
@@ -24,6 +29,10 @@ import java.util.concurrent.TimeUnit
 /**
  * Lê o Health Connect e manda pro bot. Roda a cada 15 min (mínimo do Android pra trabalho periódico) com internet,
  * e na hora quando a pessoa toca em "Sincronizar agora". Primeiro envio leva 14 dias; os seguintes, 3 (o servidor funde).
+ *
+ * 2.0: este arquivo e o NotaWorker NÃO mudam de pacote. O WorkManager guarda no banco dele o nome completo da classe
+ * (br.nutribot.relogio.SyncWorker) do trabalho periódico já agendado pelo Relógio 1.x; se a classe mudar de lugar, o trabalho
+ * agendado falha ao instanciar depois da atualização por cima. O resto do Relógio antigo foi para o pacote legado.
  */
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {

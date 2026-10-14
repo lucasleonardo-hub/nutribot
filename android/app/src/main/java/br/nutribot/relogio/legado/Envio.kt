@@ -1,4 +1,5 @@
-package br.nutribot.relogio
+package br.nutribot.relogio.legado
+import br.nutribot.relogio.BuildConfig
 
 import org.json.JSONObject
 import java.net.HttpURLConnection

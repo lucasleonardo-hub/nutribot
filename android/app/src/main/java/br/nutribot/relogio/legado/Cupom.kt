@@ -1,4 +1,5 @@
-package br.nutribot.relogio
+package br.nutribot.relogio.legado
+import br.nutribot.relogio.BuildConfig
 
 import android.annotation.SuppressLint
 import android.os.Handler

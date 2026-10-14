@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tema da janela (antes do Compose desenhar): fundo lavanda, sem barra de ação. As cores do app ficam em ui/tema/Tema.kt. -->
+    <style name="Tema.NutriBot" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/lavanda</item>
+        <item name="android:colorPrimary">@color/acai</item>
+        <item name="android:colorAccent">@color/acai</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

@@ -8,3 +8,10 @@ oauth-client.json
 
 # relatórios da suíte comportamental (gerados localmente)
 avaliacao/relatorios/
+
+# app Android: SDK local e saídas do Gradle
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/
+android/.kotlin/

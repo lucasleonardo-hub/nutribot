@@ -42,6 +42,8 @@ import { pensarTodos } from './pensamentos.js';
 import { tokensRelogio } from './relogio.js';
 import { enviar as enviarZap } from './whatsapp.js';
 import { lembrar } from './dia.js';
+import { criarApi } from './api.js';
+import { garantirIndicesApp } from './api-auth.js';
 
 // ============================================================
 // Configuração
@@ -193,7 +195,11 @@ app.get('/logout', async (req, res) => {
     res.status(500).send('erro: ' + e.message);
   }
 });
+// API v1 do app NutriBot (Android): só leitura, token de aparelho (pareado com !app no privado do admin). O express.json
+// e os erros em { erro: { codigo, mensagem } } valem só dentro de /api/v1; as rotas acima não mudam.
+app.use('/api/v1', criarApi());
 app.listen(PORT, () => console.log(`[http] servidor na porta ${PORT} (GET /, /privacidade, /ping, /qr, /estado, /status?token=, /logout?token=)`));
+console.log('[http] API do app em /api/v1 (POST /parear; GET /perfis, /perfis/:id/{hoje,refeicoes,progresso,corpo,nutri,resumos}, /integracoes)');
 
 // Anti-sleep interno: o próprio bot bate na URL pública. Combine com um monitor externo (UptimeRobot / cron-job.org)
 // pra cobrir o intervalo em que o processo está reiniciando.
@@ -222,6 +228,7 @@ async function checarDrive() {
   try {
     await conectarMongo();
     await garantirIndices();
+    await garantirIndicesApp(); // aparelhos e códigos de pareamento do app (API v1)
     await garantirIndiceVetorial(); // memória de longo prazo por significado (Atlas Vector Search, grátis no M0)
     iniciarDrive();
     await carregarConhecimento().catch((e) => console.error('[conhecimento] falha ao carregar:', e.message));

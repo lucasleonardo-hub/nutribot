@@ -2,10 +2,9 @@
 # Ninguém precisa de Android Studio: o download fica em https://github.com/<repo>/releases/tag/relogio
 # Segredos: RELOGIO_KEYSTORE_B64 (keystore PKCS12 em base64) e RELOGIO_KEYSTORE_PASS (senha), pra assinatura ser sempre a mesma.
 name: android-relogio
+# Desde 14/10 (app novo, release "app"): só manual. android/ agora é o app novo, e a release "relogio" fica com o último
+# Relógio 1.6, que o Heitor e a Ale continuam usando (decisão D1 do dono). Publicar aqui de novo trocaria o app deles.
 on:
-  push:
-    branches: [main]
-    paths: ['android/**', '.github/workflows/android.yml']
   workflow_dispatch:
 permissions:
   contents: write

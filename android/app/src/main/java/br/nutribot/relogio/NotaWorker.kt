@@ -1,4 +1,9 @@
 package br.nutribot.relogio
+import br.nutribot.relogio.legado.Cupom
+import br.nutribot.relogio.legado.Envio
+import br.nutribot.relogio.legado.Leitor
+import br.nutribot.relogio.legado.Local
+import br.nutribot.relogio.legado.Prefs
 
 import android.content.Context
 import androidx.work.BackoffPolicy

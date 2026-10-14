@@ -1,0 +1,48 @@
+# Compila o app NutriBot 2.0 (android/, branch app-fase1) e publica o APK assinado na release "app" do repositório.
+# O app novo substitui o Relógio SÓ no celular do dono (mesmo applicationId e mesma chave): a release "relogio" fica com
+# o Relógio 1.6 das outras pessoas (o android.yml virou só manual).
+# Segredos: RELOGIO_KEYSTORE_B64 (keystore PKCS12 em base64) e RELOGIO_KEYSTORE_PASS (senha), os mesmos do Relógio.
+name: android-app
+on:
+  push:
+    branches: [app-fase1, main]
+    paths: ['android/**', '.github/workflows/android-app.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.13
+      - name: keystore
+        env:
+          B64: ${{ secrets.RELOGIO_KEYSTORE_B64 }}
+        run: |
+          test -n "$B64" || { echo "segredo RELOGIO_KEYSTORE_B64 ausente"; exit 1; }
+          echo "$B64" | base64 -d > /tmp/relogio.p12
+      - name: build
+        env:
+          RELOGIO_KEYSTORE: /tmp/relogio.p12
+          RELOGIO_KEYSTORE_PASS: ${{ secrets.RELOGIO_KEYSTORE_PASS }}
+        run: gradle -p android --no-daemon assembleRelease
+      - name: renomear
+        run: cp android/app/build/outputs/apk/release/app-release.apk nutribot-app.apk && ls -la nutribot-app.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nutribot-app-apk
+          path: nutribot-app.apk
+      - name: release "app" (sempre a versão mais nova no mesmo link)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view app >/dev/null 2>&1 || gh release create app --prerelease --latest=false --target app-fase1 --title "App NutriBot (fase 1, só o celular do dono)" --notes "APK do app NutriBot 2.0. Instala por cima do Relógio (mesma assinatura) e mantém permissões, sincronização, localização e cupom. Para entrar: mande !app no privado do bot e digite o código de 6 dígitos."
+          gh release upload app nutribot-app.apk --clobber

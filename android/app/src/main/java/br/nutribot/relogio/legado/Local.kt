@@ -1,4 +1,4 @@
-package br.nutribot.relogio
+package br.nutribot.relogio.legado
 
 import android.Manifest
 import android.content.Context
@@ -75,6 +75,7 @@ object Local {
     fun lista(vararg pontos: JSONObject?): JSONArray = JSONArray().apply { pontos.filterNotNull().forEach { put(it) } }
 
     /** Fix novo na prioridade pedida; null se não vier dentro do prazo. */
+    @android.annotation.SuppressLint("MissingPermission") // quem chama confere Local.temPermissao antes (como na 1.6)
     private suspend fun atual(cliente: FusedLocationProviderClient, prioridade: Int, prazoMs: Long): Location? = withTimeoutOrNull(prazoMs) {
         suspendCancellableCoroutine<Location?> { cont ->
             val cts = CancellationTokenSource()
@@ -86,6 +87,7 @@ object Local {
     }
 
     /** Última posição conhecida pelo sistema (pode ser velha; quem chama confere a idade). */
+    @android.annotation.SuppressLint("MissingPermission") // idem: permissão conferida por quem chama
     private suspend fun ultima(cliente: FusedLocationProviderClient): Location? = suspendCancellableCoroutine { cont ->
         cliente.lastLocation
             .addOnSuccessListener { l -> if (cont.isActive) cont.resume(l) }
