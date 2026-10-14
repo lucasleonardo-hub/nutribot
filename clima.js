@@ -107,12 +107,18 @@ export async function coordenadasDe(cidade) {
 // cidade. Falhou (sem rede, limite, resposta estranha) = null, e quem chama mantém o fuso atual.
 const cacheFusos = new Map(); // "lat,lon" arredondados -> fuso
 const AREA_FUSO = 0.25;
+// Pausa depois de falha na rede de verdade (14/10: o Open-Meteo devolveu 429 pro IP compartilhado do Render no 1º envio):
+// 1 h, dobrando até 12 h, pra não bater de novo a cada 15 min. Só vale pra busca real (os testes injetam `buscar`).
+let pausaFusoAte = 0;
+let pausaFusoMin = 60;
 export async function fusoDasCoordenadas(lat, lon, { buscar = fetch } = {}) {
   const la = Number(lat);
   const lo = Number(lon);
   if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
   const chave = `${Math.round(la / AREA_FUSO)},${Math.round(lo / AREA_FUSO)}`;
   if (cacheFusos.has(chave)) return cacheFusos.get(chave);
+  const real = buscar === fetch;
+  if (real && Date.now() < pausaFusoAte) return null;
   try {
     const url = `${PREV}?latitude=${la.toFixed(2)}&longitude=${lo.toFixed(2)}&timezone=auto&forecast_days=1`;
     const r = await buscar(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -121,9 +127,16 @@ export async function fusoDasCoordenadas(lat, lon, { buscar = fetch } = {}) {
     const fuso = fusoValido(d?.timezone) && d.timezone !== 'GMT' ? d.timezone : null;
     if (!fuso) throw new Error(`resposta sem fuso válido (${String(d?.timezone).slice(0, 40)})`);
     cacheFusos.set(chave, fuso);
+    if (real) pausaFusoMin = 60;
     return fuso;
   } catch (e) {
-    console.warn('[clima] fuso das coordenadas falhou:', String(e.message).slice(0, 100));
+    if (real) {
+      console.warn(`[clima] fuso das coordenadas falhou: ${String(e.message).slice(0, 100)} (nova tentativa em ${pausaFusoMin} min)`);
+      pausaFusoAte = Date.now() + pausaFusoMin * 60_000;
+      pausaFusoMin = Math.min(pausaFusoMin * 2, 720);
+    } else {
+      console.warn('[clima] fuso das coordenadas falhou:', String(e.message).slice(0, 100));
+    }
     return null;
   }
 }

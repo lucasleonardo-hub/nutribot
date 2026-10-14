@@ -6,7 +6,7 @@
 
 import { colecao, listarPerfis, salvarPerfil } from './mongo.js';
 import { aplicarDadosSaude } from './saude.js';
-import { fusoDe, decidirFuso, marcaDeTempo } from './util.js';
+import { fusoDe, fusoValido, decidirFuso, marcaDeTempo } from './util.js';
 import { fusoDasCoordenadas } from './clima.js';
 import { preferirPesagem } from './progresso.js';
 import { receberLocais, descreverSituacao } from './lugares.js';
@@ -175,8 +175,11 @@ export async function receberEnvio({ token, corpo, hoje, pastaDe, lembrar }) {
     if (local?.recebidos) console.log(`[lugares] ${perfil.nome}: ${local.recebidos} ponto(s); ${descreverSituacao(local.situacao)}`);
     // saiu do mercado/padaria depois de 10 min+ lá: pergunta se comprou algo pra despensa (fora do caminho da resposta ao app)
     if (local?.evento?.evento === 'saiu_de_compra') perguntarCompra(perfil, local.evento.lugar, { lembrar }).catch((e) => console.warn('[despensa] pergunta:', e.message));
-    // o fuso da pessoa acompanha a localização (viagem): fora do caminho da resposta ao app; falhou, fica o fuso de antes
-    atualizarFusoPelaLocalizacao(perfil, corpo.locais).catch((e) => console.warn('[fuso] pela localização:', e.message));
+  }
+  // o fuso da pessoa acompanha a viagem: primeiro o do próprio celular (o Android troca sozinho pela rede e o app já manda
+  // `fuso` em todo envio), e só sem ele o das coordenadas; fora do caminho da resposta ao app; falhou, fica o fuso de antes
+  if (corpo.fuso || (Array.isArray(corpo.locais) && corpo.locais.length)) {
+    atualizarFusoPelaLocalizacao(perfil, corpo.locais || [], { fusoCelular: corpo.fuso }).catch((e) => console.warn('[fuso] pela localização:', e.message));
   }
   const hojeAt = dados.atividades.find((a) => a.dia === hoje);
   const ultimoPeso = dados.pesos[dados.pesos.length - 1];
@@ -196,24 +199,28 @@ export async function receberEnvio({ token, corpo, hoje, pastaDe, lembrar }) {
 
 /**
  * O fuso da pessoa pela localização do celular (13/10; decisão do dono: "o app e a bot sabem pela minha localização" quando
- * ele for visitar o Heitor). O ponto mais recente (precisão até 500 m) vira uma leitura de fuso no Open-Meteo
- * (clima.fusoDasCoordenadas, grátis, com cache); util.decidirFuso só troca quando o fuso novo se mantém (2 leituras com 30+
+ * ele for visitar o Heitor). A leitura é o fuso que o próprio celular informa (`fuso` do envio, o Android troca sozinho pela
+ * rede; desde 14/10, porque o Open-Meteo devolveu 429 pro IP do Render) e, sem ele, o do ponto mais recente (precisão até
+ * 500 m) no Open-Meteo (clima.fusoDasCoordenadas, grátis, com cache e pausa após falha); util.decidirFuso só troca quando o fuso novo se mantém (2 leituras com 30+
  * min entre elas) e ignora fuso equivalente (Bahia = São Paulo). Na troca grava `fuso`, o histórico curto `fusos: [{ fuso,
  * desde }]` (10 últimos) e a data em `atualizacoes.fuso`; enquanto não troca, só a pendência (`fusoPendente`), e só quando ela
  * muda. Sem rede ou sem leitura: nada muda. Quem não usa o app (Heitor) fica com o fuso do cadastro.
  * @returns {Promise<{ trocou: boolean, de?: string, para?: string, pendente?: object|null } | null>}
  */
-export async function atualizarFusoPelaLocalizacao(perfil, locais, { buscar, salvar = salvarPerfil } = {}) {
+export async function atualizarFusoPelaLocalizacao(perfil, locais, { buscar, salvar = salvarPerfil, fusoCelular, agora = Date.now() } = {}) {
   if (!perfil?.jids?.length) return null;
+  // fuso que o próprio celular informa (ZoneId do Android): vale como leitura direta, sem consulta externa; "GMT"/"UTC"
+  // costumam ser celular sem fuso configurado, então não contam
+  const doCelular = fusoValido(fusoCelular) && !/^(GMT|UTC|Etc\/)/.test(fusoCelular) ? fusoCelular : null;
   const pontos = (locais || [])
     .map((l) => ({ lat: Number(l?.lat), lon: Number(l?.lon), acc: l?.acc == null ? null : Number(l.acc), ts: Date.parse(l?.ts || l?.hora || '') }))
     .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && (p.acc == null || p.acc <= 500))
     .sort((a, b) => (a.ts || 0) - (b.ts || 0));
   const ultimo = pontos[pontos.length - 1];
-  if (!ultimo) return null;
-  const leitura = await fusoDasCoordenadas(ultimo.lat, ultimo.lon, buscar ? { buscar } : {});
+  if (!doCelular && !ultimo) return null;
+  const leitura = doCelular || (await fusoDasCoordenadas(ultimo.lat, ultimo.lon, buscar ? { buscar } : {}));
   if (!leitura) return null;
-  const em = Number.isFinite(ultimo.ts) ? new Date(ultimo.ts).toISOString() : new Date().toISOString();
+  const em = doCelular || !Number.isFinite(ultimo.ts) ? new Date(agora).toISOString() : new Date(ultimo.ts).toISOString();
   const atual = fusoDe(perfil);
   const d = decidirFuso({ atual, pendente: perfil.fusoPendente || null, leitura, em });
   if (d.trocar) {

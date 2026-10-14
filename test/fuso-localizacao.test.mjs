@@ -125,3 +125,31 @@ test('sem rede, sem ponto bom ou sem perfil: mantém tudo e não grava', async (
   await atualizarFusoPelaLocalizacao({ ...p, fusoPendente: null }, [ponto(38.70, -9.10, 50), ponto(-23.55, -46.63, 10)], lisboa);
   assert.equal(lisboa.gravados[0].fusoPendente.desde, iso(50));
 });
+
+test('fuso do próprio celular (14/10): vale sem consultar o Open-Meteo, mesmo sem pontos de localização', async () => {
+  const d = dubles('America/Sao_Paulo'); // se consultasse, viria o fuso errado
+  const lucas = { nome: 'Lucas', jids: ['l@lid'], fuso: 'America/Sao_Paulo', atualizacoes: { peso: '2026-10-19' } };
+  let r = await atualizarFusoPelaLocalizacao(lucas, [], { ...d, fusoCelular: 'Europe/Lisbon', agora: T0 });
+  assert.equal(r.trocou, false);
+  assert.equal(r.pendente.fuso, 'Europe/Lisbon');
+  assert.equal(d.chamadas, 0);
+  lucas.fusoPendente = r.pendente;
+  r = await atualizarFusoPelaLocalizacao(lucas, [ponto(-23.55, -46.63, 31)], { ...d, fusoCelular: 'Europe/Lisbon', agora: T0 + 31 * 60_000 });
+  assert.equal(r.trocou, true);
+  assert.equal(r.para, 'Europe/Lisbon');
+  assert.equal(d.chamadas, 0); // o celular manda mais que o ponto: nem consulta
+  assert.equal(d.gravados.at(-1).fuso, 'Europe/Lisbon');
+});
+
+test('fuso do celular "GMT"/"UTC" ou inválido não conta: cai nas coordenadas (ou não faz nada sem elas)', async () => {
+  const d = dubles('Europe/Lisbon');
+  const p = { nome: 'Lucas', jids: ['l@lid'], fuso: 'America/Sao_Paulo' };
+  assert.equal(await atualizarFusoPelaLocalizacao(p, [], { ...d, fusoCelular: 'GMT' }), null);
+  assert.equal(await atualizarFusoPelaLocalizacao(p, [], { ...d, fusoCelular: 'Etc/UTC' }), null);
+  assert.equal(await atualizarFusoPelaLocalizacao(p, [], { ...d, fusoCelular: 'Marte/Olimpo' }), null);
+  assert.equal(d.chamadas, 0);
+  // ponto do Porto: área que nenhum teste anterior deixou no cache de fusos do clima.js
+  const r = await atualizarFusoPelaLocalizacao(p, [ponto(41.15, -8.61, 0)], { ...d, fusoCelular: 'UTC' });
+  assert.equal(r.pendente.fuso, 'Europe/Lisbon');
+  assert.equal(d.chamadas, 1);
+});
