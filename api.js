@@ -16,6 +16,8 @@ import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgre
 import { rotasDeEscrita, escritaPadrao, diaValido, MAX_DIAS_PESAGENS } from './api-escrita.js';
 import { estimarRefeicaoApp } from './gemini.js';
 import { marcaDeTempo, diasAnteriores } from './util.js';
+import { configGrafico, renderizar } from './graficos.js';
+import { gastoAdaptativo } from './resumo.js';
 import { temHevy } from './treino.js';
 import { ehDonoDaAgenda } from './agenda.js';
 import { ATRASO_COBRANCA_MIN } from './cobranca.js';
@@ -132,8 +134,11 @@ function enviarErro(res, status, codigo, mensagem) {
  * Roteador da API v1. `auth` = api-auth.criarAuth (pareamento e token); `dados` = dadosPadrao() ou um dublê; `agora()` o
  * instante (dia e hora de cada pessoa saem dele, no fuso dela); `adminJid` marca o perfil do dono.
  */
-export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita = escritaPadrao(), ia = { estimarRefeicaoApp }, agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda, podeAnalisar } = {}) {
+export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita = escritaPadrao(), ia = { estimarRefeicaoApp }, grafico = { configGrafico, renderizar }, agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda, podeAnalisar } = {}) {
   const r = express.Router();
+  // o PNG do gráfico da Nutri (QuickChart, serviço externo) fica guardado 1 h por pessoa e dia: o app pode pedir à vontade
+  const graficosProntos = new Map(); // `${id}|${dia}|${dias}` -> { png, em }
+  const GRAFICO_CACHE_MS = 60 * 60_000;
   const diagnosticoXff = criarDiagnosticoXff();
   r.use((req, _res, next) => {
     diagnosticoXff(req); // uma vez por processo: quantos endereços o X-Forwarded-For traz (pra acertar API_PROXY_SALTOS)
@@ -253,6 +258,29 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
     if (de > ate) throw erroApi(400, 'intervalo_invalido', 'de depois de ate');
     if (diasAnteriores(ate, MAX_DIAS_PESAGENS)[0] > de) throw erroApi(400, 'intervalo_invalido', `no máximo ${MAX_DIAS_PESAGENS} dias por pedido`);
     res.json({ pesagens: montarPesagens(await dados.pesagensEntre(perfil, de, ate)) });
+  });
+
+  /**
+   * O gráfico que a Nutri manda no !grafico e no resumo de domingo (calorias por dia, gasto, faixa da meta, peso e massa
+   * magra), como PNG: a mesma configGrafico + renderizar do WhatsApp, com os 31 dias do /progresso. ?dias= 7..31 (padrão 30).
+   */
+  r.get('/perfis/:id/grafico.png', async (req, res) => {
+    const { perfil, hoje } = await perfilDo(req);
+    const dias = req.query.dias == null || req.query.dias === '' ? 30 : Number(req.query.dias);
+    if (!Number.isInteger(dias) || dias < 7 || dias > 31) throw erroApi(400, 'pedido_invalido', 'dias entre 7 e 31');
+    const chave = `${perfil._id}|${hoje}|${dias}`;
+    const pronto = graficosProntos.get(chave);
+    const agoraMs = agora().getTime();
+    let png = pronto && agoraMs - pronto.em < GRAFICO_CACHE_MS ? pronto.png : null;
+    if (!png) {
+      const { refeicoes, pesagens } = await dados.de31(perfil, hoje);
+      const alvo = gastoAdaptativo({ refeicoes, pesagens, perfil, dia: hoje, gastos: perfil.relogio?.gastos }).alvo;
+      png = await grafico.renderizar(grafico.configGrafico({ nome: perfil.nome, refeicoes, pesagens, gastos: perfil.relogio?.gastos, alvo, dia: hoje, dias }));
+      if (!png) throw erroApi(503, 'grafico_indisponivel', 'o desenhista do gráfico não respondeu; tente de novo em instantes');
+      graficosProntos.set(chave, { png, em: agoraMs });
+      for (const [k, v] of graficosProntos) if (agoraMs - v.em >= GRAFICO_CACHE_MS) graficosProntos.delete(k);
+    }
+    res.set('Content-Type', 'image/png').set('Cache-Control', 'private, max-age=3600').send(png);
   });
 
   r.get('/perfis/:id/resumos', async (req, res) => {

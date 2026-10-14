@@ -55,6 +55,7 @@ fun TelaResumos(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
             Segmentado(listOf("Semana", "Mês (30 dias)"), aba, { aba = it }, Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp))
         },
     ) { j ->
+        CartaoGraficoNutri(vm, perfil.id)
         val p = j.obj(if (aba == 0) "semana" else "mes")
         if (p == null) {
             Vazio("Ainda não há dados para este período.")

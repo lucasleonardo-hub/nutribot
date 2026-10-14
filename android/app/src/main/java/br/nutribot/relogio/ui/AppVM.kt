@@ -164,7 +164,10 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     fun invalidar(perfilId: String) {
         val prefixo = "/perfis/$perfilId/"
         val rotas = cargas.keys.filter { it.startsWith(prefixo) }
-        viewModelScope.launch(Dispatchers.IO) { rotas.forEach { cache.apagar(it) } }
+        viewModelScope.launch(Dispatchers.IO) {
+            rotas.forEach { cache.apagar(it) }
+            cache.apagar(rotaGrafico(perfilId)) // o gráfico da Nutri guardado também ficou velho
+        }
         rotas.forEach { rota ->
             val f = cargas[rota] ?: return@forEach
             if (f.subscriptionCount.value > 0) {
@@ -174,6 +177,25 @@ class AppVM(app: Application) : AndroidViewModel(app) {
                 buscas.remove(rota)?.cancel()
                 cargas.remove(rota)
             }
+        }
+    }
+
+    /**
+     * Uma imagem da API (2.3: o gráfico da Nutri), em bytes. Devolve a cópia guardada no cacheDir quando tem menos de 1 h;
+     * senão busca (em IO) e guarda. Se a busca falhar e houver uma cópia velha, devolve a velha em vez de lançar.
+     * Lança ErroApi (503 grafico_indisponivel, 401, 404, sem rede) quando não há o que mostrar.
+     */
+    suspend fun imagem(rota: String, forcar: Boolean = false): ByteArray = withContext(Dispatchers.IO) {
+        val guardada = cache.lerBytes(rota)
+        if (!forcar && guardada != null && System.currentTimeMillis() - guardada.salvoEm < UMA_HORA_MS) return@withContext guardada.dados
+        val token = sessao.token ?: throw ErroApi(0, "token_local", "Não consegui ler o acesso guardado. Tente de novo.")
+        try {
+            val bytes = Api.getBytes(sessao.base, rota, token)
+            cache.salvarBytes(rota, bytes)
+            bytes
+        } catch (e: ErroApi) {
+            tratarNaoAutorizado(e)
+            if (guardada != null && !e.naoAutorizado) guardada.dados else throw e
         }
     }
 
@@ -276,6 +298,9 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         /** Hipótese aberta (fase 3): DELETE descarta; a resposta traz o /nutri recalculado. */
         fun rotaHipotese(id: String, hid: String) = "/perfis/$id/nutri/hipoteses/$hid"
         fun rotaResumos(id: String) = "/perfis/$id/resumos"
+        /** O gráfico da Nutri (2.3): PNG 1000×520 dos últimos `dias` dias, o mesmo do `!grafico` e do resumo de domingo. */
+        fun rotaGrafico(id: String, dias: Int = 30) = "/perfis/$id/grafico.png?dias=$dias"
         const val ROTA_INTEGRACOES = "/integracoes"
+        private const val UMA_HORA_MS = 60L * 60 * 1000
     }
 }

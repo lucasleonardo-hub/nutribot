@@ -175,6 +175,41 @@ test('progresso, corpo, nutri, resumos e integrações respondem; nutri sem luga
   assert.equal(i.corpo.perfis.length, 2);
 });
 
+test('grafico.png: o PNG do !grafico com a config do WhatsApp, guardado 1 h por pessoa; 503 quando o desenhista falha; dias 7..31', async () => {
+  const configs = [];
+  let falhar = false;
+  const grafico = {
+    configGrafico: (p) => (configs.push(p), { type: 'bar', nome: p.nome }),
+    renderizar: async () => (falhar ? null : Buffer.from('\x89PNG-de-mentira')),
+  };
+  const app = express();
+  app.use('/g', criarApi({ auth, dados, grafico, agora: () => AGORA, adminJid: 'a@s.whatsapp.net', temHevyDe: () => false, ehDonoDaAgendaDe: () => false }));
+  const srv = await new Promise((ok) => { const s = app.listen(0, '127.0.0.1', () => ok(s)); });
+  const b = `http://127.0.0.1:${srv.address().port}`;
+  try {
+    let r = await fetch(`${b}/g/perfis/${ID}/grafico.png`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'image/png');
+    assert.equal(Buffer.from(await r.arrayBuffer()).toString().includes('PNG-de-mentira'), true);
+    assert.deepEqual([configs.length, configs[0].dias, configs[0].dia, typeof configs[0].nome], [1, 30, '2030-03-29', 'string']);
+    // segundo pedido no mesmo dia: sai do cache (o desenhista não é chamado de novo)
+    r = await fetch(`${b}/g/perfis/${ID}/grafico.png?dias=30`, { headers: { authorization: `Bearer ${token}` } });
+    assert.deepEqual([r.status, configs.length], [200, 1]);
+    // outra janela: desenha de novo
+    r = await fetch(`${b}/g/perfis/${ID}/grafico.png?dias=14`, { headers: { authorization: `Bearer ${token}` } });
+    assert.deepEqual([r.status, configs.length, configs[1].dias], [200, 2, 14]);
+    r = await fetch(`${b}/g/perfis/${ID}/grafico.png?dias=90`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(r.status, 400);
+    falhar = true;
+    r = await fetch(`${b}/g/perfis/${ID}/grafico.png?dias=7`, { headers: { authorization: `Bearer ${token}` } });
+    assert.deepEqual([r.status, (await r.json()).erro.codigo], [503, 'grafico_indisponivel']);
+    r = await fetch(`${b}/g/perfis/${ID}/grafico.png`);
+    assert.equal(r.status, 401);
+  } finally {
+    srv.close();
+  }
+});
+
 test('rota inexistente na API = 404 no formato do contrato; erro inesperado = 500 sem vazar detalhe; banco fora = 503', async () => {
   let r = await json(await pedir('/api/v1/nada'));
   assert.deepEqual([r.status, r.corpo.erro.codigo], [404, 'rota_inexistente']);

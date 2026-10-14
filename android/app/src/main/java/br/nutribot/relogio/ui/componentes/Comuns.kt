@@ -334,12 +334,15 @@ fun Segmentado(opcoes: List<String>, selecionada: Int, aoEscolher: (Int) -> Unit
     }
 }
 
-/** Chip em pílula para escolher uma opção (slot da refeição, tipo de evento, nota de 1 a 5). Alvo de toque de 48 dp. */
+/**
+ * Chip em pílula para escolher uma opção (slot da refeição, tipo de evento, nota de 1 a 5). Alvo de toque de 48 dp.
+ * Com `papel = Role.Switch` vira um liga/desliga (o "Cruzar" do Progresso).
+ */
 @Composable
-fun Chip(texto: String, ativo: Boolean, modifier: Modifier = Modifier, aoTocar: () -> Unit) {
+fun Chip(texto: String, ativo: Boolean, modifier: Modifier = Modifier, papel: Role = Role.RadioButton, aoTocar: () -> Unit) {
     Box(
         modifier.heightIn(min = 48.dp).clip(Formas.Pilula).background(if (ativo) Cores.Acai else Cores.Trilho)
-            .clickable(role = Role.RadioButton, onClick = aoTocar).semantics { selected = ativo }.padding(horizontal = 14.dp, vertical = 10.dp),
+            .clickable(role = papel, onClick = aoTocar).semantics { selected = ativo }.padding(horizontal = 14.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(texto, fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 14.sp, color = if (ativo) Cores.Branco else Cores.LilasTexto, maxLines = 1)
