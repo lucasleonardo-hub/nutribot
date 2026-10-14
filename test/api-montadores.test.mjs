@@ -258,7 +258,7 @@ test('progresso: texto é o textoZap do !progresso; pesagens com as descartadas 
   const p = M.montarProgresso({ perfil, dia: DIA, refeicoes: refs, pesagens: pes });
   const a = await progressoDe(perfil, DIA, { refeicoes: janela31(refs), pesagens: janela31(pes) });
   assert.deepEqual(Object.keys(p), ['pesagens', 'tendencia', 'veredito', 'meta', 'alertas', 'texto']);
-  assert.equal(p.texto, a.zap);
+  assert.equal(p.texto, M.semZap(a.zap, { markdown: true })); // fase 5: o texto do !progresso sem a marcação do WhatsApp (negrito em **)
   assert.equal(p.tendencia.kgSemana, Math.round(a.tendencia.kgSemana * 100) / 100);
   assert.equal(p.tendencia.direcao, a.tendencia.direcao);
   assert.deepEqual(p.tendencia.janelas.map((j) => j.dias), [7, 14, 21, 28]);
@@ -311,7 +311,9 @@ test('corpo: composição das pesagens com gordura (+ documento que não virou p
     sugestoesCarga: [{ id: 's1', exercicio: 'Agachamento', deKg: 80, deReps: 8, paraKg: 82.5, paraReps: 10, feitaEm: somarDias(DIA, -9), status: 'aberta', tentativas: 0 }],
   });
   const c = M.montarCorpo({ perfil, dia: DIA, pesagens: pesagens(), refeicoes: refeicoes(), saude: saude(), treinos, catalogo, temHevy: true });
-  assert.deepEqual(Object.keys(c), ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'medidas']);
+  assert.deepEqual(Object.keys(c), ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'rotina', 'medidas']);
+  assert.ok(Array.isArray(c.rotina));
+  c.rotina.forEach((d) => { confere(d, 'DiaRotina'); d.exercicios.forEach((e) => confere(e, 'ExercicioRotina')); });
   assert.deepEqual(ida(c), c);
   const doc = c.composicao.find((x) => x.fonte === 'documento');
   assert.deepEqual(doc, { dia: '2029-11-20', hora: null, fonte: 'documento', peso: 70, gordura: 17, magra: 58.1, confianca: 'alta' });
@@ -337,7 +339,53 @@ test('corpo: composição das pesagens com gordura (+ documento que não virou p
 
 test('corpo sem Hevy: treino e força null, sem sugestões', () => {
   const c = M.montarCorpo({ perfil: perfilBase(), dia: DIA, pesagens: [], refeicoes: [], temHevy: false });
-  assert.deepEqual(c, { composicao: [], atual: null, ritmo: null, treino: null, forca: null, sugestoesCarga: [], contextoTreino: { energia: null, sonoMin: null, comida: null, texto: 'Sem dados do relógio hoje: siga as sugestões como estão.' }, medidas: [] });
+  assert.deepEqual(c, { composicao: [], atual: null, ritmo: null, treino: null, forca: null, sugestoesCarga: [], contextoTreino: { energia: null, sonoMin: null, comida: null, texto: 'Sem dados do relógio hoje: siga as sugestões como estão.' }, rotina: [], medidas: [] });
+});
+
+test('semZap: tira a marcação do WhatsApp e os emojis; com markdown o negrito vira **; listas com • viram -', () => {
+  assert.equal(M.semZap('🔥 *Estimativa:* 812 kcal _(aprox.)_ ~ok~\n• item'), 'Estimativa: 812 kcal (aprox.) ok\n- item');
+  assert.equal(M.semZap('*Semana boa* 💪\n\n\n• comeu bem\n• dormiu 7h', { markdown: true }), '**Semana boa**\n\n- comeu bem\n- dormiu 7h');
+  assert.equal(M.semZap('peso 2*3 e snake_case ficam'), 'peso 2*3 e snake_case ficam');
+  assert.equal(M.semZap('`!progresso` → veja'), '!progresso → veja');
+  assert.equal(M.semZap(null), null);
+});
+
+test('sugerirCargaExercicio: contexto segura; reps ≥ 10 sobe pelo incremento; subiu na última = repete; sem carga = mantém', () => {
+  const h = (lista) => lista.map(([dia, kg, reps]) => ({ dia, kg, reps }));
+  const s = M.sugerirCargaExercicio({ nome: 'Supino reto', historico: h([['2030-03-01', 50, 8], ['2030-03-08', 50, 9], ['2030-03-15', 50, 10]]), contexto: { comida: 'dentro' } });
+  assert.deepEqual([s.acao, s.ultimoKg, s.ultimasReps, s.sugeridoKg, s.deltaKg, s.sugeridasReps], ['subir', 50, 10, 52.5, 2.5, 8]);
+  assert.equal(s.frase, 'Pegava 50 kg × 10. Próximo treino: +2,5 kg = 52,5 kg.');
+  const halter = M.sugerirCargaExercicio({ nome: 'Rosca com halter', historico: h([['2030-03-01', 12, 10], ['2030-03-08', 12, 10], ['2030-03-15', 12, 11]]), contexto: {} });
+  assert.deepEqual([halter.acao, halter.sugeridoKg, halter.deltaKg], ['subir', 13, 1]);
+  const rep = M.sugerirCargaExercicio({ nome: 'Supino reto', historico: h([['2030-03-08', 50, 10], ['2030-03-15', 52.5, 6]]), contexto: {} });
+  assert.deepEqual([rep.acao, rep.sugeridoKg, rep.sugeridasReps], ['repetir', 52.5, 7]);
+  assert.equal(rep.frase, 'Pegava 52,5 kg × 6. Próximo treino: 52,5 kg, tenta 7 repetições.');
+  const sono = M.sugerirCargaExercicio({ nome: 'Supino reto', historico: h([['2030-03-15', 50, 10]]), contexto: { sonoMin: 300 } });
+  assert.deepEqual([sono.acao, sono.sugeridoKg, sono.frase], ['manter', 50, 'Dormiu pouco: mantém 50 kg × 10.']);
+  assert.equal(M.sugerirCargaExercicio({ nome: 'Supino', historico: h([['2030-03-15', 50, 10]]), contexto: { comida: 'abaixo' } }).acao, 'manter');
+  const corpo = M.sugerirCargaExercicio({ nome: 'Prancha', historico: h([['2030-03-15', 0, 1]]), contexto: {} });
+  assert.deepEqual([corpo.acao, corpo.ultimoKg, corpo.sugeridoKg], ['manter', null, null]);
+  // parado há 2+ semanas com 8 reps também sobe
+  const parado = M.sugerirCargaExercicio({ nome: 'Agachamento', historico: h([['2030-02-20', 80, 8], ['2030-03-01', 80, 8], ['2030-03-08', 80, 8], ['2030-03-15', 80, 8]]), contexto: {} });
+  assert.deepEqual([parado.acao, parado.sugeridoKg], ['subir', 82.5]);
+  assert.equal(M.sugerirCargaExercicio({ nome: 'x', historico: [] }), null);
+});
+
+test('montarRotina: um item por dia da semana com 2+ sessões em 4 semanas; exercícios da última sessão do dia, com a sugestão', () => {
+  const sessao = (inicio, titulo, exercicios) => ({ inicio, titulo, exercicios: exercicios.map(([title, kg, reps, id]) => ({ title, exercise_template_id: id, sets: [{ type: 'warmup', weight_kg: 20, reps: 10 }, { weight_kg: kg, reps }, { weight_kg: kg, reps }] })) });
+  // segundas 15:00Z = 12:00 em São Paulo: 2030-03-04, 03-11, 03-18, 03-25 (segundas); uma quarta solta
+  const sessoes = [
+    sessao('2030-03-04T15:00:00Z', 'Peito e tríceps', [['Supino reto', 50, 8, 's1']]),
+    sessao('2030-03-11T15:00:00Z', 'Peito e tríceps', [['Supino reto', 50, 10, 's1'], ['Tríceps corda', 25, 12, 't1']]),
+    sessao('2030-03-18T15:00:00Z', 'Peito e tríceps', [['Supino reto', 50, 10, 's1'], ['Tríceps corda', 25, 12, 't1']]),
+    sessao('2030-03-25T15:00:00Z', 'Peito', [['Supino reto', 50, 10, 's1'], ['Tríceps corda', 25, 12, 't1']]),
+    sessao('2030-03-27T15:00:00Z', 'Pernas', [['Agachamento', 80, 8, 'a1']]),
+  ];
+  const r = M.montarRotina({ sessoes, catalogo: { s1: { primario: 'chest' }, t1: { primario: 'triceps' } }, dia: '2030-03-29', contexto: {} });
+  assert.equal(r.length, 1); // quarta só teve 1 sessão
+  assert.deepEqual([r[0].diaSemana, r[0].nome, r[0].titulo, r[0].ultimaData, r[0].sessoes], [1, 'Segunda', 'Peito e tríceps', '2030-03-25', 4]);
+  assert.deepEqual(r[0].exercicios.map((e) => [e.nome, e.grupo, e.series, e.acao, e.sugeridoKg]), [['Supino reto', 'peito', 2, 'subir', 52.5], ['Tríceps corda', 'tríceps', 2, 'subir', 27.5]]);
+  assert.deepEqual(M.montarRotina({ sessoes: [], dia: '2030-03-29' }), []);
 });
 
 test('ajustarSugestoesPeloDia: sono curto ou energia baixa seguram; comida abaixo segura; 2 tentativas = repetir; senão sobe; batida não muda', () => {
@@ -556,7 +604,9 @@ const ESQUEMA = {
   DiaRefeicoes: ['dia', 'completo', 'kcal', 'p', 'c', 'g', 'refeicoes', 'eventos'],
   Progresso: ['pesagens', 'tendencia', 'veredito', 'meta', 'alertas', 'texto'],
   Pesagem: ['dia', 'peso', 'gordura', 'fonte', 'hora', 'descartada', 'motivo'],
-  Corpo: ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'medidas'],
+  Corpo: ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'rotina', 'medidas'],
+  DiaRotina: ['diaSemana', 'nome', 'titulo', 'ultimaData', 'sessoes', 'exercicios'],
+  ExercicioRotina: ['nome', 'grupo', 'series', 'ultimoKg', 'ultimasReps', 'sugeridoKg', 'deltaKg', 'sugeridasReps', 'acao', 'motivo', 'frase'],
   ContextoTreino: ['energia', 'sonoMin', 'comida', 'texto'],
   DiaSerie: ['dia', 'kcal', 'proteina', 'gasto', 'peso', 'gordura', 'magra', 'sonoMin', 'sonoInicio', 'sonoFim', 'passos', 'treinoMin'],
   Relatorio: ['titulo', 'texto', 'criadoEm'],

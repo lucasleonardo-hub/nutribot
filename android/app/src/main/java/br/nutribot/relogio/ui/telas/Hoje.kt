@@ -1,11 +1,19 @@
 package br.nutribot.relogio.ui.telas
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +23,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -24,6 +35,7 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -31,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
@@ -43,7 +56,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -68,7 +83,6 @@ import br.nutribot.relogio.ui.componentes.BarraFaixa
 import br.nutribot.relogio.ui.componentes.BarraMacro
 import br.nutribot.relogio.ui.componentes.Brotinho
 import br.nutribot.relogio.ui.componentes.Cartao
-import br.nutribot.relogio.ui.componentes.CartaoExpansivel
 import br.nutribot.relogio.ui.componentes.CartaoResumo
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
 import br.nutribot.relogio.ui.componentes.Humor
@@ -81,12 +95,16 @@ import br.nutribot.relogio.ui.componentes.Pose
 import br.nutribot.relogio.ui.componentes.TamanhoVisual
 import br.nutribot.relogio.ui.componentes.TituloSecao
 import br.nutribot.relogio.ui.componentes.Vazio
+import br.nutribot.relogio.ui.componentes.alturaResumo
 import br.nutribot.relogio.ui.componentes.animaAte
+import br.nutribot.relogio.ui.componentes.sangrar
+import br.nutribot.relogio.ui.componentes.semZap
 import br.nutribot.relogio.ui.componentes.tracejado
 import br.nutribot.relogio.ui.icone
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
 import br.nutribot.relogio.ui.tema.Fredoka
+import br.nutribot.relogio.ui.tema.LocalReduzirMovimento
 import org.json.JSONObject
 import kotlin.math.max
 
@@ -231,8 +249,8 @@ fun TelaHoje(vm: AppVM, perfisCarga: Carga, perfis: List<Perfil>, perfil: Perfil
 }
 
 /**
- * Ordem do Hoje: saudação → Como você está? → recados → Calorias → Macros → Energia → Notas → Brotinho → Refeições →
- * Resumo da semana → Peso → relógio. Todo cartão de resumo tem a mesma altura fechado; tocar abre o detalhe.
+ * Ordem do Hoje (fase 5): saudação → Como você está? → Calorias (o cartão-herói) → recados (carrossel) → Macros → Energia →
+ * Notas → Brotinho → Refeições → Resumo da semana → Peso → relógio. Os cartões de resumo têm a mesma altura fechados.
  */
 @Composable
 private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String) -> Unit) {
@@ -265,42 +283,16 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
         CartaoHumor(vm, perfil.id, Formato.iso(dia), humorJ, aoTocar = { editandoHumor = true }, aoFechar = { editandoHumor = false })
     }
 
-    // recados (avisos): no máximo 3, em cartões da altura padrão; tocar abre o texto inteiro no lugar (fase 4)
-    val avisos = j.arr("avisos").objs().take(3)
-    avisos.forEachIndexed { i, a ->
-        val tom = a.str("tom")
-        val (rotulo, fundo, tinta) = tomDe(tom)
-        val titulo = a.str("titulo")
-        val texto = a.str("texto")
-        CartaoExpansivel(
-            "recado$i", cor = fundo, forma = RoundedCornerShape(26.dp), atraso = 40 + i * 40,
-            cabecalho = {
-                Box(Modifier.size(TamanhoVisual), contentAlignment = Alignment.Center) {
-                    when (tom) {
-                        "bom" -> Mascote(Pose.LontraTrofeu, TamanhoVisual)
-                        "cuidado" -> Mascote(Pose.CorgiDormindo, 48.dp)
-                        else -> Mascote(Pose.CorgiLupa, TamanhoVisual)
-                    }
-                }
-                Column(Modifier.weight(1f)) {
-                    Pilula(rotulo, Cores.Branco, tinta)
-                    titulo?.let { Text(it, style = MaterialTheme.typography.titleMedium, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp)) }
-                    texto?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352), maxLines = if (titulo == null) 2 else 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp)) }
-                }
-            },
-        ) {
-            texto?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2) }
-            Link("ver mais na Nutri") { nav(Rotas.NUTRI) }
-        }
-    }
-
-    // calorias (anel pequeno no cabeçalho; faixa, margem e estimativa no detalhe)
+    // calorias: o cartão-herói do Hoje (anel grande com o número no centro)
     val consumido = kcal.num("consumido") ?: 0.0
     val faixa = kcal.obj("faixa")
     val fMin = faixa.num("min")
     val fMax = faixa.num("max")
     val refsDia = Refeicao.lista(j)
     CartaoCalorias(kcal, consumido, fMin, fMax, refsDia)
+
+    // recados (avisos): até 3, em carrossel horizontal; tocar mostra o texto inteiro logo abaixo (fase 5)
+    Recados(j.arr("avisos").objs().take(3), nav)
 
     // macros (cores fixas)
     CartaoMacros(j.obj("macros"))
@@ -352,7 +344,7 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
     }
 
     // resumo da semana
-    j.obj("resumoSemana").str("texto")?.let { texto ->
+    j.obj("resumoSemana").str("texto")?.let { semZap(it) }?.takeIf { it.isNotBlank() }?.let { texto ->
         CartaoResumo(
             "resumoSemana", "Resumo da semana", valor = null, resumo = primeiraFrase(texto),
             pincel = Brush.linearGradient(listOf(Cores.Trilho, Cores.BomFundo)), atraso = 200,
@@ -412,7 +404,6 @@ private fun CartaoCalorias(kcal: JSONObject?, consumido: Double, fMin: Double?, 
     val somaMax = refsDia.sumOf { it.faixaMax ?: it.kcal ?: 0.0 }
     val err = if (refsDia.isEmpty() || somaMax <= somaMin) null else maxOf(consumido - somaMin, somaMax - consumido)
     val temFaixa = fMin != null && fMax != null
-    val resumo = if (temFaixa) "restam ≈ ${Formato.kcal(max((fMin!! + fMax!!) / 2 - consumido, 0.0))} · meta ${Formato.kcal(fMin)}–${Formato.kcal(fMax)}" else "sem faixa de meta ainda"
     val (txtSemana, fundoSemana, tintaSemana) = when (situacao) {
         // situacao = julgamento da última semana de dias completos contra a meta (não o parcial de hoje)
         "abaixo" -> Triple("semana abaixo da faixa", Color(0xFFFFE9D6), Color(0xFF8A4B12))
@@ -420,15 +411,131 @@ private fun CartaoCalorias(kcal: JSONObject?, consumido: Double, fMin: Double?, 
         "acima" -> Triple("semana acima da faixa", Cores.CuidadoFundo, Cores.CuidadoTinta)
         else -> Triple("poucos dados", Cores.Trilho, Cores.LilasTexto)
     }
-    // fase 4: o cartão mais importante começa aberto (os outros continuam fechados)
-    CartaoResumo(
-        "calorias", "Calorias", "≈ ${Formato.kcal(consumido)} kcal", resumo, atraso = 60, abertoInicial = true,
-        visual = { AnelKcal(consumido, fMin, fMax, err, tamanho = TamanhoVisual, mostrarCentro = false) },
+    // fase 5: o cartão-herói do Hoje. Anel grande com o número no centro; à direita o que resta, a faixa e a semana;
+    // "ver mais" abre a margem da meta, a estimativa da comida e o resto.
+    var aberto by rememberSaveable("calorias") { mutableStateOf(false) }
+    val parado = LocalReduzirMovimento.current
+    val giroAlvo = if (aberto) 180f else 0f
+    val giro = if (parado) giroAlvo else animateFloatAsState(giroAlvo, label = "setaCalorias").value
+    val restam = if (temFaixa) max((fMin!! + fMax!!) / 2 - consumido, 0.0) else null
+    val tamanhoAnel = 150.dp * LocalDensity.current.fontScale.coerceAtMost(1.2f)
+    Cartao(
+        Modifier.semantics { stateDescription = if (aberto) "aberto" else "fechado" },
+        pincel = Brush.linearGradient(listOf(Cores.Branco, Cores.Trilho)),
+        forma = Formas.Grande, padding = PaddingValues(18.dp), atraso = 60,
+        aoTocar = { aberto = !aberto }, rotuloToque = if (aberto) "Ver menos" else "Ver mais",
     ) {
-        if (temFaixa) LinhaValor("Faixa da meta", "${Formato.kcal(fMin)}–${Formato.kcal(fMax)} kcal")
-        if (folgaMeta != null && folgaMeta > 0) LinhaValor("Margem", "±${Formato.kcal(folgaMeta)} kcal")
-        if (err != null && err > 0) LinhaValor("Estimativa", "${Formato.kcal(somaMin)} a ${Formato.kcal(somaMax)} kcal")
-        Pilula(txtSemana, fundoSemana, tintaSemana, Modifier.padding(top = 6.dp), ponto = true)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            AnelKcal(
+                consumido, fMin, fMax, err, tamanho = tamanhoAnel, mostrarCentro = true,
+                legenda = if (temFaixa) "de ${Formato.kcal(fMin)}–${Formato.kcal(fMax)}" else "kcal comidas",
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Calorias", style = MaterialTheme.typography.titleMedium, color = Cores.Tinta3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (restam != null) {
+                    Text("restam", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                    Text("≈ ${Formato.kcal(restam)} kcal", style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("meta ${Formato.kcal(fMin)}–${Formato.kcal(fMax)} kcal", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, maxLines = 2)
+                } else {
+                    Text("${Formato.kcal(consumido)} kcal", style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("sem faixa de meta ainda", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, maxLines = 2)
+                }
+                Pilula(txtSemana, fundoSemana, tintaSemana, ponto = true)
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(if (aberto) "ver menos" else "ver mais", style = MaterialTheme.typography.labelLarge, color = Cores.AcaiEscuro, modifier = Modifier.weight(1f))
+            Icon(icone("M6 9l6 6 6-6"), contentDescription = null, tint = Cores.AcaiEscuro, modifier = Modifier.size(20.dp).rotate(giro))
+        }
+        val detalhe: @Composable ColumnScope.() -> Unit = {
+            if (temFaixa) LinhaValor("Faixa da meta", "${Formato.kcal(fMin)}–${Formato.kcal(fMax)} kcal")
+            if (folgaMeta != null && folgaMeta > 0) LinhaValor("Margem da meta", "±${Formato.kcal(folgaMeta)} kcal")
+            if (err != null && err > 0) LinhaValor("Estimativa da comida", "${Formato.kcal(somaMin)} a ${Formato.kcal(somaMax)} kcal")
+            LinhaValor("Comidas hoje", "${Formato.kcal(consumido)} kcal")
+            if (refsDia.isNotEmpty()) LinhaValor("Refeições", "${refsDia.size}")
+            Text(
+                "A faixa é a meta do dia; a margem é a incerteza dela. A estimativa vem das faixas das refeições registradas.",
+                style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        if (parado) {
+            if (aberto) Column(Modifier.padding(top = 6.dp), content = detalhe)
+        } else {
+            AnimatedVisibility(aberto, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                Column(Modifier.padding(top = 6.dp), content = detalhe)
+            }
+        }
+    }
+}
+
+/**
+ * Recados da Nutri (fase 5): carrossel horizontal (cartões de 286 dp, altura padrão, de borda a borda) e, logo abaixo,
+ * o detalhe do recado tocado num cartão da cor do tom. Tocar de novo no mesmo recado fecha o detalhe.
+ */
+@Composable
+private fun Recados(avisos: List<JSONObject>, nav: (String) -> Unit) {
+    if (avisos.isEmpty()) return
+    var escolhido by rememberSaveable { mutableIntStateOf(-1) }
+    if (escolhido >= avisos.size) escolhido = -1
+    val estado = rememberLazyListState()
+    val alturaRecado = alturaResumo()
+    val parado = LocalReduzirMovimento.current
+    LazyRow(
+        state = estado,
+        flingBehavior = rememberSnapFlingBehavior(estado),
+        contentPadding = PaddingValues(horizontal = 18.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.sangrar(18.dp).semantics { contentDescription = "Recados da Nutri" },
+    ) {
+        itemsIndexed(avisos) { i, a ->
+            val tom = a.str("tom")
+            val (rotulo, fundo, tinta) = tomDe(tom)
+            val titulo = a.str("titulo")?.let { semZap(it) }?.takeIf { it.isNotBlank() }
+            val texto = a.str("texto")?.let { semZap(it) }?.takeIf { it.isNotBlank() }
+            val ativo = escolhido == i
+            Cartao(
+                Modifier.width(286.dp).semantics { selected = ativo },
+                cor = fundo, forma = RoundedCornerShape(26.dp),
+                padding = PaddingValues(start = 8.dp, end = 14.dp, top = 12.dp, bottom = 12.dp), atraso = 40 + i * 40,
+                aoTocar = { escolhido = if (ativo) -1 else i }, rotuloToque = if (ativo) "Fechar o recado" else "Ler o recado inteiro",
+            ) {
+                Row(Modifier.height(alturaRecado), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.size(TamanhoVisual), contentAlignment = Alignment.Center) {
+                        when (tom) {
+                            "bom" -> Mascote(Pose.LontraTrofeu, TamanhoVisual)
+                            "cuidado" -> Mascote(Pose.CorgiDormindo, 48.dp)
+                            else -> Mascote(Pose.CorgiLupa, TamanhoVisual)
+                        }
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Pilula(rotulo, Cores.Branco, tinta)
+                        titulo?.let { Text(it, style = MaterialTheme.typography.titleMedium, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp)) }
+                        texto?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352), maxLines = if (titulo == null) 2 else 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp)) }
+                    }
+                }
+            }
+        }
+    }
+    val detalhe: @Composable () -> Unit = {
+        val a = avisos[escolhido.coerceIn(0, avisos.size - 1)]
+        val (rotulo, fundo, tinta) = tomDe(a.str("tom"))
+        val titulo = a.str("titulo")?.let { semZap(it) }?.takeIf { it.isNotBlank() }
+        val texto = a.str("texto")?.let { semZap(it) }?.takeIf { it.isNotBlank() }
+        Cartao(cor = fundo, forma = RoundedCornerShape(26.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Pilula(rotulo, Cores.Branco, tinta)
+                Spacer(Modifier.weight(1f))
+                Link("fechar") { escolhido = -1 }
+            }
+            titulo?.let { Text(it, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 4.dp)) }
+            Text(texto ?: "Sem mais detalhes.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2, modifier = Modifier.padding(top = 4.dp))
+            Link("ver mais na Nutri") { nav(Rotas.NUTRI) }
+        }
+    }
+    if (parado) {
+        if (escolhido >= 0) detalhe()
+    } else {
+        AnimatedVisibility(escolhido >= 0, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) { detalhe() }
     }
 }
 
@@ -517,7 +624,7 @@ private fun CartaoEnergia(e: JSONObject) {
                 }
             }
         }
-        e.str("texto")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF4A3B00), modifier = Modifier.padding(top = 10.dp)) }
+        e.str("texto")?.let { semZap(it) }?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF4A3B00), modifier = Modifier.padding(top = 10.dp)) }
     }
 }
 
@@ -626,7 +733,7 @@ private fun CartaoPeso(peso: JSONObject, aoVerProgresso: () -> Unit) {
             }
             if (ic != null) LinhaValor("Faixa de 95%", "${Formato.sinal(ic.num("min"))} a ${Formato.sinal(ic.num("max"))} kg/sem")
         }
-        peso.str("texto")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.AcaiEscuro, modifier = Modifier.padding(top = 4.dp)) }
+        peso.str("texto")?.let { semZap(it) }?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.AcaiEscuro, modifier = Modifier.padding(top = 4.dp)) }
         Link("ver progresso", aoVerProgresso)
     }
 }

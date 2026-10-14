@@ -26,6 +26,29 @@ import br.nutribot.relogio.ui.tema.Cores
  * Linha a linha: "# título" vira título; "- item" vira lista; "**negrito**" vira negrito; linha em branco separa parágrafos.
  */
 
+private val negritoZapRe = Regex("(^|[\\s(])\\*([^*\\n]{1,200}?)\\*(?=[\\s).,;:!?]|$)")
+private val italicoZapRe = Regex("(^|[\\s(])_([^_\\n]{1,200}?)_(?=[\\s).,;:!?]|$)")
+private val riscadoZapRe = Regex("(^|[\\s(])~([^~\\n]{1,200}?)~(?=[\\s).,;:!?]|$)")
+private val craseRe = Regex("`([^`\\n]+)`")
+// emojis e pictogramas (pares substitutos, símbolos diversos, setas enfeitadas, seletor de variação e o juntador)
+private val emojiRe = Regex("[\\x{1F000}-\\x{1FAFF}\\x{2600}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{2190}-\\x{21FF}\\x{FE0F}\\x{200D}]")
+private val espacosRe = Regex("[ \\t]{2,}")
+private val espacoAntesPontuacaoRe = Regex("\\s+([.,;:!?])")
+
+/**
+ * Tira a marcação do WhatsApp de um texto curto (fase 5): `*negrito*`, `_itálico_`, `~riscado~`, crases e emojis somem;
+ * espaços duplos viram um. O servidor já limpa, mas o que o app monta ou guardou de antes passa por aqui também.
+ */
+fun semZap(texto: String): String {
+    var t = texto.replace("\r\n", "\n").replace('\r', '\n')
+    t = craseRe.replace(t) { it.groupValues[1] }
+    t = negritoZapRe.replace(t) { it.groupValues[1] + it.groupValues[2] }
+    t = italicoZapRe.replace(t) { it.groupValues[1] + it.groupValues[2] }
+    t = riscadoZapRe.replace(t) { it.groupValues[1] + it.groupValues[2] }
+    t = emojiRe.replace(t, "")
+    return t.split('\n').joinToString("\n") { l -> espacoAntesPontuacaoRe.replace(espacosRe.replace(l, " "), "$1").trim() }.trim()
+}
+
 private val tituloRe = Regex("^#{1,6}\\s+(.*)$")
 private val itemRe = Regex("^\\s*[-*•]\\s+(.*)$")
 private val numeradoRe = Regex("^\\s*(\\d+)[.)]\\s+(.*)$")

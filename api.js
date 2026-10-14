@@ -12,9 +12,9 @@
 import express from 'express';
 import { listarPerfis, refeicoesDesde, pesagensDesde, colecao, humorDe, eventosDe, comMiniaturas } from './mongo.js';
 import { authPadrao, erroApi, ipDe, criarDiagnosticoXff } from './api-auth.js';
-import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, montarPesagens, montarDias, montarPlano, montarSugestaoRefeicao, proximoSlot, horaDoSlot, termosDeLugar, tirarLocalizacao } from './api-montadores.js';
+import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, montarPesagens, montarDias, montarPlano, montarSugestaoRefeicao, proximoSlot, horaDoSlot, termosDeLugar, tirarLocalizacao, semZap, contextoDoTreino } from './api-montadores.js';
 import { rotasDeEscrita, escritaPadrao, diaValido, MAX_DIAS_PESAGENS, criarLimiteAnalises } from './api-escrita.js';
-import { estimarRefeicaoApp, sugerirRefeicao } from './gemini.js';
+import { estimarRefeicaoApp, sugerirRefeicao, responderApp } from './gemini.js';
 import { marcaDeTempo, diasAnteriores } from './util.js';
 import { configGrafico, renderizar } from './graficos.js';
 import { gastoAdaptativo, padraoAlimentar, nomeDoSlot as nomeDoSlotApi } from './resumo.js';
@@ -203,20 +203,21 @@ function enviarErro(res, status, codigo, mensagem) {
  * Roteador da API v1. `auth` = api-auth.criarAuth (pareamento e token); `dados` = dadosPadrao() ou um dublê; `agora()` o
  * instante (dia e hora de cada pessoa saem dele, no fuso dela); `adminJid` marca o perfil do dono.
  */
-export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita = escritaPadrao(), ia = { estimarRefeicaoApp, sugerirRefeicao }, grafico = { configGrafico, renderizar }, agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda, podeAnalisar = criarLimiteAnalises() } = {}) {
+export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita = escritaPadrao(), ia = { estimarRefeicaoApp, sugerirRefeicao, responderApp }, grafico = { configGrafico, renderizar }, agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda, podeAnalisar = criarLimiteAnalises() } = {}) {
   const r = express.Router();
   // fase 4: a sugestão de refeição (IA) fica guardada 1 h por pessoa, dia e slot; a promessa entra no mapa (dois pedidos
   // no mesmo instante = uma chamada), e cada pessoa tem no máximo 6 chamadas por hora além do limite do processo
   const sugestoesProntas = new Map(); // `${id}|${dia}|${slot}` -> { corpo: Promise, em }
   const SUGESTAO_CACHE_MS = 60 * 60_000;
-  const sugestoesPorPessoa = new Map(); // id -> [ms]
-  const podeSugerirPara = (id, agoraMs) => {
-    const l = (sugestoesPorPessoa.get(id) || []).filter((t) => agoraMs - t < 3600_000);
-    if (l.length >= 6) return false;
+  const limitePorPessoa = (mapa, max) => (id, agoraMs) => {
+    const l = (mapa.get(id) || []).filter((t) => agoraMs - t < 3600_000);
+    if (l.length >= max) return false;
     l.push(agoraMs);
-    sugestoesPorPessoa.set(id, l);
+    mapa.set(id, l);
     return true;
   };
+  const podeSugerirPara = limitePorPessoa(new Map(), 6);
+  const podePerguntar = limitePorPessoa(new Map(), 20); // fase 5: perguntas rápidas pelo app
   // os relatórios da Nutri (Drive) mudam uma vez por semana e por mês: 30 min de cache por processo
   let relatoriosCache = null; // { em, valor }
   const RELATORIOS_CACHE_MS = 30 * 60_000;
@@ -398,6 +399,53 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
   r.get('/perfis/:id/plano', async (req, res) => {
     const { perfil, perfis } = await perfilDo(req);
     res.json(montarPlano(await dados.planoDe(perfil), termosDeLugar(perfis)));
+  });
+
+  /**
+   * Fase 5: pergunta rápida à Nutri pelo app. Texto puro de volta; nada vai pro grupo nem pra memória. 20 por pessoa por
+   * hora e o limite do processo.
+   */
+  r.post('/perfis/:id/perguntar', async (req, res) => {
+    const { perfil, hoje, hora } = await perfilDo(req);
+    const corpo = req.body && typeof req.body === 'object' ? req.body : {};
+    const pergunta = typeof corpo.texto === 'string' ? corpo.texto.trim().replace(/\s+/g, ' ').slice(0, 400) : '';
+    if (!pergunta) throw erroApi(400, 'pedido_invalido', 'texto vazio');
+    const anteriores = (Array.isArray(corpo.anteriores) ? corpo.anteriores : [])
+      .slice(-5)
+      .map((t) => ({ pergunta: String(t?.pergunta || '').slice(0, 400), resposta: String(t?.resposta || '').slice(0, 800) }))
+      .filter((t) => t.pergunta);
+    const agoraMs = agora().getTime();
+    if (!podePerguntar(String(perfil._id), agoraMs)) throw erroApi(429, 'muitas_analises', 'muitas perguntas na última hora; espere um pouco');
+    if (!podeAnalisar()) throw erroApi(429, 'muitas_analises', 'muitas análises na última hora; tente mais tarde');
+    const [{ refeicoes, pesagens }, ctx, plano, d] = await Promise.all([dados.registrosSugestao(perfil, hoje), dados.contextoSugestao(perfil, hoje), dados.planoDe(perfil).catch(() => null), dados.doDia(perfil, hoje).catch(() => null)]);
+    const faixa = gastoAdaptativo({ refeicoes, pesagens, perfil, dia: hoje, gastos: perfil.relogio?.gastos }).alvo;
+    const deHoje = refeicoes.filter((x) => x.dia === hoje).sort((a, b) => (a.minutos || 0) - (b.minutos || 0));
+    const kcalHoje = deHoje.reduce((s, x) => s + (Number(x.estimativa?.kcal) || 0), 0);
+    const hojeTxt = `${deHoje.length ? deHoje.map((x) => `${nomeDoSlotApi(x.slot)} ${x.horaLocal || x.hora || ''}: ${x.descricao || x.resumo || ''}${x.estimativa?.kcal ? ` (${Math.round(x.estimativa.kcal)} kcal)` : ''}`).join(' · ') : 'nada registrado ainda'}; total ${Math.round(kcalHoje)} kcal${faixa ? ` da faixa ${faixa.min}–${faixa.max}` : ''}`;
+    const sete = diasAnteriores(hoje, 8).slice(0, 7);
+    const porDia = sete.map((dd) => refeicoes.filter((x) => x.dia === dd).reduce((s, x) => s + (Number(x.estimativa?.kcal) || 0), 0)).filter((k) => k > 0);
+    const semanaTxt = porDia.length ? `${porDia.length} dias com registro, média ${Math.round(porDia.reduce((a, b) => a + b, 0) / porDia.length)} kcal/dia${pesagens.length ? `; último peso ${String(pesagens[pesagens.length - 1].peso).replace('.', ',')} kg` : ''}` : 'sem registros';
+    const treino = d ? contextoDoTreino({ perfil, dia: hoje, refeicoes: d.refeicoes || [], pesagens: d.pesagens || [], saude: d.saude }).texto : '';
+    const resposta = await ia
+      .responderApp({
+        perfil,
+        pergunta,
+        anteriores,
+        persona: ctx.persona,
+        dia: hoje,
+        horaAgora: hora,
+        hoje: hojeTxt,
+        semana: semanaTxt,
+        despensa: ctx.despensa,
+        plano: plano?.texto || '',
+        humor: ctx.humor ? `humor ${ctx.humor.humor}/5${ctx.humor.energia ? `, energia ${ctx.humor.energia}/5` : ''}${ctx.humor.sono ? `, sono ${ctx.humor.sono}/5` : ''}` : '',
+        treino,
+      })
+      .catch((e) => {
+        console.error('[api] pergunta pelo app falhou:', e?.message || e);
+        throw erroApi(503, 'ia_indisponivel', 'a Nutri não conseguiu responder agora; tente de novo em instantes');
+      });
+    res.json({ resposta: semZap(tirarLocalizacao(resposta, termosDeLugar(await dados.listarPerfis()))), geradaEm: agora().toISOString() });
   });
 
   /** Fase 4: sugestão da IA pra próxima refeição (ou pro ?slot=), guardada 1 h; conta no limite de análises por hora. */

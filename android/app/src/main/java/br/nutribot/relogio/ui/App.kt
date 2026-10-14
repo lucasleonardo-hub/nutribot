@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -26,6 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -47,7 +52,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import br.nutribot.relogio.dados.Perfil
+import br.nutribot.relogio.ui.telas.FolhaPerguntar
 import br.nutribot.relogio.ui.telas.Legado
+import br.nutribot.relogio.ui.telas.rememberTrocas
 import br.nutribot.relogio.ui.telas.TelaAgenda
 import br.nutribot.relogio.ui.telas.TelaComida
 import br.nutribot.relogio.ui.telas.TelaCorpo
@@ -101,6 +108,9 @@ private val abas = listOf(
 
 val iconeVoltar = icone("M15 5l-7 7 7 7")
 
+/** Balão de conversa do botão "Perguntar à Nutri" (fase 5). */
+private val iconeBalao = icone("M4 5h16v10H9l-4 4v-4H4z", "M8 10h8")
+
 /** Raiz: pareamento (sem token) ou o app com as 5 abas. */
 @Composable
 fun NutriApp(vm: AppVM, legado: Legado, rotaInicial: String?) {
@@ -129,6 +139,10 @@ fun NutriApp(vm: AppVM, legado: Legado, rotaInicial: String?) {
     val rotaAtual = entrada?.destination?.route?.substringBefore('?')
     val mostrarAbas = abas.any { it.rota == rotaAtual }
 
+    // fase 5: perguntar à Nutri de qualquer aba principal; as trocas ficam na sessão (zeram ao trocar de perfil)
+    var perguntar by rememberSaveable { mutableStateOf(false) }
+    val trocas = rememberTrocas(perfil?.id)
+
     Box(Modifier.fillMaxSize().background(Cores.Lavanda)) {
         NavHost(nav, startDestination = Rotas.HOJE, modifier = Modifier.fillMaxSize().statusBarsPadding()) {
             composable(Rotas.HOJE) { TelaHoje(vm, perfisCarga, perfis, perfil, nav = { nav.navigate(it) }) }
@@ -155,6 +169,36 @@ fun NutriApp(vm: AppVM, legado: Legado, rotaInicial: String?) {
         ) {
             BarraAbas(nav, rotaAtual)
         }
+        AnimatedVisibility(
+            mostrarAbas && perfil != null,
+            modifier = Modifier.align(Alignment.BottomEnd),
+            enter = fadeIn() + slideInVertically { it / 2 },
+            exit = fadeOut() + slideOutVertically { it / 2 },
+        ) {
+            BotaoPerguntar { perguntar = true }
+        }
+    }
+    val p = perfil
+    if (perguntar && p != null) FolhaPerguntar(vm, p, trocas, aoFechar = { perguntar = false })
+}
+
+/** Botão flutuante redondo (56 dp) acima da barra de abas, à direita: abre a folha "Perguntar à Nutri". */
+@Composable
+private fun BotaoPerguntar(aoTocar: () -> Unit) {
+    Box(
+        Modifier
+            .navigationBarsPadding()
+            // a barra de abas ocupa 72 dp mais os 14 dp de respiro; o botão fica 12 dp acima dela
+            .padding(end = 18.dp, bottom = 98.dp)
+            .size(56.dp)
+            .shadow(12.dp, CircleShape, ambientColor = Color(0x405B3FC4), spotColor = Color(0x555B3FC4))
+            .clip(CircleShape)
+            .background(Cores.AcaiEscuro)
+            .clickable(role = Role.Button, onClick = aoTocar)
+            .semantics { contentDescription = "Perguntar à Nutri" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(iconeBalao, contentDescription = null, tint = Cores.Branco, modifier = Modifier.size(26.dp))
     }
 }
 

@@ -296,7 +296,7 @@ fun ConteudoCarga(
             val dados = carga.dados
             when {
                 dados != null -> Column(
-                    Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 120.dp),
+                    Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 168.dp), // barra de abas + o botão "Perguntar à Nutri"
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) { conteudo(dados) }
                 carga.acordando -> AcordandoSemCache()

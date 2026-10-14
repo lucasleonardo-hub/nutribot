@@ -1338,6 +1338,40 @@ export async function sugerirRefeicao({ perfil, slot, nomeSlot, hora = null, hor
   return d;
 }
 
+/**
+ * Pergunta rápida pelo app (fase 5): a Nutri responde em texto puro (sem asterisco, sem emoji), até 120 palavras, no
+ * personagem, com o contexto condensado da pessoa. Nada vai pro grupo nem pra memória. `_gerar` injetável nos testes.
+ */
+export async function responderApp({ perfil, pergunta, anteriores = [], persona = '', dia, horaAgora = null, hoje = '', semana = '', despensa = '', plano = '', humor = '', treino = '', _gerar = gerar }) {
+  const primeiro = String(perfil?.nome || 'a pessoa').split(' ')[0];
+  const historico = (anteriores || [])
+    .slice(-5)
+    .map((t) => `${primeiro}: ${String(t?.pergunta || '').slice(0, 300)}\nVocê: ${String(t?.resposta || '').slice(0, 500)}`)
+    .join('\n');
+  const texto =
+    (persona ? `${persona}\n\n` : '') +
+    `${primeiro} te mandou uma pergunta rápida pelo APP (não é o grupo: só ela(e) vê; responda em TEXTO PURO, sem asterisco, sem emoji, sem markdown, até 120 palavras, no seu personagem, direto ao ponto).\n` +
+    `PESSOA: ${perfil?.peso ? `${perfil.peso} kg · ` : ''}${perfil?.altura ? `${perfil.altura} cm · ` : ''}objetivo: ${perfil?.objetivo || '?'} · dieta: ${perfil?.dieta || 'onívora'}${perfil?.restricoes ? ` · restrições: ${perfil.restricoes}` : ''}\n` +
+    (perfil?.produtos?.length ? `PRODUTOS FIXOS: ${perfil.produtos.map((p) => `${p.nome} (${p.kcal} kcal/${p.porcao || 'porção'})`).join(', ')}\n` : '') +
+    (perfil?.notas ? `SUAS NOTAS SOBRE ELA(E): ${String(perfil.notas).slice(0, 900)}\n` : '') +
+    (hoje ? `HOJE${dia ? ` (${dataExtenso(dia)}${horaAgora ? `, ${horaAgora}` : ''})` : ''}: ${hoje}\n` : '') +
+    (semana ? `ÚLTIMOS 7 DIAS: ${semana}\n` : '') +
+    (treino ? `TREINO: ${treino}\n` : '') +
+    (humor ? `COMO ELA(E) ESTÁ HOJE (pelo app): ${humor}\n` : '') +
+    (despensa ? `${despensa}\n` : '') +
+    (plano ? `PLANO DA SEMANA QUE VOCÊ MANDOU: ${String(plano).slice(0, 1500)}\n` : '') +
+    (historico ? `\nCONVERSA DE AGORA NO APP:\n${historico}\n` : '') +
+    `\nPERGUNTA: """${String(pergunta || '').slice(0, 400)}"""\n` +
+    `Responda só o que foi perguntado, com os números que você tem. Se não souber, diga o que faltaria. Não peça pra ela(e) mandar comando no WhatsApp.`;
+  const r = await _gerar({
+    contents: [{ role: 'user', parts: [{ text: texto }] }],
+    config: { temperature: 0.5, pensar: false, leve: true, maxOutputTokens: 400 },
+  });
+  const resposta = String(r || '').trim();
+  if (!resposta) throw new Error('resposta do app vazia');
+  return resposta;
+}
+
 /** Momentos memoráveis do dia (vexames, acertos, frases, promessas) -> memória de longo prazo que só cresce. */
 export async function extrairMomentos({ dia, perfis, historico, refeicoes, contexto }) {
   if (!historico?.length || !perfis?.length) return [];

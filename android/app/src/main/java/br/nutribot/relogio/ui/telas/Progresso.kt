@@ -53,6 +53,7 @@ import br.nutribot.relogio.ui.componentes.Cabecalho
 import br.nutribot.relogio.ui.componentes.Cartao
 import br.nutribot.relogio.ui.componentes.Chip
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
+import br.nutribot.relogio.ui.componentes.MarkdownSimples
 import br.nutribot.relogio.ui.componentes.Mascote
 import br.nutribot.relogio.ui.componentes.Pilula
 import br.nutribot.relogio.ui.componentes.Pose
@@ -250,7 +251,8 @@ private fun ConteudoProgresso(vm: AppVM, perfil: Perfil, j: JSONObject) {
                 Modifier.fillMaxWidth().heightIn(min = 44.dp).clip(Formas.Pequeno).background(Cores.Trilho).clickable(role = Role.Button) { aberto = !aberto },
                 contentAlignment = Alignment.Center,
             ) { Text(if (aberto) "Esconder a conta" else "Como cheguei nisso", fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 15.sp, color = Cores.LilasTexto) }
-            if (aberto) Text(texto, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 10.dp))
+            // fase 5: o texto vem em Markdown simples (**negrito**, listas)
+            if (aberto) MarkdownSimples(texto, Modifier.padding(top = 10.dp))
         }
     }
 }

@@ -304,6 +304,8 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         fun rotaDias(id: String, de: String, ate: String) = "/perfis/$id/dias?de=$de&ate=$ate"
         /** Fase 4: o último plano da semana que a Nutri mandou. */
         fun rotaPlano(id: String) = "/perfis/$id/plano"
+        /** Fase 5: pergunta rápida à Nutri: POST { texto, anteriores } -> { resposta, geradaEm }. */
+        fun rotaPerguntar(id: String) = "/perfis/$id/perguntar"
         /** Fase 4: sugestão da IA para a próxima refeição (slot opcional). */
         fun rotaSugestaoRefeicao(id: String, slot: String? = null) = "/perfis/$id/sugestao-refeicao" + (slot?.let { "?slot=$it" } ?: "")
         const val ROTA_INTEGRACOES = "/integracoes"

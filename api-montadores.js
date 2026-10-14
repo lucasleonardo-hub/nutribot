@@ -13,7 +13,7 @@ import { calcularVisao, faixaDaMeta, sequenciaDe, previsaoGastoDia, nomeDoSlot, 
 import { projecaoAteMeta } from './tendencia.js';
 import { energiaDoDia } from './saude.js';
 import { analisarTreinos, grupoEmPortugues } from './treino.js';
-import { progressaoForca, conferirSugestoes } from './contexto.js';
+import { progressaoForca, conferirSugestoes, incrementoDeCarga } from './contexto.js';
 import { createHash } from 'node:crypto';
 import { SLOTS, fusoDe, diasAnteriores, diaSeguinte, horariosHabituais, minutosDe, semAcento } from './util.js';
 
@@ -213,13 +213,13 @@ const ORDEM_TOM = { cuidado: 0, atencao: 1, bom: 2 };
 export function montarAvisos({ analise = null, pensamento = null, avisosTendencia = [], termosLocal = [] } = {}) {
   const avisos = [];
   const v = analise?.veredito;
-  if (v?.status === 'acima' && (v.confianca === 'alta' || v.confianca === 'media')) avisos.push({ tom: 'cuidado', titulo: 'Peso andando rápido demais', texto: cap(v.texto) });
-  for (const a of analise?.alertas || []) avisos.push({ tom: 'atencao', titulo: TITULO_ALERTA[a.tipo] || 'Atenção', texto: tirarRotulo(a.texto) });
+  if (v?.status === 'acima' && (v.confianca === 'alta' || v.confianca === 'media')) avisos.push({ tom: 'cuidado', titulo: 'Peso andando rápido demais', texto: semZap(cap(v.texto)) });
+  for (const a of analise?.alertas || []) avisos.push({ tom: 'atencao', titulo: TITULO_ALERTA[a.tipo] || 'Atenção', texto: semZap(tirarRotulo(a.texto)) });
   for (const t of avisosTendencia || []) {
-    if (/^sono médio/i.test(t)) avisos.push({ tom: 'atencao', titulo: 'Sono curto nas últimas semanas', texto: cap(t) });
-    else if (/treinos de força por semana/i.test(t)) avisos.push({ tom: 'atencao', titulo: 'Poucos treinos de força', texto: cap(t) });
+    if (/^sono médio/i.test(t)) avisos.push({ tom: 'atencao', titulo: 'Sono curto nas últimas semanas', texto: semZap(cap(t)) });
+    else if (/treinos de força por semana/i.test(t)) avisos.push({ tom: 'atencao', titulo: 'Poucos treinos de força', texto: semZap(cap(t)) });
   }
-  const texto = pensamento?.texto ? tirarLocalizacao(pensamento.texto, termosLocal) : '';
+  const texto = pensamento?.texto ? semZap(tirarLocalizacao(pensamento.texto, termosLocal)) : '';
   if (texto) avisos.push({ tom: 'bom', titulo: `Pensamento da Nutri${pensamento.hora ? ` (${pensamento.hora})` : ''}`, texto });
   return avisos.sort((a, b) => ORDEM_TOM[a.tom] - ORDEM_TOM[b.tom]);
 }
@@ -331,7 +331,7 @@ export function montarHoje({ perfil, dia, hoje = dia, horaAgora = '00:00', refei
         kgSemana: t.suficiente ? r2(t.kgSemana) : null,
         ic: t.suficiente ? { min: r2(t.ic95[0]), max: r2(t.ic95[1]) } : null,
         veredito: analise.veredito.status,
-        texto: cap(analise.veredito.texto),
+        texto: semZap(cap(analise.veredito.texto)),
       }
     : null;
 
@@ -373,10 +373,10 @@ export function montarHoje({ perfil, dia, hoje = dia, horaAgora = '00:00', refei
     pendentes: pendentesDoDia({ refeicoesDoDia: doDia, hab, agoraMin: dia < hoje ? 24 * 60 : minutosDe(horaAgora), atrasoMin }),
     peso,
     relogio,
-    energia: saude ? energiaDoDia({ sonos: saude.sonos, atividades: saude.atividades, dia }) : null,
+    energia: saude ? ((e) => (e ? { ...e, texto: semZap(e.texto) } : e))(energiaDoDia({ sonos: saude.sonos, atividades: saude.atividades, dia })) : null,
     avisos: montarAvisos({ analise, pensamento: perfil.pensamento?.dia === dia ? perfil.pensamento : null, avisosTendencia: proj?.avisos || [], termosLocal }),
     brotinho: { dias, murcho: dias === 0 },
-    resumoSemana: semana ? { texto: semana } : null,
+    resumoSemana: semana ? { texto: semZap(semana) } : null,
     // fase 2: o que a pessoa registrou no app nesse dia (humor é um por dia; eventos criados por ela)
     humor: montarHumor(humor),
     eventos: (eventos || []).filter((e) => e?.dia === dia).map(montarEvento),
@@ -463,12 +463,13 @@ export function montarProgresso({ perfil, dia, refeicoes = [], pesagens = [] }) 
           janelas: (a.leitura?.janelas || [{ dias: 28, kgSemana: t.kgSemana }]).map((j) => ({ dias: j.dias, kgSemana: r2(j.kgSemana) })),
         }
       : null,
-    veredito: t.n ? { status: a.veredito.status, prob: arred(a.veredito.prob, 3), texto: cap(a.veredito.texto) } : null,
+    veredito: t.n ? { status: a.veredito.status, prob: arred(a.veredito.prob, 3), texto: semZap(cap(a.veredito.texto)) } : null,
     meta: m
       ? { min: m.min, max: m.max, texto: `${kcalTxt(m.min)} a ${kcalTxt(m.max)}/dia, ${m.base === 'balanca' ? 'em calorias registradas, calibrada pela balança' : 'provisória, pelo gasto do relógio'}${m.folga > 100 ? ` (incerteza ±${kcalTxt(m.folga)})` : ''}` }
       : null,
-    alertas: a.alertas.map((x) => ({ tipo: x.tipo, texto: tirarRotulo(x.texto) })),
-    texto: a.zap,
+    alertas: a.alertas.map((x) => ({ tipo: x.tipo, texto: semZap(tirarRotulo(x.texto)) })),
+    // o texto do !progresso, escrito pro WhatsApp: no app vira Markdown simples (negrito em **)
+    texto: semZap(a.zap, { markdown: true }),
   });
 }
 
@@ -525,7 +526,105 @@ export function montarCorpo({ perfil, dia, pesagens = [], refeicoes = [], saude 
   // fase 4: como dormiu e como comeu entram na sugestão de hoje (subir, manter ou repetir a carga)
   const ctx = contextoDoTreino({ perfil, dia, refeicoes, pesagens, saude });
   const ajustadas = ajustarSugestoesPeloDia(sugestoesCarga, ctx).map(({ tentativas, ...s }) => s);
-  return completar({ composicao, atual: composicao[composicao.length - 1] || null, ritmo, treino, forca, sugestoesCarga: ajustadas, contextoTreino: ctx, medidas: [] });
+  // fase 5: a rotina por dia da semana com a carga sugerida por exercício
+  const rotina = temHevy ? montarRotina({ sessoes: treinos, catalogo, dia, contexto: ctx }) : [];
+  return completar({ composicao, atual: composicao[composicao.length - 1] || null, ritmo, treino, forca, sugestoesCarga: ajustadas, contextoTreino: ctx, rotina, medidas: [] });
+}
+
+// ============================================================
+// Rotina de treino com carga sugerida (fase 5)
+// ============================================================
+const NOME_DIA_SEMANA = ['', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+const serieValidaRotina = (s) => s && s.type !== 'warmup' && ((s.reps || 0) > 0 || (s.duration_seconds || 0) > 0);
+const fmtKg = (kg) => (kg == null ? '' : String(Math.round(kg * 100) / 100).replace('.', ','));
+/** 1 = segunda … 7 = domingo, pelo instante ISO da sessão no fuso dado. */
+function diaDaSemanaDe(iso, fuso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const nome = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: fuso || TZ_PADRAO }).format(d);
+  return { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }[nome] || null;
+}
+const TZ_PADRAO = 'America/Sao_Paulo';
+
+/**
+ * Puro. A sugestão pra um exercício a partir do histórico dele (lista de { dia, kg, reps } da mais antiga pra mais recente)
+ * e do contexto do dia. acao: manter (sono/energia/comida seguram, ou exercício sem carga), subir (reps ≥ 10 na carga, ou
+ * carga parada há 2+ semanas com reps ≥ 8) pelo incrementoDeCarga, senão repetir (mesma carga, +1 rep).
+ */
+export function sugerirCargaExercicio({ nome, historico = [], contexto = {} }) {
+  const ultimo = historico[historico.length - 1];
+  if (!ultimo) return null;
+  const kg = Number(ultimo.kg) || 0;
+  const reps = Number(ultimo.reps) || 0;
+  const base = { ultimoKg: kg || null, ultimasReps: reps || null, sugeridoKg: kg || null, deltaKg: 0, sugeridasReps: reps || null };
+  const pouco = (contexto.sonoMin != null && contexto.sonoMin < SONO_CURTO_MIN) || (contexto.energia != null && contexto.energia < 45);
+  if (!kg) return { ...base, acao: 'manter', motivo: 'exercício sem carga: mantém', frase: `Fez ${reps || '?'} repetições. Próximo treino: repete.` };
+  if (pouco) return { ...base, acao: 'manter', motivo: 'dormiu pouco ou energia baixa', frase: `Dormiu pouco: mantém ${fmtKg(kg)} kg × ${reps}.` };
+  if (contexto.comida === 'abaixo') return { ...base, acao: 'manter', motivo: 'comeu abaixo da meta nos últimos dias', frase: `Comeu abaixo da meta: mantém ${fmtKg(kg)} kg × ${reps}.` };
+  // quando a carga subiu pela última vez
+  let ultimaSubida = historico[0]?.dia || null;
+  for (let i = 1; i < historico.length; i++) if ((historico[i].kg || 0) > (historico[i - 1].kg || 0)) ultimaSubida = historico[i].dia;
+  const subiuNaUltima = historico.length >= 2 && (ultimo.kg || 0) > (historico[historico.length - 2].kg || 0);
+  const semanasParado = ultimaSubida ? Math.floor((Date.parse(`${ultimo.dia}T12:00:00Z`) - Date.parse(`${ultimaSubida}T12:00:00Z`)) / (7 * 86400_000)) : 0;
+  const inc = incrementoDeCarga(nome, kg);
+  if (!subiuNaUltima && (reps >= 10 || (semanasParado >= 2 && reps >= 8))) {
+    const novo = Math.round((kg + inc) * 100) / 100;
+    return { ...base, sugeridoKg: novo, deltaKg: inc, sugeridasReps: Math.max(6, reps - 2), acao: 'subir', motivo: reps >= 10 ? `fez ${reps} repetições com ${fmtKg(kg)} kg: dá pra subir` : `parado há ${semanasParado} semanas com ${reps} repetições: dá pra subir`, frase: `Pegava ${fmtKg(kg)} kg × ${reps}. Próximo treino: +${fmtKg(inc)} kg = ${fmtKg(novo)} kg.` };
+  }
+  return { ...base, sugeridasReps: reps + 1, acao: 'repetir', motivo: subiuNaUltima ? 'subiu a carga no último treino: firma antes de subir de novo' : reps < 6 ? 'poucas repetições na carga: firma primeiro' : 'firma a carga com mais uma repetição', frase: `Pegava ${fmtKg(kg)} kg × ${reps}. Próximo treino: ${fmtKg(kg)} kg, tenta ${reps + 1} repetições.` };
+}
+
+/**
+ * Puro. A rotina por dia da semana das últimas 4 semanas de sessões do Hevy: só dias com 2+ sessões; o título mais frequente
+ * naquele dia; os exercícios da sessão mais recente daquele dia, na ordem feita, cada um com a sugestão (histórico de 8
+ * semanas do exercício em qualquer dia).
+ */
+export function montarRotina({ sessoes = [], catalogo = {}, dia, contexto = {}, fuso = TZ_PADRAO }) {
+  const desde4 = new Date(Date.parse(`${dia}T12:00:00Z`) - 28 * 86400_000).toISOString();
+  const desde8 = new Date(Date.parse(`${dia}T12:00:00Z`) - 56 * 86400_000).toISOString();
+  const ordenadas = [...sessoes].filter((s) => s?.inicio && String(s.inicio) >= desde8 && String(s.inicio).slice(0, 10) <= dia).sort((a, b) => String(a.inicio).localeCompare(String(b.inicio)));
+  // histórico por exercício (8 semanas), pra sugestão
+  const historico = new Map();
+  for (const s of ordenadas) {
+    for (const e of s.exercicios || []) {
+      const validas = (e.sets || []).filter(serieValidaRotina);
+      if (!validas.length) continue;
+      const kg = Math.max(...validas.map((x) => x.weight_kg || 0));
+      const reps = Math.max(...validas.filter((x) => (x.weight_kg || 0) === kg).map((x) => x.reps || 0));
+      const l = historico.get(e.title) || [];
+      l.push({ dia: String(s.inicio).slice(0, 10), kg, reps });
+      historico.set(e.title, l);
+    }
+  }
+  const porDia = new Map();
+  for (const s of ordenadas.filter((x) => String(x.inicio) >= desde4)) {
+    const dow = diaDaSemanaDe(s.inicio, fuso);
+    if (!dow) continue;
+    const l = porDia.get(dow) || [];
+    l.push(s);
+    porDia.set(dow, l);
+  }
+  const rotina = [];
+  for (const [dow, lista] of [...porDia.entries()].sort((a, b) => a[0] - b[0])) {
+    if (lista.length < 2) continue;
+    const titulos = new Map();
+    for (const s of lista) if (s.titulo) titulos.set(s.titulo, (titulos.get(s.titulo) || 0) + 1);
+    const titulo = [...titulos.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    const ultima = lista[lista.length - 1];
+    const vistos = new Set();
+    const exercicios = [];
+    for (const e of ultima.exercicios || []) {
+      if (!e?.title || vistos.has(e.title)) continue;
+      vistos.add(e.title);
+      const validas = (e.sets || []).filter(serieValidaRotina);
+      const sug = sugerirCargaExercicio({ nome: e.title, historico: historico.get(e.title) || [], contexto });
+      if (!sug) continue;
+      const grupo = catalogo[e.exercise_template_id]?.primario;
+      exercicios.push({ nome: e.title, grupo: grupo ? grupoEmPortugues(grupo) : null, series: validas.length, ...sug });
+    }
+    rotina.push({ diaSemana: dow, nome: NOME_DIA_SEMANA[dow], titulo, ultimaData: String(ultima.inicio).slice(0, 10), sessoes: lista.length, exercicios });
+  }
+  return rotina;
 }
 
 /**
@@ -627,7 +726,7 @@ export function montarDias({ perfil = {}, de, ate, refeicoes = [], pesagens = []
 /** Puro. O documento de `planos` (ou null) no formato do contrato; o texto passa pelo filtro de localização. */
 export function montarPlano(doc, termosLocal = []) {
   if (!doc?.texto) return completar({ plano: null });
-  return completar({ plano: { semana: doc.semana || null, de: doc.de || null, ate: doc.ate || null, texto: tirarLocalizacao(doc.texto, termosLocal), criadoEm: iso(doc.criadoEm) || null } });
+  return completar({ plano: { semana: doc.semana || null, de: doc.de || null, ate: doc.ate || null, texto: semZap(tirarLocalizacao(doc.texto, termosLocal), { markdown: true }), criadoEm: iso(doc.criadoEm) || null } });
 }
 
 /** Puro. Um .md do Drive (Resumos/Semana-*.md ou Mes-*.md) vira { titulo, texto, criadoEm }: sem frontmatter nem rodapé de links. */
@@ -636,9 +735,9 @@ export function montarRelatorio(arquivo, termosLocal = []) {
   let t = String(arquivo.texto).replace(/^---[\s\S]*?---\s*/, '');
   t = t.replace(/\n---\n(?:Dias:|## Números)[\s\S]*$/, ''); // os links pros dias e a tabela crua ficam no Drive
   const m = /^#\s+(.+)$/m.exec(t);
-  const titulo = (m ? tirarLocalizacao(m[1].trim(), termosLocal) : '') || String(arquivo.nome || '').replace(/\.md$/i, '') || null;
+  const titulo = (m ? semZap(tirarLocalizacao(m[1].trim(), termosLocal)) : '') || String(arquivo.nome || '').replace(/\.md$/i, '') || null;
   if (m) t = t.replace(m[0], '');
-  const texto = tirarLocalizacao(t.trim(), termosLocal);
+  const texto = semZap(tirarLocalizacao(t.trim(), termosLocal), { markdown: true });
   return texto ? { titulo, texto, criadoEm: iso(arquivo.modifiedTime) || null } : null;
 }
 
@@ -670,7 +769,7 @@ export function horaDoSlot(slots = {}, slot) {
 
 /** Puro. A resposta da IA (ia.sugerirRefeicao) no formato do contrato, filtrada de localização e com limites de tamanho. */
 export function montarSugestaoRefeicao({ slot, hora = null, restam = null, geradaEm = null, resposta = {}, termosLocal = [] }) {
-  const sem = (t, max) => (t == null ? null : tirarLocalizacao(String(t), termosLocal).slice(0, max) || null);
+  const sem = (t, max) => (t == null ? null : semZap(tirarLocalizacao(String(t), termosLocal)).slice(0, max) || null);
   const onde = (v) => (['casa', 'levar', 'fora'].includes(String(v)) ? String(v) : 'casa');
   const opcoes = (Array.isArray(resposta.opcoes) ? resposta.opcoes : [])
     .slice(0, 3)
@@ -683,6 +782,33 @@ export function montarSugestaoRefeicao({ slot, hora = null, restam = null, gerad
 // Nutri (o que a IA sabe da pessoa)
 // ============================================================
 const ROTULO_CAMPO = { objetivo: 'Objetivo', metaPeso: 'Meta de peso', peso: 'Peso', altura: 'Altura', dieta: 'Dieta', restricoes: 'Restrições', genero: 'Gênero' };
+
+// ============================================================
+// Textos sem a marcação do WhatsApp (fase 5)
+// ============================================================
+const RE_EMOJI = /[\u{1F000}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{1F1E6}-\u{1F1FF}]/gu;
+/**
+ * Puro. Texto escrito pro WhatsApp vira texto do app: sem *negrito*, _itálico_, ~riscado~, crases nem emoji, e sem
+ * espaço sobrando. Com `markdown: true` (textos longos que o app mostra como Markdown simples), o *negrito* vira
+ * **negrito** em vez de sumir.
+ */
+export function semZap(texto, { markdown = false } = {}) {
+  if (texto == null) return texto;
+  let t = String(texto).replace(/\r\n?/g, '\n');
+  t = t.replace(/```[\s\S]*?```/g, (m) => m.replace(/```/g, '')).replace(/`([^`\n]+)`/g, '$1');
+  t = t.replace(/(^|[\s(])\*([^*\n]{1,200}?)\*(?=[\s).,;:!?]|$)/g, markdown ? '$1**$2**' : '$1$2');
+  t = t.replace(/(^|[\s(])_([^_\n]{1,200}?)_(?=[\s).,;:!?]|$)/g, '$1$2');
+  t = t.replace(/(^|[\s(])~([^~\n]{1,200}?)~(?=[\s).,;:!?]|$)/g, '$1$2');
+  t = t.replace(RE_EMOJI, '');
+  // marcador de lista do WhatsApp ("• ") vira o do Markdown; "→" fica
+  t = t.replace(/^[ \t]*[•▪◦]\s*/gm, '- ');
+  return t
+    .split('\n')
+    .map((l) => l.replace(/[ \t]{2,}/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
 
 /** Puro. 8 hex do sha1 do texto: identifica um produto fixo (pelo nome) ou uma anotação (pelo texto gravado) sem depender da posição na lista. */
 export const hashCurto = (t) => createHash('sha1').update(String(t ?? '')).digest('hex').slice(0, 8);
@@ -700,7 +826,7 @@ export const FATOS_APAGAVEIS = [...FATOS_EDITAVEIS, 'girias'];
  * a hipótese aberta traz apagavel (a pessoa descarta).
  */
 export function montarNutri({ perfil, hipotesesFechadas = [], reflexoes = [], pensamentos = [], diario = [], termosLocal = [] }) {
-  const sem = (t) => tirarLocalizacao(t, termosLocal);
+  const sem = (t) => semZap(tirarLocalizacao(t, termosLocal));
   const at = perfil.atualizacoes || {};
   const fatos = [];
   // todo texto de fato passa pelo filtro (dieta, restrições e produto também: "só como no restaurante X")

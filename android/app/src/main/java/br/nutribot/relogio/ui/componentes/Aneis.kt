@@ -69,7 +69,7 @@ private fun DrawScope.arco(raio: Float, espessura: Float, inicio: Float, varredu
  * (consumido ± err) por cima, como no protótipo. err em kcal.
  */
 @Composable
-fun AnelKcal(consumido: Double, faixaMin: Double?, faixaMax: Double?, err: Double?, tamanho: Dp = 170.dp, mostrarCentro: Boolean = true) {
+fun AnelKcal(consumido: Double, faixaMin: Double?, faixaMax: Double?, err: Double?, tamanho: Dp = 170.dp, mostrarCentro: Boolean = true, legenda: String = "kcal comidas") {
     val escala = maxOf((faixaMax ?: consumido) * 1.15, consumido + (err ?: 0.0), 1.0)
     val prog = animaAte((consumido / escala).toFloat().coerceIn(0f, 1f))
     val faixaAlpha = animaAte(1f, duracao = 500, atraso = 1000)
@@ -96,7 +96,7 @@ fun AnelKcal(consumido: Double, faixaMin: Double?, faixaMax: Double?, err: Doubl
         // no anel pequeno (cabeçalho do cartão) o número já está ao lado: o centro fica limpo
         if (mostrarCentro) Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(Formato.kcal(consumido), fontFamily = Fredoka, fontWeight = FontWeight.W700, fontSize = (tamanho.value * 0.17f).sp, color = Cores.Tinta)
-            Text("kcal comidas", fontFamily = Atkinson, fontSize = 13.sp, color = Cores.Tinta3)
+            Text(legenda, fontFamily = Atkinson, fontSize = 13.sp, color = Cores.Tinta3, textAlign = TextAlign.Center)
         }
     }
 }

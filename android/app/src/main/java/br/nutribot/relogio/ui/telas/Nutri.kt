@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -40,6 +42,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -90,7 +93,7 @@ private fun rotuloNatureza(n: String?): String = when (n) {
     else -> n ?: "—"
 }
 
-private val abasNutri = listOf("Fatos", "Hipóteses", "Pensamentos", "Plano", "Diário")
+private val abasNutri = listOf("fatos", "hipóteses", "pensamentos", "plano", "diário")
 
 private val soData = Regex("^\\d{4}-\\d{2}-\\d{2}$")
 
@@ -113,14 +116,39 @@ private fun diaDe(s: String?, fuso: String?): LocalDate? {
     return Formato.instante(s)?.atZone(zona(fuso))?.toLocalDate() ?: Formato.dia(s)
 }
 
-/** Origem curta: até o primeiro parêntese ou ponto e vírgula ("reflexão de domingo (IA); sinais..." vira "reflexão de domingo"). */
-private fun origemCurta(s: String?): String? = s?.substringBefore(" (")?.substringBefore(";")?.trim()?.takeIf { it.isNotBlank() }
+/**
+ * Origem como pílula curta (fase 5): "cadastro", "conversa", "balança", "rótulo", "você" ou "IA". A frase longa do servidor
+ * ("reflexão de domingo (IA); sinais dos pensamentos") não aparece no app.
+ */
+private fun origemPilula(s: String?): String? {
+    val o = s?.lowercase() ?: return null
+    return when {
+        o.contains("pela pessoa") || o.contains("no app") -> "você"
+        o.contains("balança") -> "balança"
+        o.contains("rótulo") -> "rótulo"
+        o.contains("cadastro") -> "cadastro"
+        o.contains("conversa") -> "conversa"
+        o.contains("ia") || o.contains("nutri") || o.contains("reflexão") -> "IA"
+        else -> null
+    }
+}
 
-/** Rodapé de um item: "origem curta · 14/10 11:30" (dia + hora quando o item tem `dia`; senão `atualizadoEm`). */
-private fun rodape(it: JSONObject, fuso: String?): String {
-    val data = it.str("dia")?.let { d -> Formato.dia(d)?.let { Formato.diaCurto(it) }?.let { q -> q + (it.str("hora")?.let { h -> " $h" } ?: "") } }
+/** A data de um item: "14/10 11:30" (dia + hora quando o item tem `dia`; senão `atualizadoEm`), nunca ISO. */
+private fun dataDoItem(it: JSONObject, fuso: String?): String? =
+    it.str("dia")?.let { d -> Formato.dia(d)?.let { Formato.diaCurto(it) }?.let { q -> q + (it.str("hora")?.let { h -> " $h" } ?: "") } }
         ?: quandoCurto(it.str("atualizadoEm"), fuso)
-    return listOfNotNull(origemCurta(it.str("origem")), data).joinToString(" · ")
+
+/**
+ * Texto de um cartão da Nutri: 2 linhas por padrão e o resto em "ver mais" (fase 5). `aoTransbordar` avisa se as 2 linhas
+ * não bastaram, para o cartão só oferecer "ver mais" quando há mais.
+ */
+@Composable
+private fun TextoDobravel(texto: String, aberto: Boolean, aoTransbordar: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    Text(
+        texto, style = MaterialTheme.typography.bodyMedium, modifier = modifier,
+        maxLines = if (aberto) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis,
+        onTextLayout = { if (!aberto) aoTransbordar(it.hasVisualOverflow) },
+    )
 }
 
 /** Uma ação pendente sobre um fato ou hipótese (fase 3, A4): corrigir o texto, apagar o fato ou descartar a hipótese. */
@@ -194,25 +222,28 @@ private fun ListaItens(itens: List<JSONObject>, vazio: String, fuso: String?, te
 }
 
 /**
- * Cartão de fato, hipótese ou avaliação: pílulas, texto, UMA linha de rodapé (origem curta · 14/10 11:30) e as ações.
- * Como verificar, evidência e sinais ficam dentro de "ver mais".
+ * Cartão de fato, hipótese ou avaliação (fase 5): pílulas (natureza, status, origem curta), o texto em 2 linhas, a data e as
+ * ações. O resto do texto, como verificar, evidência e sinais ficam dentro de "ver mais".
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CartaoItem(it: JSONObject, texto: String, fuso: String?, atraso: Int = 0, acoes: (@Composable (JSONObject) -> Unit)? = null, pilulaExtra: String? = null) {
     val (fundo, tinta) = corNatureza(it.str("natureza"))
     val comoVerificar = it.str("comoVerificar")
     val evidencia = it.str("evidencia")
     val sinais = it.arr("sinais").objs()
-    val temMais = comoVerificar != null || evidencia != null || sinais.isNotEmpty()
+    val temDetalhe = comoVerificar != null || evidencia != null || sinais.isNotEmpty()
     var mais by rememberSaveable(it.str("id") ?: texto) { mutableStateOf(false) }
+    var transborda by remember(texto) { mutableStateOf(false) }
     Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = atraso) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Pilula(rotuloNatureza(it.str("natureza")), fundo, tinta)
-            it.str("status")?.let { s -> Pilula(s, Cores.Lavanda, Cores.Tinta2) }
+            it.str("status")?.let { s -> Pilula(s.lowercase(), Cores.Lavanda, Cores.Tinta2) }
             pilulaExtra?.let { p -> Pilula(p, Cores.Lavanda, Cores.Tinta2) }
+            origemPilula(it.str("origem"))?.let { o -> Pilula(o, Cores.Trilho, Cores.LilasTexto) }
         }
-        Text(texto, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
-        if (temMais && mais) {
+        TextoDobravel(texto, mais, { transborda = it }, Modifier.padding(top = 6.dp))
+        if (temDetalhe && mais) {
             comoVerificar?.let { c -> Text("Como verificar: $c", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 4.dp)) }
             evidencia?.let { c -> Text("Evidência: $c", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 2.dp)) }
             if (sinais.isNotEmpty()) {
@@ -225,8 +256,8 @@ private fun CartaoItem(it: JSONObject, texto: String, fuso: String?, atraso: Int
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-            Text(rodape(it, fuso), style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.weight(1f))
-            if (temMais) Link(if (mais) "ver menos" else "ver mais") { mais = !mais }
+            Text(dataDoItem(it, fuso) ?: "", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            if (temDetalhe || transborda || mais) Link(if (mais) "ver menos" else "ver mais") { mais = !mais }
             acoes?.invoke(it)
         }
     }
@@ -263,7 +294,7 @@ private fun Plano(vm: AppVM, perfilId: String) {
             val plano = dados.obj("plano")
             val texto = plano.str("texto")
             if (plano == null || texto == null) {
-                Vazio("Sem plano ainda. Peça !plano no WhatsApp.", Pose.DuplaDescansando)
+                Vazio("Sem plano desta semana ainda.", Pose.DuplaDescansando)
             } else {
                 val de = Formato.dia(plano.str("de"))
                 val ate = Formato.dia(plano.str("ate"))
@@ -457,11 +488,17 @@ private fun Diario(j: JSONObject, fuso: String?, aoEscolher: (AcaoNutri) -> Unit
         Text("Nada anotado neste dia.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)
     } else {
         doDia.forEachIndexed { i, it ->
+            var mais by rememberSaveable(selStr, i) { mutableStateOf(false) }
+            var transborda by remember(it.texto) { mutableStateOf(false) }
             Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = (i * 30).coerceAtMost(300)) {
-                Pilula(it.tipo, it.fundo, it.tinta, Modifier.padding(bottom = 6.dp))
-                Text(it.texto, style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 6.dp)) {
+                    Pilula(it.tipo, it.fundo, it.tinta)
+                    origemPilula(it.item.str("origem"))?.let { o -> Pilula(o, Cores.Trilho, Cores.LilasTexto) }
+                }
+                TextoDobravel(it.texto, mais, { transborda = it })
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-                    Text(rodape(it.item, fuso), style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    Text(dataDoItem(it.item, fuso) ?: "", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    if (transborda || mais) Link(if (mais) "ver menos" else "ver mais") { mais = !mais }
                     if (it.fato) AcoesFato(it.item, aoEscolher)
                 }
             }

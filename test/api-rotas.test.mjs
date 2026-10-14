@@ -213,8 +213,14 @@ test('grafico.png: o PNG do !grafico com a config do WhatsApp, guardado 1 h por 
 test('fase 4: /dias (≤ 92 dias, de obrigatório), /plano (Mongo ou nulo), /sugestao-refeicao (IA injetada, cache 1 h por slot, 503 quando falha)', async () => {
   const pedidosIa = [];
   let falharIa = false;
+  const perguntas = [];
   const ia = {
     estimarRefeicaoApp: async () => null,
+    responderApp: async (p) => {
+      perguntas.push(p);
+      if (p.pergunta.includes('cai')) throw new Error('ia caiu');
+      return `*Oi!* 💪 Hoje você comeu ${p.hoje.includes('nada') ? 'nada' : 'algo'}. Mora na Rua X. _Força_!`;
+    },
     sugerirRefeicao: async (p) => {
       pedidosIa.push(p);
       if (falharIa) throw new Error('ia caiu');
@@ -282,6 +288,19 @@ test('fase 4: /dias (≤ 92 dias, de obrigatório), /plano (Mongo ou nulo), /sug
     assert.equal(r.status, 200);
     r = await get(`/perfis/${ID}/sugestao-refeicao?slot=cafe`);
     assert.deepEqual([r.status, r.corpo.erro.codigo], [429, 'muitas_analises']);
+
+    // fase 5: pergunta rápida; resposta em texto puro (sem *, _, emoji) e sem localização; 400 vazia; 503 quando a IA falha
+    const post = async (corpo) => { const x = await fetch(`${b}/f/perfis/${ID}/perguntar`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(corpo) }); return { status: x.status, corpo: await x.json() }; };
+    r = await post({ texto: '  O que   como agora?  ', anteriores: [{ pergunta: 'oi', resposta: 'oi!' }] });
+    assert.equal(r.status, 200, JSON.stringify(r.corpo));
+    assert.equal(r.corpo.resposta, 'Oi! Hoje você comeu algo. Força!');
+    assert.deepEqual([perguntas.length, perguntas[0].pergunta, perguntas[0].anteriores.length, perguntas[0].hoje.includes('Café da manhã'), typeof perguntas[0].treino], [1, 'O que como agora?', 1, true, 'string']);
+    r = await post({ texto: '' });
+    assert.equal(r.status, 400);
+    r = await post({ texto: 'a ia cai?' });
+    assert.deepEqual([r.status, r.corpo.erro.codigo], [503, 'ia_indisponivel']);
+    const anonPost = await fetch(`${b}/f/perfis/${ID}/perguntar`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"texto":"x"}' });
+    assert.equal(anonPost.status, 401);
     const anon = await fetch(`${b}/f/perfis/${ID}/sugestao-refeicao`);
     assert.equal(anon.status, 401);
   } finally {

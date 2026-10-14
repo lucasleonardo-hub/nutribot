@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -73,7 +72,6 @@ import br.nutribot.relogio.ui.Formato
 import br.nutribot.relogio.ui.componentes.Cabecalho
 import br.nutribot.relogio.ui.componentes.Cartao
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
-import br.nutribot.relogio.ui.componentes.LinhaValor
 import br.nutribot.relogio.ui.componentes.Mascote
 import br.nutribot.relogio.ui.componentes.Pilula
 import br.nutribot.relogio.ui.componentes.Pose
@@ -140,12 +138,15 @@ fun TelaCorpo(vm: AppVM, perfil: Perfil?) {
     LaunchedEffect(rota) { vm.carregar(rota) }
     val atual = carga.dados.obj("atual")
     val sub = "${perfil.curto} · " + (Formato.dia(atual.str("dia"))?.let { "medição de ${Formato.diaCurto(it)}" } ?: "composição") + (if (perfil.temHevy) " + Hevy" else "")
-    ConteudoCarga(carga, { vm.carregar(rota, forcar = true) }, topo = { Cabecalho("Corpo", sub, Pose.CorgiHalter, 64.dp) }) { j -> ConteudoCorpo(j) }
+    ConteudoCarga(carga, { vm.carregar(rota, forcar = true) }, topo = { Cabecalho("Corpo", sub, Pose.CorgiHalter, 64.dp) }) { j -> ConteudoCorpo(j, perfil) }
 }
 
 @Composable
-private fun ConteudoCorpo(j: JSONObject) {
+private fun ConteudoCorpo(j: JSONObject, perfil: Perfil) {
     val atual = j.obj("atual")
+    // fase 5: a rotina (um item por dia da semana com treino) vem primeiro; sem Hevy e sem rotina, o cartão não aparece
+    val rotina = remember(j) { rotinaDe(j) }
+    if (rotina.isNotEmpty() || perfil.temHevy) CartaoRotina(rotina, Formato.hojeDe(j.str("dia"), perfil.fuso))
     val treino = j.obj("treino")
     val series = HashMap<Regiao, Double>()
     treino.arr("porGrupo").objs().forEach { g ->
@@ -239,7 +240,46 @@ private fun LegendaMusculos(series: Map<Regiao, Double>, temTreino: Boolean) {
     }
 }
 
-/** treino: { sessoes, series, volumeKg, volumeAnteriorKg, variacaoVolume, rpeMedio, semanasComTreino, porGrupo, progressao } */
+/** Uma linha da força: exercício · carga · seta (↑ subindo, → parado, ↓ caindo). */
+private data class LinhaForca(val exercicio: String, val kg: Double?, val sentido: Int)
+
+/**
+ * Até 3 linhas de força: a progressão de 1RM da semana (variação > 0 sobe, < 0 cai) e, se faltar, as listas de 8 semanas
+ * (subindo, parados, caindo) com a melhor carga.
+ */
+private fun linhasForca(t: JSONObject, forca: JSONObject?): List<LinhaForca> {
+    val saida = ArrayList<LinhaForca>()
+    t.arr("progressao").objs().forEach { e ->
+        val nome = e.str("exercicio") ?: return@forEach
+        val v = e.num("variacao") ?: 0.0
+        saida += LinhaForca(nome, e.num("rmKg"), if (v > 0.005) 1 else if (v < -0.005) -1 else 0)
+    }
+    if (saida.size < 3 && forca != null) {
+        listOf("subindo" to 1, "parados" to 0, "caindo" to -1).forEach { (k, s) ->
+            forca.arr(k).objs().forEach { e ->
+                val nome = e.str("exercicio") ?: return@forEach
+                if (saida.none { it.exercicio == nome }) saida += LinhaForca(nome, e.num("melhorKg"), s)
+            }
+        }
+    }
+    return saida.take(3)
+}
+
+/** Um número grande com rótulo em cima, na grade do "Treino da semana". */
+@Composable
+private fun NumeroGrade(rotulo: String, valor: String, modifier: Modifier = Modifier, detalhe: String? = null) {
+    Column(modifier.clip(Formas.Pequeno).background(Color(0xFFF7F5FF)).padding(horizontal = 12.dp, vertical = 8.dp).semantics(mergeDescendants = true) {}) {
+        Text(rotulo, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp)
+        Text(valor, fontFamily = Fredoka, fontWeight = FontWeight.W700, fontSize = 20.sp, color = Cores.Tinta, maxLines = 1)
+        detalhe?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, maxLines = 1) }
+    }
+}
+
+/**
+ * treino: { sessoes, series, volumeKg, volumeAnteriorKg, variacaoVolume, rpeMedio, semanasComTreino, porGrupo, progressao }
+ * Fase 5: números em grade, séries por grupo em pílulas e a força em 3 linhas, sem parágrafos.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CartaoTreino(t: JSONObject, forca: JSONObject?) {
     Cartao(atraso = 50) {
@@ -251,127 +291,84 @@ private fun CartaoTreino(t: JSONObject, forca: JSONObject?) {
                 Pilula("volume ${Formato.sinal(pct, 0)}%", if (pct >= 0) Color(0xFFDDF5E8) else Cores.AtencaoFundo, if (pct >= 0) Cores.BomTinta else Cores.AtencaoTinta)
             }
         }
-        Spacer(Modifier.height(6.dp))
-        LinhaValor("Sessões", Formato.inteiro(t.num("sessoes")))
-        LinhaValor("Séries", Formato.inteiro(t.num("series")))
-        t.num("volumeKg")?.let { LinhaValor("Volume", "${Formato.inteiro(it)} kg" + (t.num("volumeAnteriorKg")?.let { a -> " (antes ${Formato.inteiro(a)})" } ?: "")) }
-        t.num("rpeMedio")?.let { LinhaValor("Esforço médio (RPE)", Formato.decimal(it)) }
-        t.num("semanasComTreino")?.let { LinhaValor("Semanas com treino", Formato.inteiro(it)) }
-        val prog = t.arr("progressao").objs()
-        if (prog.isNotEmpty()) {
-            Text("Força estimada (1RM)", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
-            prog.take(8).forEach { e ->
-                val v = e.num("variacao")
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(e.str("exercicio") ?: "Exercício", style = MaterialTheme.typography.labelLarge)
-                        e.str("grupo")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp) }
-                    }
-                    Text(
-                        (e.num("rmKg")?.let { Formato.decimal(it) + " kg" } ?: "—") + (v?.let { " · ${Formato.sinal(it * 100, 0)}%" } ?: ""),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if ((v ?: 0.0) > 0) Cores.BomTinta else if ((v ?: 0.0) < 0) Cores.CuidadoTinta else Cores.Tinta2,
-                    )
-                }
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumeroGrade("sessões", Formato.inteiro(t.num("sessoes")), Modifier.weight(1f))
+            NumeroGrade("séries", Formato.inteiro(t.num("series")), Modifier.weight(1f))
+            NumeroGrade("esforço", t.num("rpeMedio")?.let { Formato.decimal(it) } ?: "—", Modifier.weight(1f), detalhe = "RPE médio")
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumeroGrade("volume", t.num("volumeKg")?.let { "${Formato.inteiro(it)} kg" } ?: "—", Modifier.weight(1f), detalhe = t.num("volumeAnteriorKg")?.let { "antes ${Formato.inteiro(it)} kg" })
+            NumeroGrade("semanas seguidas", Formato.inteiro(t.num("semanasComTreino")), Modifier.weight(1f), detalhe = "com treino")
+        }
+        val grupos = t.arr("porGrupo").objs().mapNotNull { g ->
+            val nome = g.str("nome") ?: g.str("grupo") ?: return@mapNotNull null
+            val s = g.num("series")?.takeIf { it > 0 } ?: return@mapNotNull null
+            nome to s
+        }
+        if (grupos.isNotEmpty()) {
+            Text("Séries por grupo", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                grupos.take(8).forEach { (nome, s) -> Pilula("$nome · ${Formato.inteiro(s)}", Cores.Trilho, Cores.LilasTexto) }
             }
         }
-        // força em 8 semanas: subindo, parados, caindo
-        if (forca != null) {
-            listOf(Triple("subindo", "Subindo", Cores.BomTinta), Triple("parados", "Parados", Cores.AtencaoTinta), Triple("caindo", "Caindo", Cores.CuidadoTinta)).forEach { (k, rot, cor) ->
-                val l = forca.arr(k).objs()
-                if (l.isNotEmpty()) {
-                    Text("$rot (8 semanas)", style = MaterialTheme.typography.labelLarge, color = cor, modifier = Modifier.padding(top = 8.dp))
-                    l.take(5).forEach { e ->
-                        Text(
-                            "• ${e.str("exercicio") ?: "?"}: " + listOfNotNull(
-                                e.num("melhorKg")?.let { "${Formato.decimal(it)} kg" + (e.num("reps")?.let { r -> " × ${Formato.inteiro(r)}" } ?: "") },
-                                e.num("desdeKg")?.let { "desde ${Formato.decimal(it)} kg" },
-                                e.num("semanasParado")?.takeIf { it > 0 && k == "parados" }?.let { "parado há ${Formato.inteiro(it)} sem" },
-                            ).joinToString(" · "),
-                            style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2,
-                        )
-                    }
+        val linhas = linhasForca(t, forca)
+        if (linhas.isNotEmpty()) {
+            Text("Força estimada", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp, bottom = 2.dp))
+            linhas.forEach { l ->
+                val (seta, cor, nome) = when {
+                    l.sentido > 0 -> Triple("↑", Cores.BomTinta, "subindo")
+                    l.sentido < 0 -> Triple("↓", Cores.CuidadoTinta, "caindo")
+                    else -> Triple("→", Cores.AtencaoTinta, "parado")
+                }
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(l.exercicio, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(l.kg?.let { kgCurto(it) } ?: "—", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+                    Text(seta, fontFamily = Fredoka, fontWeight = FontWeight.W700, fontSize = 16.sp, color = cor, modifier = Modifier.semantics { contentDescription = nome })
                 }
             }
         }
     }
 }
 
-/** O que o dia diz para o treino (fase 4): comida dos últimos dias, no rótulo da pessoa. */
-private fun rotuloComida(c: String?): String? = when (c) {
-    "abaixo" -> "comeu abaixo da meta"
-    "dentro" -> "comeu na meta"
-    "acima" -> "comeu acima da meta"
-    else -> null
-}
-
-/** A pílula do `hoje` de uma sugestão (fase 4): subir = verde, manter = âmbar, repetir = lilás. Sem `hoje` (servidor antigo), nada. */
-private fun pilulaHoje(hoje: String?): Triple<String, Color, Color>? = when (hoje) {
-    "subir" -> Triple("sobe hoje", Cores.BomFundo, Cores.BomTinta)
-    "manter" -> Triple("mantém", Cores.AtencaoFundo, Cores.AtencaoTinta)
-    "repetir" -> Triple("repete", Cores.Trilho, Cores.LilasTexto)
-    else -> null
+/** A pílula do estado de uma sugestão da Nutri: batida = verde, tentando = âmbar, o resto = lilás. */
+private fun pilulaStatus(status: String?): Triple<String, Color, Color> = when (status) {
+    "batida" -> Triple("batida", Color(0xFFDDF5E8), Cores.BomTinta)
+    "tentando" -> Triple("tentando", Cores.AtencaoFundo, Cores.AtencaoTinta)
+    else -> Triple(status ?: "sugerida", Cores.Trilho, Cores.LilasTexto)
 }
 
 /**
  * sugestoesCarga: [{ exercicio, deKg, deReps, paraKg, paraReps, status, feitaEm, batidaEm, como, hoje, motivo }]
- * contextoTreino (fase 4): { energia, sonoMin, comida: abaixo|dentro|acima, texto } — como o dia de hoje pesa no próximo treino.
+ * contextoTreino (fase 4): { energia, sonoMin, comida, texto } — como o dia de hoje pesa no próximo treino.
+ * Fase 5: enxuto (a progressão detalhada mora em "Sua rotina"): só o título, o texto do dia e uma linha por sugestão.
  */
 @Composable
 private fun CartaoSugestoes(lista: List<JSONObject>, contexto: JSONObject?) {
     if (lista.isEmpty()) return
     Cartao(atraso = 80) {
-        TituloSecao("Sugestões de carga")
+        TituloSecao("Sugestões da Nutri")
         contexto.str("texto")?.let { texto ->
             Row(
-                Modifier.fillMaxWidth().padding(top = 10.dp).clip(Formas.Pequeno).background(Color(0xFFF3EEFF)).padding(start = 6.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+                Modifier.fillMaxWidth().padding(top = 10.dp).clip(Formas.Pequeno).background(Color(0xFFF3EEFF)).padding(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Mascote(Pose.CorgiHalter, 48.dp)
-                Column(Modifier.weight(1f)) {
-                    Text(texto, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta)
-                    val sinais = listOfNotNull(
-                        contexto.num("energia")?.let { "energia ${Formato.inteiro(it)}" },
-                        contexto.num("sonoMin")?.let { "sono ${Formato.sono(it)}" },
-                        rotuloComida(contexto.str("comida")),
-                    )
-                    if (sinais.isNotEmpty()) Text(sinais.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
-                }
+                Mascote(Pose.CorgiHalter, 40.dp)
+                Text(texto, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta, modifier = Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
         }
         lista.forEach { s ->
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            val (rot, fundo, tinta) = pilulaStatus(s.str("status"))
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(s.str("exercicio") ?: "Exercício", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f, fill = false))
-                        pilulaHoje(s.str("hoje"))?.let { (rot, fundo, tinta) -> Pilula(rot, fundo, tinta) }
-                    }
-                    val de = s.num("deKg")?.let { "${Formato.decimal(it)} kg" + (s.num("deReps")?.let { r -> " × ${Formato.inteiro(r)}" } ?: "") }
-                    de?.let { Text("última: $it", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp) }
-                    s.str("motivo")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
-                    s.str("como")?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp) }
+                    Text(s.str("exercicio") ?: "Exercício", style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val de = s.num("deKg")?.let { kgCurto(it) + (s.num("deReps")?.let { r -> " × ${Formato.inteiro(r)}" } ?: "") }
+                    val para = s.num("paraKg")?.let { kgCurto(it) + (s.num("paraReps")?.let { r -> " × ${Formato.inteiro(r)}" } ?: "") }
+                    Text(listOfNotNull(de, para).joinToString(" → "), style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2)
                 }
-                val status = s.str("status")
-                val (fundo, tinta) = when (status) {
-                    "batida" -> Color(0xFFDDF5E8) to Cores.BomTinta
-                    "tentando" -> Cores.AtencaoFundo to Cores.AtencaoTinta
-                    else -> Cores.Trilho to Cores.LilasTexto
-                }
-                Column(Modifier.clip(Formas.Pequeno).background(fundo).padding(horizontal = 10.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        s.num("paraKg")?.let { "${Formato.decimal(it)} kg" } ?: "—",
-                        fontFamily = Fredoka, fontWeight = FontWeight.W700, fontSize = 14.sp, color = tinta,
-                    )
-                    s.num("paraReps")?.let { Text("× ${Formato.inteiro(it)}", fontSize = 11.sp, color = tinta) }
-                    status?.let { Text(it, fontSize = 10.sp, color = tinta) }
-                }
+                Pilula(rot, fundo, tinta)
             }
         }
-        Text(
-            "Sugestões a partir dos treinos do Hevy.",
-            style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp),
-        )
     }
 }
 
