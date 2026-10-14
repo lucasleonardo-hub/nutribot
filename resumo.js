@@ -188,13 +188,19 @@ export function compilarSemana(refeicoes, perfis, dias) {
 // ============================================================
 // !hoje: totais do dia por pessoa a partir dos registros (sem IA)
 // ============================================================
-export function resumirHoje(refeicoes, perfis, dia, habitos = []) {
+/**
+ * `diaDe(perfil)` (opcional): o "hoje" de cada pessoa, no fuso dela (util.marcaDeTempo). Desde 13/10 refeição e hábito são
+ * gravados no dia local da pessoa: pra quem está à frente do grupo (Heitor em Sofia) o "hoje" dele já virou enquanto o do grupo
+ * não. Sem `diaDe`, todo mundo usa `dia`.
+ */
+export function resumirHoje(refeicoes, perfis, dia, habitos = [], { diaDe = () => dia } = {}) {
   const blocos = [];
   for (const p of perfis) {
-    const h = habitos.find((x) => (p.jids || []).includes(x.jid));
+    const diaP = diaDe(p) || dia;
+    const h = habitos.find((x) => (p.jids || []).includes(x.jid) && (x.dia == null || x.dia === diaP));
     const agua = h?.agua_ml ? `\n💧 Água: ${(h.agua_ml / 1000).toFixed(1).replace('.', ',')} L` : '';
     const alcool = h?.alcool_doses ? `\n🍺 Álcool: ${h.alcool_doses} dose(s)` : '';
-    const minhas = refeicoes.filter((r) => r.dia === dia && ((p.jids || []).includes(r.jid) || r.nome === p.nome)).sort((a, b) => a.minutos - b.minutos);
+    const minhas = refeicoes.filter((r) => r.dia === diaP && ((p.jids || []).includes(r.jid) || r.nome === p.nome)).sort((a, b) => a.minutos - b.minutos);
     const primeiro = p.apelido || p.nome.split(' ')[0];
     if (!minhas.length) {
       blocos.push(`*${primeiro}*: nada registrado hoje ainda 👀`);
@@ -284,10 +290,11 @@ export function lerTipoRefeicao(texto) {
 // ============================================================
 // Pro prompt: o que o sistema já registrou hoje, por pessoa, em uma linha cada (ela não pode pedir de novo)
 // ============================================================
-export function registradasHojeParaPrompt(refeicoes, perfis, dia) {
+export function registradasHojeParaPrompt(refeicoes, perfis, dia, { diaDe = () => dia } = {}) {
   return perfis
     .map((p) => {
-      const minhas = refeicoes.filter((r) => r.dia === dia && ((p.jids || []).includes(r.jid) || r.nome === p.nome)).sort((a, b) => a.minutos - b.minutos);
+      const diaP = diaDe(p) || dia; // o "hoje" de cada um, no fuso dele (ver resumirHoje)
+      const minhas = refeicoes.filter((r) => r.dia === diaP && ((p.jids || []).includes(r.jid) || r.nome === p.nome)).sort((a, b) => a.minutos - b.minutos);
       if (!minhas.length) return `- ${p.nome}: nada registrado ainda hoje`;
       const itens = minhas.map(
         (r) =>

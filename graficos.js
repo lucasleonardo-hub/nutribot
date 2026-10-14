@@ -1,6 +1,8 @@
 // graficos.js - Gráficos como imagem (PNG) via QuickChart (serviço gratuito que renderiza Chart.js), sem dependência nativa.
 // Peso e calorias dos últimos 30 dias por pessoa, com a faixa da meta quando houver. Vai no !grafico e no resumo de domingo.
 
+import { validarPesagens } from './progresso.js';
+
 const URL = process.env.QUICKCHART_URL || 'https://quickchart.io/chart';
 const TIMEOUT_MS = 20_000;
 
@@ -27,9 +29,13 @@ export function configGrafico({ nome, refeicoes = [], pesagens = [], gastos, alv
     kcalPorDia.set(r.dia, (kcalPorDia.get(r.dia) || 0) + r.estimativa.kcal);
     protPorDia.set(r.dia, (protPorDia.get(r.dia) || 0) + (r.estimativa.p || 0));
   }
-  const pesoPorDia = new Map(pesagens.filter((p) => p.peso && eixo.includes(p.dia)).map((p) => [p.dia, p.peso]));
+  // a série VALIDADA do progresso (uma por dia, sem libra, sem outra pessoa na balança, sem a digitada que discorda do relógio):
+  // até 13/10 o gráfico plotava as pesagens cruas e "a última do dia" quando havia duas, e mostrava ponto que a conta descartou
+  const pontos = validarPesagens(pesagens, { dia }).pontos.filter((p) => eixo.includes(p.dia));
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const pesoPorDia = new Map(pontos.map((p) => [p.dia, r2(p.peso)]));
   // massa magra (peso x (1 - gordura)) quando a bioimpedância do relógio trouxe gordura: a linha que diz se o ganho é limpo
-  const magraPorDia = new Map(pesagens.filter((p) => p.peso && p.gordura != null && eixo.includes(p.dia)).map((p) => [p.dia, Math.round(p.peso * (1 - Number(p.gordura) / 100) * 10) / 10]));
+  const magraPorDia = new Map(pontos.filter((p) => p.gordura != null).map((p) => [p.dia, Math.round(p.peso * (1 - Number(p.gordura) / 100) * 10) / 10]));
   const temPeso = pesoPorDia.size > 0;
   const temGasto = gastos && eixo.some((d) => gastos[d]);
   const datasets = [

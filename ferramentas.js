@@ -18,7 +18,7 @@ import { progressoDe } from './acompanhamento.js';
 import { diasDeComida, somarDias } from './progresso.js';
 import { treinoDe, temHevy } from './treino.js';
 import { ehDonoDaAgenda } from './agenda.js';
-import { horariosHabituais, diasAnteriores, fusoDe } from './util.js';
+import { horariosHabituais, diasAnteriores, fusoDe, marcaDeTempo } from './util.js';
 
 const TETO_CHARS = 7000;
 // a ferramenta pesagens junta o PROGRESSO inteiro, a lista de pesagens e a linha de tendência de 120 dias: com 7.000 a
@@ -258,7 +258,8 @@ export function ferramentasPara(perfil, { dia, apenas = null, escrita = false } 
       if (!campos.length) return '(nada válido pra atualizar: valor fora do permitido ou igual ao que já está)';
       await salvarPerfil(novo);
       Object.assign(perfil, novo);
-      if (novo.peso && jids[0]) registrarPesagem({ jid: jids[0], nome: perfil.nome, dia, peso: novo.peso }).catch(() => {});
+      // peso dito na conversa: fonte 'digitada' (o envio do relógio não apaga mais), no dia local da pessoa
+      if (novo.peso && jids[0]) registrarPesagem({ jid: jids[0], nome: perfil.nome, dia: marcaDeTempo(perfil).dia, peso: novo.peso, fonte: 'digitada' }).catch(() => {});
       return `perfil atualizado: ${campos.map((k) => `${k}=${JSON.stringify(novo[k])}`).join(', ')}`;
     },
     async reflexao() {

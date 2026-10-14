@@ -144,7 +144,12 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
     const historico = [...estado.memoria.mensagens];
 
     if (grupo && (perfis.length || forcado)) {
-      // números do dia vêm do BANCO (registros já corrigidos, fundidos e apagados); a transcrição é só reserva
+      // números do dia vêm do BANCO (registros já corrigidos, fundidos e apagados); a transcrição é só reserva.
+      // Regra do fuso (13/10): o `dia` do registro é o LOCAL de cada pessoa. O resumo do dia D do grupo (23:59 em São Paulo) traz,
+      // de cada um, o dia local D dele. Pra quem está à frente do grupo (Heitor em Sofia, Lucas visitando a Europa) esse dia já
+      // terminou; o que ele comeu depois da meia-noite local é do dia D+1 e entra no resumo de amanhã (nada some nem conta duas
+      // vezes). Pra quem estiver ATRÁS do grupo (Américas do Norte), o fim do dia local dele ainda não aconteceu às 23:59 daqui:
+      // isso fica no banco e entra na semana/mês, mas não neste resumo (ninguém do grupo mora atrás hoje).
       const refsDoDia = await refeicoesDoDiaBanco(dia).catch(() => []);
       const compilado = refsDoDia.length ? compilarRefeicoesDoBanco(refsDoDia, perfis, dia) : compilarRefeicoes(historico, perfis);
       // registros apagados/corrigidos durante o dia: os textos noturnos precisam saber que o que foi dito antes está errado

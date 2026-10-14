@@ -10,7 +10,7 @@ import { padraoAlimentar, resumirHoje } from './resumo.js';
 import { situacaoRelogio } from './relogio.js';
 import { blocoDespensa } from './despensa.js';
 import { contextoDoDia, blocoTreinoRefeicoes, blocoForcaRecuperacao } from './contexto.js';
-import { agora, fusoDe, diasAnteriores } from './util.js';
+import { agora, fusoDe, diasAnteriores, marcaDeTempo } from './util.js';
 import { estado } from './estado.js';
 import * as ia from './gemini.js';
 import { ferramentasPara } from './ferramentas.js';
@@ -26,8 +26,10 @@ export function assinaturaNovidade({ refeicoes = 0, visitas = 0, notas = 0, ativ
 
 async function retratoDoDia(perfil, dia) {
   const [comExtras] = await enriquecerPerfis([perfil], dia);
+  // "hoje até agora" é o dia LOCAL da pessoa (as refeições são gravadas nele desde 13/10)
+  const diaP = marcaDeTempo(perfil).dia;
   const [hoje, ult28, rel, despensa, contexto] = await Promise.all([
-    refeicoesDoDia(dia).then((rs) => rs.filter((r) => (perfil.jids || []).includes(r.jid))).catch(() => []),
+    refeicoesDoDia(diaP).then((rs) => rs.filter((r) => (perfil.jids || []).includes(r.jid))).catch(() => []),
     refeicoesDesde(perfil.jids, diasAnteriores(dia, 28)[0]).catch(() => []),
     perfil.relogio ? situacaoRelogio(perfil, dia).catch(() => null) : null,
     blocoDespensa(perfil).catch(() => ''),
@@ -35,7 +37,7 @@ async function retratoDoDia(perfil, dia) {
   ]);
   const padrao = padraoAlimentar(ult28, { periodoDias: 28 });
   const forca = await blocoForcaRecuperacao(perfil, dia).catch(() => '');
-  const hojeTexto = hoje.length ? resumirHoje(hoje, [perfil], dia) : '(nenhuma refeição registrada até agora)';
+  const hojeTexto = hoje.length ? resumirHoje(hoje, [perfil], diaP) : '(nenhuma refeição registrada até agora)';
   const visitasHoje = (contexto.match(/Lugares de hoje: ([^\n]+)/) || [])[1] || '';
   const assinatura = assinaturaNovidade({ refeicoes: hoje.length, visitas: visitasHoje ? visitasHoje.split(' · ').length : 0, notas: /Compras de hoje/.test(contexto) ? 1 : 0, atividades: (perfil.atividadesFeitas?.[dia] || []).length, passos: rel?.passosHoje || 0, hora: agora(fusoDe(perfil)).hora });
   const texto =

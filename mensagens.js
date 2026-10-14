@@ -3,7 +3,7 @@
 
 import { extractMessageContent, jidNormalizedUser, proto } from '@whiskeysockets/baileys';
 
-import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDoDia, atualizarRefeicao, apagarRefeicaoPorId, registrarHabito, registrarCorrecao, pesagensDesde, refeicoesDesde } from './mongo.js';
+import { buscarPerfil, salvarPerfil, listarPerfis, persistirMemoria, registrarRefeicao, salvarConfig, momentosRecentes, salvarPendentes, carregarPendentes, registrarPesagem, refeicoesDosDias, atualizarRefeicao, apagarRefeicaoPorId, registrarHabito, registrarCorrecao, pesagensDesde, refeicoesDesde } from './mongo.js';
 import { mdPerfil } from './drive.js';
 import * as ia from './gemini.js';
 import { docsPara, salvarPesquisa } from './conhecimento.js';
@@ -11,7 +11,7 @@ import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
 import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot, acharRegistro } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
-import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores, ultimaDoChat } from './util.js';
+import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores, ultimaDoChat, marcaDeTempo, registrosDaVirada, ultimaRefeicao, destinoDaRefeicao, JANELA_VIRADA_MIN } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir, estaDigitando } from './whatsapp.js';
 import { sintetizar } from './voz.js';
@@ -199,10 +199,12 @@ async function deveEsperarFragmento(msg) {
     if (!jids.length) return false;
     const perfil = await buscarPerfil(jids).catch(() => null);
     if (!perfil?.onboarded) return false;
-    const { dia } = agora();
-    const horaLocal = agora(fusoDe(perfil)).hora;
-    const refs = await refeicoesDoDia(dia).catch(() => []);
-    const ultima = refs.filter((r) => jids.includes(r.jid)).sort((a, b) => b.minutos - a.minutos)[0];
+    // o dia e a hora da PESSOA (as refeições dela são gravadas no dia local dela desde 13/10)
+    const { dia, horaLocal, minutos: minutosAgora } = marcaDeTempo(perfil);
+    // na 1ª hora do dia local, sem registro hoje, a refeição em andamento pode ser a de ontem (util.ultimaRefeicao)
+    const ontem = minutosAgora < JANELA_VIRADA_MIN ? diasAnteriores(dia, 2)[0] : null;
+    const refs = (await refeicoesDosDias([dia, ontem]).catch(() => [])).filter((r) => jids.includes(r.jid));
+    const ultima = ultimaRefeicao(refs.filter((r) => r.dia === dia), refs.filter((r) => r.dia === ontem), minutosAgora);
     const minutosDesdeUltima = ultima ? minutosDe(horaLocal) - ultima.minutos : Infinity;
     // foto SEM legenda e sem refeição em andamento: a descrição ("torradas com ricota...") e a foto do pacote costumam vir
     // nos segundos seguintes. Espera um pouco (👀) e responde tudo de uma vez (Ale, 06/10: 3 respostas pra 1 café).
@@ -811,8 +813,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
 
   const perfis = await enriquecerPerfis(await listarPerfis(), dia);
   const eu = perfis.find((p) => p.jids?.some((j) => jids.includes(j))) || perfil;
-  // Hora no fuso da pessoa (cidade informada no cadastro/conversa); sem cidade, usa o fuso do grupo
-  const horaLocal = agora(fusoDe(eu)).hora;
+  // Dia e hora no fuso da pessoa (cidade informada no cadastro/conversa, ou a localização do celular: relogio.js); sem fuso,
+  // o do grupo. Desde 13/10 refeição, pesagem digitada e hábito vão pro DIA LOCAL dela (diaPessoa): a ceia do Heitor às 00:30
+  // em Sofia caía no dia anterior dele. `dia` (o do grupo) continua sendo o da conversa: memória, correções do dia, prompt.
+  const { dia: diaPessoa, horaLocal } = marcaDeTempo(eu);
   const slot = slotDaHora(horaLocal);
   const habitual = eu._hab ? hhmmDe(eu._hab[slot.id].minutos) : hhmmDe(slot.padrao);
   // estação do ano e tempo agora na cidade da pessoa (Open-Meteo, grátis; cache de 30 min; só na via completa)
@@ -839,9 +843,25 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const dossie = motivo ? await comTempo(dossieDe(eu), 20_000, 'leitura da pasta no Drive').catch((e) => (console.error('[pessoas]', e.message), '')) : '';
   const conhecimento = motivo ? docsPara(eu, { texto }) : '';
   const momentos = await comTempo(momentosRecentes(12), 8_000, 'momentos').catch(() => []);
-  const refeicoesHoje = await comTempo(refeicoesDoDia(dia), 8_000, 'refeições do dia').catch(() => []);
-  const registradas = registradasHojeParaPrompt(refeicoesHoje, perfis, dia);
-  const minhaUltima = refeicoesHoje.filter((r) => jids.includes(r.jid)).sort((a, b) => b.minutos - a.minutos)[0];
+  // o "hoje" de cada um no fuso dele (pra quem está à frente do grupo, o dia já virou): o bloco do prompt mostra o dia local de
+  // cada pessoa, e os registros DESTA pessoa são os do dia local dela
+  const diaDe = (p) => marcaDeTempo(p).dia;
+  const diaDoDono = (r) => {
+    const p = perfis.find((x) => (x.jids || []).includes(r.jid) || x.nome === r.nome);
+    return p ? diaDe(p) : dia;
+  };
+  // só o dia local de cada um (a busca traz até 2 dias: o do grupo e o de quem já virou), pra nenhum total somar dois dias
+  // Na 1ª hora do dia local também o ONTEM desta pessoa: sem registro hoje, "a última refeição" (correção, REGISTRO) ainda é
+  // a de ontem (ceia das 23:55 corrigida à 00:03; util.registrosDaVirada). Fora dessa hora a busca é a mesma de antes.
+  const minutosAgora = minutosDe(horaLocal);
+  const ontemPessoa = minutosAgora < JANELA_VIRADA_MIN ? diasAnteriores(diaPessoa, 2)[0] : null;
+  const buscadas = await comTempo(refeicoesDosDias([dia, diaPessoa, ontemPessoa, ...perfis.map(diaDe)]), 8_000, 'refeições do dia').catch(() => []);
+  const refeicoesHoje = buscadas.filter((r) => r.dia === diaDoDono(r));
+  const registradas = registradasHojeParaPrompt(refeicoesHoje, perfis, dia, { diaDe });
+  const meusDeHoje = refeicoesHoje.filter((r) => jids.includes(r.jid) && r.dia === diaPessoa);
+  const meusDeOntem = ontemPessoa ? buscadas.filter((r) => jids.includes(r.jid) && r.dia === ontemPessoa) : [];
+  // de ontem: `minutos` relativo a hoje (negativo), pras contas de "minutos desde a última"; grava-se com `minutosNoDia`
+  const minhaUltima = ultimaRefeicao(meusDeHoje, meusDeOntem, minutosAgora);
   const citada = citacaoDe(conteudo, perfis);
   // Decidir se é relato ou plano olhando TAMBÉM a própria mensagem citada: "meu primeiro café da manhã às 8h" citando
   // "tomei meu whey com creatina..." é relato (04/10: virou "se for isso", nada registrado, e ela disse que registrou)
@@ -871,7 +891,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   }
 
   // Visão de 7/30 dias + balanço energético da PESSOA ATUAL (código, sem IA); só nas respostas completas
-  const visao = motivo ? await comTempo(visaoDe(eu, dia), 8_000, 'acompanhamento').catch(() => '') : '';
+  const visao = motivo ? await comTempo(visaoDe(eu, diaPessoa), 8_000, 'acompanhamento').catch(() => '') : '';
   // Memória de longo prazo por significado: lembranças de dias anteriores parecidas com a mensagem (só na via completa)
   const citados = perfis.filter((p) => p.nome !== eu.nome && mencionaNome(texto, p.nome)).map((p) => p.nome);
   const lembrancas = motivo && texto ? await comTempo(lembrancasPara({ consulta: texto, pessoa: eu.nome, outros: citados, excluirDia: dia }), 6_000, 'lembranças').catch(() => '') : '';
@@ -899,7 +919,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // pergunta de progresso (responde com o bloco PROGRESSO DE PESO, sem registrar nada): a regra está em progresso.js, a mesma
   // que a avaliação importa (nunca quando a mensagem também conta refeição, corrige registro, contesta ou continua a refeição)
   const perguntaProgresso = rotaPerguntaProgresso({ texto, temImagem, temAudio, metaConversa, contestacao, emAndamento });
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, dia).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -917,7 +937,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
     // ferramentas na conversa (fase 2): pergunta ou pedido em texto, sem foto, pelo modelo principal, teto de 2 rodadas; falhou, caminho normal
     let r1 = null;
-    const ferramentasConversa = FERRAMENTAS_CONVERSA_ON && !temImagem && !temAudio && motivo && !contestacao && !metaConversa && (parecePergunta(texto) || parecePedidoOuPlano(textoDecisao)) ? ferramentasPara(eu, { dia, escrita: true }) : null;
+    const ferramentasConversa = FERRAMENTAS_CONVERSA_ON && !temImagem && !temAudio && motivo && !contestacao && !metaConversa && (parecePergunta(texto) || parecePedidoOuPlano(textoDecisao)) ? ferramentasPara(eu, { dia: diaPessoa, escrita: true }) : null;
     if (ferramentasConversa) {
       try {
         r1 = await ia.responder({ ...base, despensa: '', lugares: '', forca: '', conhecimento, leve: false, ferramentas: ferramentasConversa, maxRodadas: 2 });
@@ -1139,11 +1159,12 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
 
   // A pessoa contou um dado novo (peso, cidade, dieta...): sobrescreve o perfil agora, com a data, e a ficha no Drive
   if (atualizacao && typeof atualizacao === 'object') {
-    const novo = aplicarAtualizacao(perfil, atualizacao, dia);
+    const novo = aplicarAtualizacao(perfil, atualizacao, diaPessoa);
     if (novo) {
       perfil = await salvarPerfil(novo).catch((e) => (console.error('[perfil] falha ao atualizar:', e.message), perfil));
       console.log(`[perfil] ${perfil.nome} atualizado: ${Object.keys(novo).filter((k) => !['jids', 'atualizacoes'].includes(k)).join(', ')}`);
-      if (novo.peso) registrarPesagem({ jid: jids[0], nome: perfil.nome, dia, peso: novo.peso }).catch(() => {}); // evolução de peso com data
+      // evolução de peso com data (dia local da pessoa); fonte 'digitada': o envio do relógio não apaga mais (uma por fonte)
+      if (novo.peso) registrarPesagem({ jid: jids[0], nome: perfil.nome, dia: diaPessoa, peso: novo.peso, fonte: 'digitada' }).catch(() => {});
       salvarFicha(perfil, mdPerfil(perfil)).catch(() => {});
     }
   }
@@ -1187,13 +1208,14 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // (a checagem de objetivo trocado agora acontece ANTES do envio, no bloco de conferência acima)
   // água/álcool ditos agora (linha oculta HABITO da IA) -> somados no dia; aparecem no !hoje
   if (habito && typeof habito === 'object') {
-    registrarHabito({ jid: jids[0], nome: perfil.nome, dia, agua_ml: Number(habito.agua_ml) || 0, alcool_doses: Number(habito.alcool_doses) || 0 }).catch((e) => console.error('[habitos]', e.message));
+    registrarHabito({ jid: jids[0], nome: perfil.nome, dia: diaPessoa, agua_ml: Number(habito.agua_ml) || 0, alcool_doses: Number(habito.alcool_doses) || 0 }).catch((e) => console.error('[habitos]', e.message));
   }
   // A pessoa pediu pra apagar ou corrigir um registro do dia (linha oculta REGISTRO da IA): o sistema executa aqui,
   // só nos registros DELA. Sem a linha, nada muda (e a regra manda a IA não prometer que "já ajustou").
   for (const reg of Array.isArray(registro) ? registro : []) {
     try {
-      const meus = refeicoesHoje.filter((r) => jids.includes(r.jid));
+      // os registros DELA no dia local dela; na 1ª hora do dia, sem nenhum hoje, os de ontem ("apaga o jantar das 21h" à 00:10)
+      const meus = registrosDaVirada(meusDeHoje, meusDeOntem, minutosAgora);
       const alvo = acharRegistro(meus, reg.apagar ?? reg.hora);
       if (!alvo) {
         console.warn(`[refeicoes] REGISTRO de ${perfil.nome} sem alvo: ${JSON.stringify(reg)} (registros: ${meus.map((r) => r.horaLocal || r.hora).join(', ') || 'nenhum'})`);
@@ -1235,13 +1257,18 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
 
   const resumoRefeicao = texto || (temImagem ? (imagens.length > 1 ? `[${imagens.length} fotos]` : '[foto]') : temAudio ? '[áudio]' : '');
   let refeicaoRegistrada = null; // { slot, minutos } do registro feito agora, pra revisão poder corrigi-lo
+  let diaRegistrado = diaPessoa; // o dia em que o registro caiu (ontem, na correção ou retroativa logo depois da meia-noite local)
   if (foiRefeicao) {
     // O tipo da refeição vem do que a IA entendeu (a pessoa disse "café da manhã"); numa correção, o da refeição corrigida
     const tipoEstruturado = estruturada && TIPOS.has(String(estruturada.tipo || '').trim()) ? String(estruturada.tipo).trim() : null;
-    // refeição retroativa: hora e tipo pela hora DITA (café das 8h20 informado às 15h é café, às 08:20)
-    const horaRegistro = retroativa ? horaDita : horaLocal;
+    // refeição retroativa: hora e tipo pela hora DITA (café das 8h20 informado às 15h é café, às 08:20); "jantei às 23h" dito à
+    // 00:30 é de ONTEM. Correção cai no dia e nos minutos do registro que corrige, que pode ser de ontem (util.destinoDaRefeicao)
+    const destino = destinoDaRefeicao({ diaHoje: diaPessoa, horaAgora: horaLocal, horaDita, retroativa, correcaoDe: correcaoRecente ? minhaUltima : null });
+    const horaRegistro = destino.horaLocal;
+    diaRegistrado = destino.dia;
     const slotFinal = (correcaoRecente && minhaUltima?.slot) || tipoEstruturado || (retroativa ? slotDaHora(horaDita).id : null) || lerTipoRefeicao(resposta) || slot.id;
-    if (retroativa) console.log(`[refeicoes] ${perfil.nome}: refeição informada agora mas comida às ${horaDita} (registro retroativo, ${slotFinal})`);
+    if (retroativa) console.log(`[refeicoes] ${perfil.nome}: refeição informada agora mas comida às ${horaDita}${destino.dia !== diaPessoa ? ` de ${destino.dia}` : ''} (registro retroativo, ${slotFinal})`);
+    else if (destino.dia !== diaPessoa) console.log(`[refeicoes] ${perfil.nome}: correção logo depois da meia-noite local cai no registro de ${destino.dia} (${minhaUltima?.horaLocal || minhaUltima?.hora})`);
     // Números: primeiro a linha REFEICAO; sem ela, o texto; sem números legíveis (modelo reserva), estimativa num modelo leve
     let estimativa = estruturada
       ? { kcal: Math.round(Number(estruturada.kcal)), p: Math.round(Number(estruturada.proteina) || 0), c: Math.round(Number(estruturada.carbo) || 0), g: Math.round(Number(estruturada.gordura) || 0) }
@@ -1254,10 +1281,10 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     registrarRefeicao({
       jid: jids[0],
       nome: perfil.nome,
-      dia,
+      dia: destino.dia, // dia local da pessoa (Sofia é Sofia; ontem na correção/retroativa da virada); o `hora` é o do grupo e liga o registro à conversa
       hora,
       horaLocal: horaRegistro, // no fuso da pessoa (Paris é Paris); na retroativa, a hora em que ela COMEU
-      minutos: correcaoRecente ? minhaUltima.minutos : minutosDe(horaRegistro), // correção cai no registro que corrige
+      minutos: destino.minutos, // correção cai no registro que corrige
       slot: slotFinal,
       resumo: resumoRefeicao.slice(0, 120),
       descricao: descricaoBase,
@@ -1266,10 +1293,11 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       correcao: Boolean(correcaoRecente),
       correcaoEstimativa: Boolean(correcaoRecente) && ehCorrecaoDeEstimativa(texto), // só quantidade/alimento/rótulo entra na calibração; "tem também um suco" não
       manual: retroativa, // retroativa não se funde com o registro vizinho no banco
+      retroativa, // e, na mesma hora (±10 min) de um registro que já existe, é correção dele (substitui; util.decidirGravacaoRefeicao)
       // "lanche" 1 min depois do almoço é outra refeição, não complemento: quando a pessoa nomeia outra refeição, não funde
       slotExplicito: Boolean(minhaUltima) && slotFinal !== minhaUltima.slot && mencionaOutraRefeicao(texto, minhaUltima.slot),
     }).catch((e) => console.error('[refeicoes] falha ao registrar:', e.message));
-    refeicaoRegistrada = { slot: slotFinal, minutos: correcaoRecente ? minhaUltima.minutos : minutosDe(horaRegistro) };
+    refeicaoRegistrada = { slot: slotFinal, minutos: destino.minutos };
     const mensagens = estado.memoria.mensagens;
     // marca a mensagem da pessoa (a última que não é da bot) como refeição, pro diário e pro resumo
     for (let i = mensagens.length - 1; i >= 0; i--) {
@@ -1283,7 +1311,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // Resposta saiu por reserva externa (Gemini em alta demanda): fica anotada pra ela mesma revisar quando o Gemini voltar.
   // Se estava errada, ela corrige no grupo citando a mensagem e conserta o registro da refeição (revisao.js, cron de 10 min).
   if (origemExterna && enviado?.key && resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
-    registrarParaRevisao({ jidGrupo, jid: jids[0], perfil, texto, imagem, mimeType, resposta, dia, hora, horaLocal, enviado, refeicao: refeicaoRegistrada })
+    registrarParaRevisao({ jidGrupo, jid: jids[0], perfil, texto, imagem, mimeType, resposta, dia: diaRegistrado, hora, horaLocal, enviado, refeicao: refeicaoRegistrada })
       .catch((e) => console.error('[revisao] falha ao anotar pra revisão:', e.message));
   }
   // A daily note do Drive é regerada a partir da memória (agendarDiario, chamado por lembrar)

@@ -17,14 +17,14 @@ import express from 'express';
 import cron from 'node-cron';
 import QRCode from 'qrcode';
 
-import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemoria, persistirMemoria, carregarPersona, lerConfig, salvarConfig, refeicoesDoDia, carregarAprendizados, colecao } from './mongo.js';
+import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemoria, persistirMemoria, carregarPersona, lerConfig, salvarConfig, refeicoesDosDias, carregarAprendizados, colecao } from './mongo.js';
 import { iniciarDrive, verificarCredencial } from './drive.js';
 import * as ia from './gemini.js';
 import { carregarConhecimento } from './conhecimento.js';
 import { dossieDe, pastaDe } from './pessoas.js';
 import { receberEnvio } from './relogio.js';
 import { reservasDisponiveis } from './reservas.js';
-import { TZ, agora, comTempo } from './util.js';
+import { TZ, agora, comTempo, diasAnteriores, diaSeguinte, registroDaConversa } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca, vigiarConexao, meusJids } from './whatsapp.js';
 import { criarRetomada } from './retomada.js';
@@ -247,7 +247,14 @@ async function checarDrive() {
       console.log(`[memoria] restaurada: ${estado.memoria.mensagens.length} mensagens de ${estado.memoria.dia}`);
       // se a data mudou enquanto o bot dormia, o dia antigo é fechado assim que o WhatsApp conectar
       normalizarNomesNaMemoria(await listarPerfis().catch(() => []));
-      sincronizarRefeicoesNaMemoria(await refeicoesDoDia(estado.memoria.dia).catch(() => []));
+      // registros feitos durante a conversa desse dia (dia do grupo): desde 13/10 o `dia` do registro é o LOCAL da pessoa, e a
+      // ceia do Heitor às 00:30 em Sofia (18:30 aqui) tem o dia seguinte, mas é da conversa de hoje; por isso o criadoEm
+      // (sem `dia` válido na memória salva, diasAnteriores lançaria no boot: aí só não sincroniza, como o refeicoesDoDia de antes)
+      const d = estado.memoria.dia;
+      if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        const daConversa = (await refeicoesDosDias([diasAnteriores(d, 2)[0], d, diaSeguinte(d)]).catch(() => [])).filter((r) => registroDaConversa(r, d));
+        sincronizarRefeicoesNaMemoria(daConversa);
+      }
     }
 
     // Grupo onde ela já trabalhava antes de existir a apresentação: marca como apresentada, senão ela "chega" num grupo

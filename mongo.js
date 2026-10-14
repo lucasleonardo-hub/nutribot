@@ -3,7 +3,8 @@
 
 import { MongoClient } from 'mongodb';
 import { initAuthCreds, BufferJSON, proto } from '@whiskeysockets/baileys';
-import { pareceMesmaDescricao } from './util.js';
+import { decidirGravacaoRefeicao } from './util.js';
+import { fonteDaPesagem, filtroPesagem, pesagensPorDia } from './progresso.js';
 
 let client;
 let db;
@@ -30,6 +31,11 @@ export async function garantirIndices() {
     colecao('arquivos_pessoa').createIndex({ arquivoId: 1 }),
     colecao('momentos').createIndex({ dia: -1 }),
     colecao('pesagens').createIndex({ jid: 1, dia: 1 }),
+    // uma pesagem por {jid, dia, fonte} (13/10). Único e PARCIAL (só docs com `fonte`): o doc antigo sem fonte (a digitada de
+    // antes de 13/10) fica fora do índice, então criar o índice nunca falha por causa dele, e ele é trocado pela digitada nova
+    // (filtro fonte $in [null, 'digitada']). Toda gravação nova leva fonte, logo a regra "uma por fonte" vale pra todas.
+    // O {jid, dia} acima continua: é o das leituras (pesagensDesde, ultimaPesagem) e do upsert da digitada.
+    colecao('pesagens').createIndex({ jid: 1, dia: 1, fonte: 1 }, { name: 'pesagem_por_fonte', unique: true, partialFilterExpression: { fonte: { $exists: true } } }),
     // localização do app Relógio: ponto bruto some em 7 dias (TTL); visita é única por início
     colecao('locais_brutos').createIndex({ jid: 1, ts: 1 }, { unique: true }),
     colecao('locais_brutos').createIndex({ ts: 1 }, { expireAfterSeconds: 7 * 86400 }),
@@ -185,36 +191,34 @@ export async function momentosRecentes(limite = 30, pessoa) {
 // ---------- Refeições registradas (pra aprender a rotina de cada um e cobrar quem sumiu) ----------
 
 export async function registrarRefeicao(entrada) {
-  const { slotExplicito = false, ...r } = entrada;
+  // retroativa: a linha REFEICAO trouxe a hora em que a pessoa comeu (horas depois); sempreNova: !refeicao (nunca funde nem
+  // substitui). Os dois são opções da gravação, não campos do registro.
+  const { slotExplicito = false, retroativa = false, sempreNova = false, ...r } = entrada;
   // r = { jid, nome, dia, hora, minutos, slot, resumo }
   // Complemento/correção da mesma refeição poucos minutos depois ("a vitamina tem whey") atualiza o registro em vez de criar outro
   const col = colecao('refeicoes');
-  // O ÚLTIMO registro da pessoa, de qualquer tipo: rótulo mandado 4 min depois do shake (que a IA chamou de "jantar")
-  // e a sobremesa 7 min depois da janta (que ela chamou de "ceia") são a MESMA refeição, não uma segunda.
-  // Só o registro manual (!refeicao) com tipo diferente fica separado, porque ali a pessoa disse o tipo de propósito.
-  // Refeição "retroativa" na MESMA hora de um registro que já existe é correção dele, não refeição nova: Lucas, 06/10 15:27,
-  // "não teve chocolate, é pasta de amendoim com avelã" sobre o café das 08:28 veio com hora 08:28 e virou um segundo café
-  // de 1215 kcal. Com uma hora igual (±10 min) a de um registro da pessoa, a estimativa e a descrição novas SUBSTITUEM.
-  if (r.manual && Number.isFinite(r.minutos)) {
-    const naMesmaHora = await col.find({ jid: r.jid, dia: r.dia, minutos: { $gte: r.minutos - 10, $lte: r.minutos + 10 } }).sort({ minutos: 1 }).limit(1).next();
-    if (naMesmaHora) {
-      const set = { atualizadoEm: new Date() };
-      if (r.estimativa) set.estimativa = r.estimativa;
-      if (r.descricao) set.descricao = r.descricao.slice(0, 220);
-      set.resumo = `${naMesmaHora.resumo || ''} (corrigido)`.slice(0, 200);
-      await col.updateOne({ _id: naMesmaHora._id }, { $set: set });
-      return;
-    }
+  // A decisão (inserir, substituir o registro da mesma hora, fundir com o último) é de util.decidirGravacaoRefeicao, pura e
+  // testada. O ÚLTIMO registro da pessoa, de qualquer tipo: rótulo mandado 4 min depois do shake (que a IA chamou de
+  // "jantar") e a sobremesa 7 min depois da janta (que ela chamou de "ceia") são a MESMA refeição, não uma segunda.
+  // Só a correção RETROATIVA na mesma hora (±10 min) de um registro substitui ele (Lucas, 06/10: o café das 08:28 corrigido
+  // às 15:27 virava um segundo café); até 13/10 isso valia pra qualquer `manual`, inclusive o !refeicao, que agora sempre insere.
+  const doDia = sempreNova ? [] : await col.find({ jid: r.jid, dia: r.dia }).toArray();
+  const decisao = decidirGravacaoRefeicao(r, doDia, { slotExplicito, retroativa, sempreNova });
+  if (decisao.acao === 'substituir') {
+    const naMesmaHora = decisao.alvo;
+    const set = { atualizadoEm: new Date() };
+    if (r.estimativa) set.estimativa = r.estimativa;
+    if (r.descricao) set.descricao = r.descricao.slice(0, 220);
+    set.resumo = `${naMesmaHora.resumo || ''} (corrigido)`.slice(0, 200);
+    await col.updateOne({ _id: naMesmaHora._id }, { $set: set });
+    return;
   }
-  const ultima = await col.find({ jid: r.jid, dia: r.dia }).sort({ minutos: -1 }).limit(1).next();
-  // mesma refeição: mesmo tipo em até 30 min; tipo diferente só funde quando não foi dito de propósito (sobremesa 7 min
-  // depois da janta funde; "lanche" nomeado 1 min depois do almoço não funde, nem o registro manual)
-  const mesmaRefeicao = ultima && Math.abs(r.minutos - ultima.minutos) <= 30 && (ultima.slot === r.slot || (!r.manual && !slotExplicito));
-  if (mesmaRefeicao) {
+  if (decisao.acao === 'fundir') {
+    const ultima = decisao.alvo;
     const set = { atualizadoEm: new Date() };
     // a pessoa descreveu em texto a comida que já tinha mandado em foto (ou mandou a foto do que já descreveu): é a mesma
     // refeição contada de novo, não um item a mais. Substitui em vez de somar (Ale, 06/10: 290 + 290 virou 580 kcal).
-    if (!r.correcao && r.estimativa && ultima.estimativa?.kcal && pareceMesmaDescricao(ultima.descricao || ultima.resumo, r.descricao || r.resumo)) {
+    if (decisao.repeteDescricao) {
       r.correcao = true;
       console.log(`[refeicoes] ${r.nome}: descrição repete a refeição das ${ultima.horaLocal || ultima.hora}; estimativa substituída em vez de somada`);
     }
@@ -297,25 +301,41 @@ export async function refeicoesDoDia(dia) {
   return colecao('refeicoes').find({ dia }).toArray();
 }
 
+/**
+ * Registros de vários dias (o "hoje" de cada pessoa, no fuso dela: desde 13/10 o `dia` da refeição é o local da pessoa, e
+ * quem está à frente do grupo já está no dia seguinte). Quem chama filtra cada pessoa pelo dia dela.
+ */
+export async function refeicoesDosDias(dias) {
+  const lista = [...new Set((dias || []).filter(Boolean))];
+  return lista.length ? colecao('refeicoes').find({ dia: { $in: lista } }).toArray() : [];
+}
+
 // ---------- Pesagens (peso com data, pra evolução) ----------
 
 export async function registrarPesagem({ jid, nome, dia, peso, gordura, fonte, hora }) {
-  // uma por pessoa por dia: a última vale. fonte 'relogio' = veio da planilha do Galaxy Watch (saude.js)
-  const doc = { jid, nome, dia, peso, criadoEm: new Date() };
+  // uma por pessoa, por dia, POR FONTE ('relogio' = app Relógio/planilha do Galaxy Watch, 'documento' = bioimpedância em PDF,
+  // 'digitada' = dita na conversa, 'app' = reservada pro app novo). Até 13/10 era uma por dia e a última gravação vencia: o
+  // envio do relógio (a cada 15 min, 60 dias) apagava o peso dito no chat e o do exame. O valor do dia sai de
+  // progresso.consolidarDia na leitura (pesagensDesde). Grava sempre com a fonte explícita; o doc antigo sem fonte é a digitada.
+  const f = fonteDaPesagem(fonte);
+  const doc = { jid, nome, dia, peso, fonte: f, criadoEm: new Date() };
   if (gordura != null) doc.gordura = gordura;
-  if (fonte) doc.fonte = fonte;
   // hora da medição (HH:MM, quando o relógio manda): a leitura do progresso confere a tendência sem as pesagens fora da manhã
   if (typeof hora === 'string' && /^\d{2}:\d{2}$/.test(hora)) doc.hora = hora;
-  await colecao('pesagens').replaceOne({ jid, dia }, doc, { upsert: true });
+  await colecao('pesagens').replaceOne(filtroPesagem({ jid, dia, fonte: f }), doc, { upsert: true });
 }
 
-/** Última pesagem da pessoa (qualquer fonte). */
+/** Última pesagem da pessoa: o valor do último dia com pesagem, consolidado entre as fontes (progresso.consolidarDia). */
 export async function ultimaPesagem(jids) {
-  return colecao('pesagens').find({ jid: { $in: jids } }).sort({ dia: -1 }).limit(1).next();
+  const ultima = await colecao('pesagens').find({ jid: { $in: jids } }).sort({ dia: -1 }).limit(1).next();
+  if (!ultima) return null;
+  const doDia = await colecao('pesagens').find({ jid: { $in: jids }, dia: ultima.dia }).toArray();
+  return pesagensPorDia(doDia)[0] || ultima;
 }
 
+/** Pesagens desde um dia, UMA por dia (as fontes do mesmo dia consolidadas em progresso.pesagensPorDia), em ordem de data. */
 export async function pesagensDesde(jids, diaInicial) {
-  return colecao('pesagens').find({ jid: { $in: jids }, dia: { $gte: diaInicial } }).sort({ dia: 1 }).toArray();
+  return pesagensPorDia(await colecao('pesagens').find({ jid: { $in: jids }, dia: { $gte: diaInicial } }).sort({ dia: 1 }).toArray());
 }
 
 // ---------- Diário pessoal da Nutri (ela escreve toda noite; só acrescenta) ----------
@@ -391,6 +411,12 @@ export async function registrarHabito({ jid, nome, dia, agua_ml = 0, alcool_dose
 
 export async function habitosDoDia(dia) {
   return colecao('habitos').find({ dia }).toArray();
+}
+
+/** Hábitos de vários dias (o "hoje" de cada pessoa; ver refeicoesDosDias). */
+export async function habitosDosDias(dias) {
+  const lista = [...new Set((dias || []).filter(Boolean))];
+  return lista.length ? colecao('habitos').find({ dia: { $in: lista } }).toArray() : [];
 }
 
 // ---------- Configuração do bot (nome escolhido pelo grupo, apresentações feitas) ----------

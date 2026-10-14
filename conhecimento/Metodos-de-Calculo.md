@@ -38,10 +38,16 @@ você explicar quando perguntarem ("como você sabe?", "isso é confiável?") e 
 
 ## Progresso de peso: o veredito (bloco PROGRESSO DE PESO, comando !progresso)
 - **Pesagens limpas antes da conta:** data válida e não futura; peso entre 25 e 300 kg; valor que parece libra no meio de
-  quilos sai; pesagem 3 kg (ou 4%) longe da mediana dos dias vizinhos sai ("outra pessoa na balança?"); uma por dia (no
-  dia em que o relógio pesou, a digitada não entra; várias do relógio viram a média). Do relógio vale a primeira medição
-  da manhã (e ela continua valendo quando o envio seguinte do app traz só a da noite): depois de comer e beber o peso
-  sobe 0,5 a 1,5 kg.
+  quilos sai; pesagem 3 kg (ou 4%) longe da mediana dos dias vizinhos sai ("outra pessoa na balança?"); uma por dia. Desde
+  13/10 o banco guarda uma pesagem por dia e por fonte (relógio, documento/bioimpedância, digitada no chat, app) e o valor
+  do dia é: (1) havendo pesagem da manhã (4h às 11h), as com hora fora da manhã não entram; (2) as que concordam com a da
+  fonte mais confiável (diferença de até 0,5 kg) viram a média; (3) discordando, vence a balança do relógio, depois o
+  documento, depois a digitada/app, e a outra fica de fora com o motivo ("discorda da balança"). A gordura é a média das
+  que entraram e têm gordura. Do relógio vale a primeira medição da manhã (e ela continua valendo quando o envio seguinte
+  do app traz só a da noite): depois de comer e beber o peso sobe 0,5 a 1,5 kg.
+- **Dia de cada registro:** o dia de refeição, pesagem digitada e hábito é o do fuso da pessoa (desde 13/10; antes, o do
+  grupo). Cada registro tem um dia só, então nas somas de dia, semana e mês nada conta duas vezes, mesmo numa viagem com
+  troca de fuso; quem está à frente do grupo tem o dia local fechado antes do resumo das 23:59.
 - **Tendência:** regressão linear das pesagens dos últimos 28 dias, em kg/semana, com intervalo de 95%. Pesagens vizinhas
   não são independentes (água retida dura dias), então o erro-padrão é corrigido pela autocorrelação dos resíduos (com o
   viés de amostra curta corrigido) e a t de Student usa os graus de liberdade efetivos, que caem junto. Medido em

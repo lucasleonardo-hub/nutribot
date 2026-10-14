@@ -1,10 +1,10 @@
 // cobranca.js - "Cadê a refeição de hoje?": cobra quem passou do horário habitual (aprendido) sem mandar a refeição.
 
-import { listarPerfis, refeicoesDoDia, persistirMemoria } from './mongo.js';
+import { listarPerfis, refeicoesDosDias, persistirMemoria } from './mongo.js';
 import * as ia from './gemini.js';
 import { docsPara } from './conhecimento.js';
 import { dossieDe } from './pessoas.js';
-import { agora, fusoDe, SLOTS, minutosDe, hhmmDe, comTempo } from './util.js';
+import { agora, fusoDe, SLOTS, minutosDe, hhmmDe, comTempo, marcaDeTempo } from './util.js';
 import { estado } from './estado.js';
 import { enviar } from './whatsapp.js';
 import { lembrar, garantirDiaAtual } from './dia.js';
@@ -22,12 +22,13 @@ export async function verificarCobrancas() {
   const { dia } = agora();
 
   const perfis = await enriquecerPerfis(await listarPerfis(), dia);
-  const hoje = await refeicoesDoDia(dia).catch(() => []);
+  // o "hoje" de cada pessoa é o do fuso dela (as refeições são gravadas no dia local desde 13/10)
+  const hoje = await refeicoesDosDias([dia, ...perfis.map((p) => marcaDeTempo(p).dia)]).catch(() => []);
   estado.memoria.cobrancas ||= {};
 
   for (const p of perfis) {
-    // tudo no fuso da pessoa: hora atual, janela de 7h-23h e horário habitual aprendido
-    const hora = agora(fusoDe(p)).hora;
+    // tudo no fuso da pessoa: dia e hora atuais, janela de 7h-23h e horário habitual aprendido
+    const { dia: diaP, horaLocal: hora } = marcaDeTempo(p);
     const agoraMin = minutosDe(hora);
     if (agoraMin < 7 * 60 || agoraMin > 23 * 60) continue; // ninguém merece cobrança de madrugada
     // pega só a refeição atrasada mais recente (se o bot ficou fora, não dispara 3 cobranças de uma vez)
@@ -36,7 +37,7 @@ export async function verificarCobrancas() {
       if (!h.aprendido) return false; // só cobra horário que ela JÁ aprendeu (3+ refeições registradas nesse slot)
       const limite = h.minutos + ATRASO_COBRANCA_MIN;
       if (agoraMin < limite || agoraMin > limite + JANELA_COBRANCA_MIN) return false; // passou da janela: fica pro resumo do dia
-      const jaMandou = hoje.some((r) => r.slot === s.id && p.jids.includes(r.jid));
+      const jaMandou = hoje.some((r) => r.dia === diaP && r.slot === s.id && p.jids.includes(r.jid));
       return !jaMandou && !estado.memoria.cobrancas[`${p.nome}:${s.id}`];
     });
     if (!pendentes.length) continue;

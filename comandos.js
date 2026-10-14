@@ -1,6 +1,6 @@
 // comandos.js - Comandos do grupo (!id, !nome, !perfil, !dossie, !fontes, !estudar, !persona, !status, !reset, !resumo, !ajuda).
 
-import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDoDia, registrarRefeicao, refeicoesDesde, refeicoesGrupoDesde, pesagensDesde, habitosDoDia, salvarConfig, apagarRefeicaoPorId, registrarCorrecao, carregarAprendizados } from './mongo.js';
+import { buscarPerfil, apagarPerfil, salvarPerfil, listarPerfis, refeicoesDosDias, registrarRefeicao, refeicoesDesde, refeicoesGrupoDesde, pesagensDesde, habitosDosDias, salvarConfig, apagarRefeicaoPorId, registrarCorrecao, carregarAprendizados } from './mongo.js';
 import { configGrafico, renderizar } from './graficos.js';
 import { salvarEmPasta } from './drive.js';
 import { pastaDe } from './pessoas.js';
@@ -8,7 +8,7 @@ import * as ia from './gemini.js';
 import { listarDocs, docsPara } from './conhecimento.js';
 import { notasDe, listarDocumentosDe } from './pessoas.js';
 import { reservasDisponiveis } from './reservas.js';
-import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS, diasAnteriores } from './util.js';
+import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS, diasAnteriores, marcaDeTempo, registrosDaVirada, JANELA_VIRADA_MIN } from './util.js';
 import { resumirHoje, formatarEstimativaLinhas, lerTipoRefeicao, gastoAdaptativo, acharRegistro, nomeDoSlot, padraoAlimentar, repertorioDoGrupo, semanaDoPlano, previsaoSemana } from './resumo.js';
 import { visaoDe, progressoDe } from './acompanhamento.js';
 import { lembrar } from './dia.js';
@@ -30,6 +30,9 @@ import { linhaDeTendencia } from './previsao.js';
 import { tendenciaCompleta } from './tendencia.js';
 import { resumoProatividade } from './proatividade.js';
 import { faixaDaMeta } from './resumo.js';
+
+/** O "hoje" da pessoa, no fuso dela (refeição, pesagem digitada e hábito são gravados no dia local desde 13/10). */
+const diaLocal = (p) => marcaDeTempo(p).dia;
 
 const SEM_CADASTRO = 'Você ainda não tem cadastro, criatura. Manda nome, peso, altura, objetivo, cidade e se é vegetariana(o) que eu te cadastro. 😉';
 
@@ -291,11 +294,13 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       await enviar(jidGrupo, SEM_CADASTRO, msg);
       return true;
     }
-    const refeicoes = await refeicoesDoDia(dia).catch(() => []);
-    const habitos = await habitosDoDia(dia).catch(() => []);
+    // o "hoje" de cada pessoa é o do fuso dela (refeição e hábito são gravados no dia local desde 13/10)
+    const dias = alvo.map(diaLocal);
+    const [refeicoes, habitos] = await Promise.all([refeicoesDosDias(dias).catch(() => []), habitosDosDias(dias).catch(() => [])]);
+    const diaTitulo = todos ? dia : dias[0];
     // só pra uma pessoa: junta a visão de 7/30 dias, meta e balanço energético (quem tem relógio), em linguagem de WhatsApp
-    const visao = todos ? '' : await visaoDe(alvo[0], dia, { formato: 'zap' }); // 7/30 dias, sequência, meta e balanço em tópicos
-    await enviar(jidGrupo, `📊 *${todos ? 'Hoje, todo mundo' : 'Seu dia'} (${dia})*\n\n${resumirHoje(refeicoes, alvo, dia, habitos)}${visao ? `\n\n${visao}` : ''}${todos ? '' : '\n\n_(!hoje todos mostra o grupo inteiro · !grafico mostra em imagem)_'}`, msg, { rapido: true });
+    const visao = todos ? '' : await visaoDe(alvo[0], dias[0], { formato: 'zap' }); // 7/30 dias, sequência, meta e balanço em tópicos
+    await enviar(jidGrupo, `📊 *${todos ? 'Hoje, todo mundo' : 'Seu dia'} (${diaTitulo})*\n\n${resumirHoje(refeicoes, alvo, diaTitulo, habitos, { diaDe: diaLocal })}${visao ? `\n\n${visao}` : ''}${todos ? '' : '\n\n_(!hoje todos mostra o grupo inteiro · !grafico mostra em imagem)_'}`, msg, { rapido: true });
     return true;
   }
   if (cmd === '!apagar') {
@@ -306,17 +311,22 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       return true;
     }
     const ref = texto.slice(cmd.length).trim() || 'ultimo';
-    const minhas = (await refeicoesDoDia(dia).catch(() => [])).filter((r) => jids.includes(r.jid)).sort((a, b) => a.minutos - b.minutos);
+    // "hoje" no fuso dela; na 1ª hora do dia local, sem registro hoje, os de ontem (a ceia das 23:55 apagada à 00:10)
+    const { dia: hojeP, minutos: minutosAgora } = marcaDeTempo(p);
+    const ontemP = minutosAgora < JANELA_VIRADA_MIN ? diasAnteriores(hojeP, 2)[0] : null;
+    const doisDias = (await refeicoesDosDias([hojeP, ontemP]).catch(() => [])).filter((r) => jids.includes(r.jid));
+    const minhas = registrosDaVirada(doisDias.filter((r) => r.dia === hojeP), doisDias.filter((r) => r.dia === ontemP), minutosAgora).sort((a, b) => a.minutos - b.minutos);
+    const deOntem = minhas.length > 0 && minhas[0].dia === ontemP;
     const alvo = acharRegistro(minhas, ref);
     if (!alvo) {
       const lista = minhas.map((r) => `${r.horaLocal || r.hora} ${nomeDoSlot(r.slot)}`).join(', ');
-      await enviar(jidGrupo, minhas.length ? `Não achei registro seu às ${ref}. Os de hoje: ${lista}. Use "!apagar 11:03" ou "!apagar ultimo".` : 'Você não tem registro hoje.', msg, { rapido: true });
+      await enviar(jidGrupo, minhas.length ? `Não achei registro seu às ${ref}. Os de ${deOntem ? 'ontem' : 'hoje'}: ${lista}. Use "!apagar 11:03" ou "!apagar ultimo".` : 'Você não tem registro hoje.', msg, { rapido: true });
       return true;
     }
     await apagarRefeicaoPorId(alvo._id);
     console.log(`[refeicoes] !apagar de ${p.nome}: ${alvo.horaLocal || alvo.hora} ${alvo.slot} (~${alvo.estimativa?.kcal || '?'} kcal)`);
     registrarCorrecao({ dia, pessoa: p.nome, texto: `registro de ${nomeDoSlot(alvo.slot)} das ${alvo.horaLocal || alvo.hora} (~${alvo.estimativa?.kcal || '?'} kcal) APAGADO por ${p.nome.split(' ')[0]} (!apagar): era duplicado ou errado; qualquer total do dia dito na conversa antes disso está errado` }).catch(() => {});
-    await enviar(jidGrupo, `🗑️ Apagado: ${nomeDoSlot(alvo.slot)} das ${alvo.horaLocal || alvo.hora}${alvo.estimativa?.kcal ? ` (~${Math.round(alvo.estimativa.kcal)} kcal)` : ''}. O !hoje já reflete.`, msg, { rapido: true });
+    await enviar(jidGrupo, `🗑️ Apagado: ${nomeDoSlot(alvo.slot)} das ${alvo.horaLocal || alvo.hora}${deOntem ? ' de ontem' : ''}${alvo.estimativa?.kcal ? ` (~${Math.round(alvo.estimativa.kcal)} kcal)` : ''}. O !hoje já reflete.`, msg, { rapido: true });
     return true;
   }
   if (cmd === '!refeicao' || cmd === '!refeição') {
@@ -336,21 +346,26 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       await enviar(jidGrupo, 'Faltou dizer o que comeu 😅', msg, { rapido: true });
       return true;
     }
-    const horaLocal = agora(fusoDe(p)).hora;
+    // dia e hora no fuso da pessoa (o `hora` é o do grupo, liga o registro à conversa)
+    const tempo = marcaDeTempo(p);
+    const horaLocal = tempo.horaLocal;
     const est = await ia.estimarRefeicaoManual({ descricao: resto, perfil: p }).catch(() => ({ estimativa: null, descricao: resto, tipo: null }));
     const slot = tipoDito || est.tipo || slotDaHora(horaLocal).id;
     await registrarRefeicao({
       jid: jids[0],
       nome: p.nome,
-      dia,
-      hora: agora().hora,
+      dia: tempo.dia,
+      hora: tempo.hora,
       horaLocal,
-      minutos: minutosDe(horaLocal),
+      minutos: tempo.minutos,
       slot,
       resumo: resto.slice(0, 120),
       descricao: est.descricao,
       estimativa: est.estimativa,
       manual: true,
+      // "registra à mão uma refeição que ficou sem registro": SEMPRE uma refeição nova. Até 13/10 o !refeicao 5 min depois de
+      // uma foto substituía aquela refeição (regra dos ±10 min da correção retroativa, que valia pra todo registro manual)
+      sempreNova: true,
     });
     await lembrar({ hora: agora().hora, jid: jids[0], nome: p.nome, texto: `(registro manual) ${resto}`, tipo: 'texto', refeicao: slot });
     const nomeSlot = SLOTS.find((s) => s.id === slot)?.nome || slot;
@@ -399,7 +414,7 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       await enviar(jidGrupo, SEM_CADASTRO, msg);
       return true;
     }
-    const s = await situacaoRelogio(p, dia).catch(() => null);
+    const s = await situacaoRelogio(p, diaLocal(p)).catch(() => null);
     if (!s) {
       await enviar(jidGrupo, 'Ainda não recebi nada do seu celular. Instale o app Relógio do NutriBot (guia, seção "Dados do relógio"), coloque seu nome e o token e toque em Sincronizar.', msg, { rapido: true });
       return true;
@@ -452,15 +467,16 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       await enviar(jidGrupo, SEM_CADASTRO, msg);
       return true;
     }
-    const desde = diasAnteriores(dia, 30)[0];
     for (const p of alvo) {
+      const diaP = diaLocal(p); // o "hoje" no fuso de cada um
+      const desde = diasAnteriores(diaP, 30)[0];
       const [refs, pes] = await Promise.all([refeicoesDesde(p.jids || [], desde).catch(() => []), pesagensDesde(p.jids || [], desde).catch(() => [])]);
       if (refs.length + pes.length < 3) {
         await enviar(jidGrupo, `${p.apelido || p.nome.split(' ')[0]}: ainda tem pouco registro pra virar gráfico. Manda as refeições que eu desenho. 📈`, msg, { rapido: true });
         continue;
       }
-      const alvoKcal = gastoAdaptativo({ refeicoes: refs, pesagens: pes, perfil: p, dia, gastos: p.relogio?.gastos }).alvo;
-      const png = await renderizar(configGrafico({ nome: p.nome, refeicoes: refs, pesagens: pes, gastos: p.relogio?.gastos, alvo: alvoKcal, dia }));
+      const alvoKcal = gastoAdaptativo({ refeicoes: refs, pesagens: pes, perfil: p, dia: diaP, gastos: p.relogio?.gastos }).alvo;
+      const png = await renderizar(configGrafico({ nome: p.nome, refeicoes: refs, pesagens: pes, gastos: p.relogio?.gastos, alvo: alvoKcal, dia: diaP }));
       if (png) await enviarImagem(jidGrupo, png, `📈 *${p.apelido || p.nome.split(' ')[0]}* · últimos 30 dias${alvoKcal ? ` · meta ${alvoKcal.min} a ${alvoKcal.max} kcal/dia` : ''}`, msg);
       else await enviar(jidGrupo, 'O desenhista do gráfico não respondeu agora 🫠 Tenta de novo daqui a pouco.', msg, { rapido: true });
     }
@@ -544,10 +560,11 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       return true;
     }
     try {
-      const pes = await pesagensDesde(perfil.jids, diasAnteriores(dia, 60)[0]).catch(() => []);
-      const faixa = faixaDaMeta(perfil, dia, pes);
+      const diaP = diaLocal(perfil); // "hoje" no fuso dela: a pesagem digitada de hoje não vira "data no futuro"
+      const pes = await pesagensDesde(perfil.jids, diasAnteriores(diaP, 60)[0]).catch(() => []);
+      const faixa = faixaDaMeta(perfil, diaP, pes);
       // linha completa: passado (todas as semanas com pesagem), ritmo pela balança e pela comida, projeção semana a semana até a etapa
-      const t = (await tendenciaCompleta(perfil, dia).catch(() => null)) || linhaDeTendencia({ pesagens: pes, perfil, dia, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
+      const t = (await tendenciaCompleta(perfil, diaP).catch(() => null)) || linhaDeTendencia({ pesagens: pes, perfil, dia: diaP, alvoKgSemana: faixa?.ritmoKgSemana ?? null });
       await enviar(jidGrupo, t ? `${t.zap}\n\n_(as contas do veredito, comida x balança e a meta calibrada: !progresso)_` : 'Ainda não tenho pesagens suficientes pra uma tendência (preciso de pelo menos 4 em 10 dias ou mais). Sobe na balança do relógio que eu monto.', msg, { rapido: true });
     } catch (e) {
       console.error('[tendencia]', e.message);
@@ -563,7 +580,7 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       await enviar(jidGrupo, SEM_CADASTRO, msg);
       return true;
     }
-    const a = await progressoDe(perfil, dia);
+    const a = await progressoDe(perfil, diaLocal(perfil)); // "hoje" no fuso dela
     await enviar(jidGrupo, a ? a.zap : 'Não consegui montar o progresso agora.', msg, { rapido: true });
     return true;
   }

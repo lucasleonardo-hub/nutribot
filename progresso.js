@@ -124,8 +124,9 @@ export function theilSen(xs, ys) {
 // ---------- 1. pesagens ----------
 /**
  * Puro. Limpa as pesagens antes de qualquer conta: descarta data inválida ou futura, peso fora de 25–300 kg e valor que
- * parece libra no meio de quilos (~2,2x a mediana); junta as várias do mesmo dia numa só (média, com aviso se diferem mais de
- * 1 kg) e ordena por data. Salto grande entre pesagens próximas é avisado, não descartado (a tendência robusta decide).
+ * parece libra no meio de quilos (~2,2x a mediana); junta as várias do mesmo dia numa só pela regra de consolidarDia (as que
+ * concordam viram média; discordando, vence a balança do relógio e a outra sai com aviso) e ordena por data. Salto grande
+ * entre pesagens próximas é avisado, não descartado (a tendência robusta decide).
  * @returns {{ pontos: {dia, peso, gordura, n}[], descartadas: {dia, peso, motivo}[], avisos: string[] }}
  */
 export function validarPesagens(pesagens = [], { dia = null } = {}) {
@@ -139,7 +140,16 @@ export function validarPesagens(pesagens = [], { dia = null } = {}) {
     else if (!Number.isFinite(peso) || peso < PESO_MIN || peso > PESO_MAX) descartadas.push({ dia: d, peso: p?.peso ?? null, motivo: 'peso fora do possível' });
     else {
       const g = Number(p?.gordura);
-      brutos.push({ dia: d, peso, gordura: p?.gordura != null && Number.isFinite(g) && g > 2 && g < 70 ? g : null, fonte: p?.fonte || null, hora: typeof p?.hora === 'string' && /^\d{2}:\d{2}$/.test(p.hora) ? p.hora : null });
+      brutos.push({
+        dia: d,
+        peso,
+        gordura: p?.gordura != null && Number.isFinite(g) && g > 2 && g < 70 ? g : null,
+        fonte: p?.fonte || null,
+        hora: typeof p?.hora === 'string' && /^\d{2}:\d{2}$/.test(p.hora) ? p.hora : null,
+        // já consolidada no Mongo (pesagensPorDia): quantas entraram na média e o que ficou de fora naquele dia
+        n: Number(p?.n) > 1 ? Number(p.n) : 1,
+        avisosNoDia: Array.isArray(p?.avisosNoDia) ? p.avisosNoDia : null,
+      });
     }
   }
   const med = brutos.length >= 3 ? mediana(brutos.map((b) => b.peso)) : null;
@@ -167,15 +177,12 @@ export function validarPesagens(pesagens = [], { dia = null } = {}) {
   const pontos = [...porDia.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([d, todas]) => {
-      // no dia em que o relógio pesou, a pesagem digitada (de roupa, outra balança, outro horário) não entra: a tendência
-      // precisa do mesmo instrumento; antes as duas viravam pontos do mesmo dia (às vezes com jids diferentes)
-      const doRelogio = todas.filter((x) => x.fonte === 'relogio');
-      const lista = doRelogio.length && doRelogio.length < todas.length ? doRelogio : todas;
-      if (lista !== todas) avisos.push(`em ${dm(d)} a pesagem digitada (${todas.filter((x) => x.fonte !== 'relogio').map((x) => virgula(x.peso, 1)).join(', ')} kg) ficou de fora: vale a do relógio (${lista.map((x) => virgula(x.peso, 1)).join(', ')} kg)`);
-      const pesos = lista.map((x) => x.peso);
-      const gs = lista.map((x) => x.gordura).filter((x) => x != null);
-      if (lista.length > 1 && Math.max(...pesos) - Math.min(...pesos) > 1) avisos.push(`${lista.length} pesagens em ${dm(d)} diferindo ${virgula(Math.max(...pesos) - Math.min(...pesos), 1)} kg (horários ou balanças diferentes?): usei a média`);
-      return { dia: d, peso: media(pesos), gordura: gs.length ? media(gs) : null, n: lista.length, hora: lista.length === 1 ? lista[0].hora : null };
+      // várias pesagens no mesmo dia (relógio, exame, chat): a regra única de consolidarDia (concordam = média; discordam =
+      // vence a balança do relógio). A série que vem do Mongo já chega consolidada (mongo.pesagensDesde) com os avisos do dia.
+      const c = consolidarDia(todas, { dia: d });
+      avisos.push(...c.avisos);
+      for (const x of todas) for (const a of x.avisosNoDia || []) if (!avisos.includes(a)) avisos.push(a);
+      return { dia: d, peso: c.peso, gordura: c.gordura, n: c.n, hora: c.hora, fonte: c.fonte };
     });
   for (let i = 1; i < pontos.length; i++) {
     const dd = distDias(pontos[i - 1].dia, pontos[i].dia);
@@ -203,6 +210,141 @@ export function preferirPesagem(atual, nova, ehPreferida = () => false) {
   if (ma !== mn) return ma ? atual : nova;
   if (!atual.hora || !nova.hora) return atual.hora ? atual : nova;
   return nova.hora < atual.hora ? nova : atual;
+}
+
+// ---------- 1b. várias pesagens no mesmo dia: uma por fonte no banco, um valor do dia em código ----------
+// Até 13/10 o banco guardava UMA pesagem por {jid, dia} e a última gravação vencia: o envio do app Relógio (a cada 15 min,
+// regravando 60 dias) apagava o peso dito no chat e o da bioimpedância em PDF. Agora cada fonte tem a sua pesagem do dia e
+// o valor do dia é decidido aqui, numa regra só (o mongo.pesagensDesde já devolve a série consolidada pra todo leitor).
+/** Fontes guardadas, uma pesagem por {jid, dia, fonte}. 'app' fica reservada pro app novo (pesagem registrada nele). */
+export const FONTES_PESAGEM = ['relogio', 'documento', 'digitada', 'app'];
+// quem vence quando discordam: a balança do relógio (mesmo instrumento todo dia, de manhã), depois o exame, depois o resto
+const PRIORIDADE_FONTE = { relogio: 0, documento: 1, digitada: 2, app: 2 };
+export const CONCORDAM_KG = 0.5; // até meio quilo de diferença é a mesma pesagem (roupa, balança, arredondamento): média
+const DA_FONTE = { relogio: 'do relógio', documento: 'do documento', digitada: 'digitada', app: 'do app' };
+const A_FONTE = { relogio: 'a do relógio', documento: 'a do documento', digitada: 'a digitada', app: 'a do app' };
+const horaOk = (h) => (typeof h === 'string' && /^\d{2}:\d{2}$/.test(h) ? h : null);
+
+/** Puro. Fonte normalizada: sem fonte (doc antigo, peso dito no chat) ou desconhecida = 'digitada'. */
+export const fonteDaPesagem = (f) => (FONTES_PESAGEM.includes(f) ? f : 'digitada');
+
+/**
+ * Puro. Filtro do upsert da pesagem de uma fonte. A digitada casa também o doc antigo SEM fonte (gravado antes de 13/10),
+ * que é trocado por um com fonte explícita; as outras fontes só casam a si mesmas (o relógio nunca mais apaga a digitada).
+ */
+export function filtroPesagem({ jid, dia, fonte }) {
+  const f = fonteDaPesagem(fonte);
+  return { jid, dia, fonte: f === 'digitada' ? { $in: [null, 'digitada'] } : f };
+}
+
+/**
+ * Puro. O valor de UM dia a partir das pesagens dele (de fontes diferentes): (1) se há pesagem da manhã (04h-11h), as com
+ * hora fora da manhã saem (depois de comer o peso sobe 0,5 a 1,5 kg); (2) a referência é a da fonte mais confiável (relógio,
+ * depois documento, depois digitada/app; na mesma fonte, a regra da série: manhã, mais cedo); (3) as que concordam com ela
+ * (até 0,5 kg) entram na média; as outras ficam de fora com o motivo ("discorda da balança"). A gordura é a média das que
+ * entraram e têm gordura (= a da vencedora, quando só ela entra). Sem nada que desempate (mesma fonte, sem hora: o legado),
+ * usa a média, com aviso se diferem mais de 1 kg. null sem peso nenhum.
+ * @returns {{ dia, peso, gordura, hora, fonte, fontes: string[], n, usadas, descartadas: {peso, fonte, hora, gordura, motivo}[], avisos: string[] } | null}
+ */
+export function consolidarDia(lista = [], { dia = null } = {}) {
+  const todas = (lista || [])
+    .filter((x) => Number.isFinite(Number(x?.peso)))
+    .map((x) => {
+      const g = Number(x.gordura);
+      return { peso: Number(x.peso), fonte: fonteDaPesagem(x.fonte), hora: horaOk(x.hora), gordura: x.gordura != null && Number.isFinite(g) && g > 2 && g < 70 ? g : null, n: Number(x.n) > 1 ? Number(x.n) : 1 };
+    });
+  if (!todas.length) return null;
+  const d = dia || lista[0]?.dia || '';
+  const descartadas = [];
+  const avisos = [];
+  const fora = (x, motivo) => descartadas.push({ peso: x.peso, fonte: x.fonte, hora: x.hora, gordura: x.gordura, motivo });
+  // 0. peso fora do possível (25-300 kg) não é referência nem tira a válida do dia (revisão F2, M3: o relógio com leitura
+  // impossível descartava a digitada certa, e depois o validarPesagens descartava o dia inteiro). Com o dia todo impossível,
+  // segue como antes (o validarPesagens descarta). Libra e outra pessoa na balança dependem da mediana da série inteira, então
+  // continuam sendo vistas só no validarPesagens, depois daqui.
+  const possiveis = todas.filter((x) => x.peso >= PESO_MIN && x.peso <= PESO_MAX);
+  const validas = possiveis.length ? possiveis : todas;
+  for (const x of todas) {
+    if (validas.includes(x)) continue;
+    fora(x, 'peso fora do possível');
+    avisos.push(`em ${dm(d)} a pesagem ${DA_FONTE[x.fonte]} (${kg1(x.peso)}) ficou de fora: peso fora do possível`);
+  }
+  // 1. com alguma da manhã, as de outro horário não entram (as sem hora, como a digitada, não são "fora da manhã")
+  const temManha = validas.some((x) => ehManha(x.hora));
+  const cands = temManha ? validas.filter((x) => !x.hora || ehManha(x.hora)) : validas;
+  for (const x of validas) {
+    if (cands.includes(x)) continue;
+    fora(x, `fora da manhã (${x.hora}): vale a da manhã`);
+    avisos.push(`em ${dm(d)} a pesagem ${DA_FONTE[x.fonte]} das ${x.hora} (${kg1(x.peso)}) ficou de fora: vale a da manhã`);
+  }
+  // 2. referência: a fonte mais confiável; na mesma fonte, a regra da série (preferirPesagem); sem critério, a média delas
+  const melhor = Math.min(...cands.map((x) => PRIORIDADE_FONTE[x.fonte]));
+  const topo = cands.filter((x) => PRIORIDADE_FONTE[x.fonte] === melhor);
+  const semCriterio = topo.length > 1 && topo.every((x) => !x.hora);
+  const ref = semCriterio ? topo[0] : topo.reduce((a, x) => preferirPesagem(a, x));
+  const valorRef = semCriterio ? media(topo.map((x) => x.peso)) : ref.peso;
+  if (semCriterio) {
+    const dif = Math.max(...topo.map((x) => x.peso)) - Math.min(...topo.map((x) => x.peso));
+    if (dif > 1) avisos.push(`${topo.length} pesagens em ${dm(d)} diferindo ${virgula(dif, 1)} kg (horários ou balanças diferentes?): usei a média`);
+  }
+  // 3. concordam com a referência (até 0,5 kg) = média; discordam = ficam de fora, com o motivo
+  const usadas = cands.filter((x) => (semCriterio && topo.includes(x)) || x === ref || Math.abs(x.peso - valorRef) <= CONCORDAM_KG);
+  for (const x of cands) {
+    if (usadas.includes(x)) continue;
+    fora(x, ref.fonte === 'relogio' ? `discorda da balança do relógio (${kg1(valorRef)})` : `discorda da pesagem ${DA_FONTE[ref.fonte]} (${kg1(valorRef)})`);
+    avisos.push(`em ${dm(d)} a pesagem ${DA_FONTE[x.fonte]} (${kg1(x.peso)}) ficou de fora: vale ${A_FONTE[ref.fonte]} (${kg1(valorRef)}), diferença de ${virgula(Math.abs(x.peso - valorRef), 1)} kg`);
+  }
+  const gs = usadas.map((x) => x.gordura).filter((x) => x != null);
+  const horas = usadas.map((x) => x.hora).filter(Boolean).sort();
+  return {
+    dia: d,
+    peso: media(usadas.map((x) => x.peso)),
+    gordura: gs.length ? media(gs) : null,
+    hora: horas[0] || null,
+    fonte: ref.fonte,
+    fontes: [...new Set([ref.fonte, ...usadas.map((x) => x.fonte)])],
+    n: usadas.reduce((a, x) => a + x.n, 0),
+    usadas: usadas.length,
+    descartadas,
+    avisos,
+  };
+}
+
+/**
+ * Puro. A série de UMA pessoa com uma pesagem por dia (consolidarDia), em ordem de data: é o que mongo.pesagensDesde e
+ * ultimaPesagem devolvem, então todo leitor que assume "uma por dia" (gráfico, previsão, tendência, resumo, saúde,
+ * ferramentas) recebe o valor do dia. Dia com uma pesagem só passa como veio. Dia com várias vira um doc com o peso e a
+ * gordura consolidados (2 casas), a fonte vencedora, `fontes`, `n` e, se alguma ficou de fora, `descartadasNoDia` e
+ * `avisosNoDia` (o validarPesagens repassa os avisos pro progresso).
+ */
+export function pesagensPorDia(docs = []) {
+  // a chave é {jid, dia}: o relatório do mês busca as pesagens do grupo inteiro numa consulta só, e duas pessoas no mesmo dia
+  // não podem virar uma média (todas as gravações usam jids[0] da pessoa: 13/10, 31 de 31 pesagens)
+  const porDia = new Map();
+  for (const p of docs || []) {
+    if (!p?.dia) continue;
+    const k = `${p.dia}|${p.jid ?? ''}`;
+    if (!porDia.has(k)) porDia.set(k, []);
+    porDia.get(k).push(p);
+  }
+  const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
+  return [...porDia.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, lista]) => {
+      const d = lista[0].dia;
+      if (lista.length === 1) return lista[0];
+      const c = consolidarDia(lista, { dia: d });
+      if (!c) return lista[0];
+      const base = lista.find((x) => fonteDaPesagem(x.fonte) === c.fonte) || lista[0];
+      const doc = { ...base, peso: r2(c.peso), gordura: r2(c.gordura), hora: c.hora, fonte: c.fonte, fontes: c.fontes, n: c.n };
+      if (doc.gordura == null) delete doc.gordura;
+      if (!doc.hora) delete doc.hora;
+      if (c.descartadas.length) {
+        doc.descartadasNoDia = c.descartadas;
+        doc.avisosNoDia = c.avisos;
+      }
+      return doc;
+    });
 }
 
 // ---------- 2. tendência ----------

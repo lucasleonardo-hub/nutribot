@@ -3,6 +3,7 @@
 // e nunca mais inventar "que dia lindo" sem saber. Quem mora em hemisférios diferentes ganha estações opostas.
 
 import { colecao } from './mongo.js';
+import { fusoValido } from './util.js';
 
 const GEO = 'https://geocoding-api.open-meteo.com/v1/search';
 const PREV = 'https://api.open-meteo.com/v1/forecast';
@@ -94,6 +95,35 @@ export async function coordenadasDe(cidade) {
     return coords;
   } catch (e) {
     console.warn('[clima] geocodificação falhou:', String(e.message).slice(0, 100));
+    return null;
+  }
+}
+
+// ============================================================
+// Fuso das coordenadas (localização do celular -> fuso da pessoa; util.decidirFuso decide se troca)
+// ============================================================
+// O mesmo Open-Meteo do tempo, com timezone=auto: a resposta traz o fuso IANA do ponto ("Europe/Lisbon"), sem chave e sem
+// custo. Cache em memória por área de ~0,25° (~25 km): o app manda um ponto a cada 15 min e a resposta não muda dentro da
+// cidade. Falhou (sem rede, limite, resposta estranha) = null, e quem chama mantém o fuso atual.
+const cacheFusos = new Map(); // "lat,lon" arredondados -> fuso
+const AREA_FUSO = 0.25;
+export async function fusoDasCoordenadas(lat, lon, { buscar = fetch } = {}) {
+  const la = Number(lat);
+  const lo = Number(lon);
+  if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
+  const chave = `${Math.round(la / AREA_FUSO)},${Math.round(lo / AREA_FUSO)}`;
+  if (cacheFusos.has(chave)) return cacheFusos.get(chave);
+  try {
+    const url = `${PREV}?latitude=${la.toFixed(2)}&longitude=${lo.toFixed(2)}&timezone=auto&forecast_days=1`;
+    const r = await buscar(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (!r?.ok) throw new Error(`HTTP ${r?.status}`);
+    const d = await r.json();
+    const fuso = fusoValido(d?.timezone) && d.timezone !== 'GMT' ? d.timezone : null;
+    if (!fuso) throw new Error(`resposta sem fuso válido (${String(d?.timezone).slice(0, 40)})`);
+    cacheFusos.set(chave, fuso);
+    return fuso;
+  } catch (e) {
+    console.warn('[clima] fuso das coordenadas falhou:', String(e.message).slice(0, 100));
     return null;
   }
 }

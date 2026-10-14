@@ -40,6 +40,69 @@ export function agora(tz = TZ, quando = new Date()) {
   };
 }
 
+/**
+ * Puro. Marca de tempo de um registro da PESSOA (refeição, pesagem digitada, hábito): `dia`, `horaLocal` e `minutos` no fuso
+ * dela; `hora` e `diaGrupo` no fuso do grupo. O `hora` continua no relógio do grupo de propósito: é ele que liga o registro à
+ * mensagem na memória do dia (dia.sincronizarRefeicoesNaMemoria) e ao diário da conversa. Até 13/10 o `dia` também vinha do
+ * grupo: a ceia do Heitor às 00:30 em Sofia (18:30 em São Paulo) caía no dia anterior dele.
+ */
+export function marcaDeTempo(perfil, quando = new Date()) {
+  const local = agora(fusoDe(perfil), quando);
+  const grupo = agora(TZ, quando);
+  const [h, m] = local.hora.split(':').map(Number);
+  return { dia: local.dia, horaLocal: local.hora, minutos: h * 60 + m, hora: grupo.hora, diaGrupo: grupo.dia };
+}
+
+/**
+ * Puro. O registro foi feito durante a conversa do dia `dia` do GRUPO? (pelo criadoEm; sem ele, pelo `dia`). O `dia` do
+ * registro é o local da pessoa e pode ser o seguinte (quem está à frente do grupo), mas a mensagem é da conversa de hoje.
+ */
+export const registroDaConversa = (r, dia, tz = TZ) => (r?.criadoEm ? agora(tz, new Date(r.criadoEm)).dia === dia : r?.dia === dia);
+
+/** Puro. Diferença do fuso em relação ao UTC (minutos) num instante. null se o fuso não existe. */
+function deslocamentoMin(tz, quando) {
+  if (!fusoValido(tz)) return null;
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(quando);
+  const g = (t) => Number(p.find((x) => x.type === t)?.value);
+  return Math.round((Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute')) - Math.floor(quando.getTime() / 60000) * 60000) / 60000);
+}
+
+/**
+ * Puro. Dois fusos marcam a mesma hora o ano todo (agora e a cada 2 meses no próximo ano)? America/Sao_Paulo e America/Bahia,
+ * Europe/Lisbon e Europe/London: sim. Serve pra não trocar o fuso de quem viaja dentro do mesmo horário (o Open-Meteo devolve o
+ * nome da região, não "o mesmo de antes"). Fuso inválido: false.
+ */
+export function fusosEquivalentes(a, b, quando = new Date()) {
+  if (!fusoValido(a) || !fusoValido(b)) return false;
+  if (a === b) return true;
+  for (let k = 0; k <= 6; k++) {
+    const t = new Date(quando.getTime() + k * 61 * 86400_000);
+    if (deslocamentoMin(a, t) !== deslocamentoMin(b, t)) return false;
+  }
+  return true;
+}
+
+export const FUSO_MIN_LEITURAS = 2; // leituras seguidas do fuso novo...
+export const FUSO_MIN_MINUTOS = 30; // ...com pelo menos 30 min entre a primeira e a última
+/**
+ * Puro. Troca o fuso da pessoa pela localização? Uma leitura (fuso das coordenadas do celular) diferente do atual fica
+ * PENDENTE; a troca sai quando o mesmo fuso novo aparece em 2+ leituras seguidas com 30+ min entre a primeira e a última
+ * (o app manda localização a cada 15 min: ~30 min depois de chegar). Leitura igual (ou equivalente) ao fuso atual zera a
+ * pendência (GPS que pulou a fronteira e voltou); leitura de um terceiro fuso recomeça a contagem; leitura ausente ou
+ * inválida (sem rede, Open-Meteo fora) não muda nada.
+ * @returns {{ trocar: boolean, fuso: string, pendente: { fuso, desde, ultima, n } | null }}
+ */
+export function decidirFuso({ atual, pendente = null, leitura, em, minLeituras = FUSO_MIN_LEITURAS, minMinutos = FUSO_MIN_MINUTOS } = {}) {
+  const fusoAtual = fusoValido(atual) ? atual : TZ;
+  if (!fusoValido(leitura)) return { trocar: false, fuso: fusoAtual, pendente };
+  if (leitura === fusoAtual || fusosEquivalentes(leitura, fusoAtual, new Date(em))) return { trocar: false, fuso: fusoAtual, pendente: null };
+  const continua = pendente?.fuso === leitura;
+  const p = continua ? { fuso: leitura, desde: pendente.desde, ultima: em, n: (pendente.n || 1) + 1 } : { fuso: leitura, desde: em, ultima: em, n: 1 };
+  const minutos = (Date.parse(p.ultima) - Date.parse(p.desde)) / 60_000;
+  if (p.n >= minLeituras && minutos >= minMinutos) return { trocar: true, fuso: leitura, pendente: null };
+  return { trocar: false, fuso: fusoAtual, pendente: p };
+}
+
 /** "domingo, 20/09/2026" a partir de "2026-09-20". O dia da semana vem do código: modelo de linguagem erra isso com frequência. */
 export function dataExtenso(dia) {
   try {
@@ -210,6 +273,89 @@ export function pareceMesmaDescricao(a, b) {
   let comum = 0;
   for (const p of A) if (B.has(p)) comum++;
   return comum / Math.min(A.size, B.size) >= 0.5;
+}
+
+export const JANELA_MESMA_HORA_MIN = 10; // correção retroativa: o registro "na mesma hora" (±10 min)
+export const JANELA_MESMA_REFEICAO_MIN = 30; // complemento/correção da última refeição: até 30 min
+
+/**
+ * Puro. O que fazer com uma refeição que vai ser gravada, diante dos registros da MESMA pessoa no MESMO dia:
+ * - 'substituir' `alvo`: correção retroativa (`retroativa`: a linha REFEICAO trouxe a hora em que a pessoa comeu, horas
+ *   depois) na mesma hora (±10 min) de um registro que já existe. Lucas, 06/10 15:27: "não teve chocolate, é pasta de
+ *   amendoim com avelã" sobre o café das 08:28 veio com hora 08:28 e virava um segundo café de 1215 kcal (commit b7901c3);
+ * - 'fundir' com `alvo` (o último registro): mesma refeição até 30 min, do mesmo tipo, ou de tipo diferente quando ninguém
+ *   disse o tipo de propósito; `correcao` diz se a estimativa nova SUBSTITUI (correção, ou descrição que repete a mesma
+ *   comida: Ale, 06/10, 290 + 290 = 580 kcal) ou SOMA (complemento: a sobremesa 18 min depois da janta);
+ * - 'inserir': refeição nova. É sempre o caso do !refeicao (`sempreNova`): a AJUDA promete "registra à mão uma refeição que
+ *   ficou sem registro", e até 13/10 a regra dos ±10 min valia pra QUALQUER registro manual, então "!refeicao lanche barra"
+ *   às 12:35 trocava o almoço das 12:30 pela barra.
+ * @param {object} nova { minutos, slot, manual, correcao, estimativa, descricao, resumo }
+ * @param {object[]} doDia registros da pessoa no dia (com minutos, slot, estimativa, descricao, resumo)
+ * @returns {{ acao: 'inserir'|'substituir'|'fundir', alvo?: object, correcao?: boolean, repeteDescricao?: boolean }}
+ */
+export function decidirGravacaoRefeicao(nova, doDia = [], { slotExplicito = false, retroativa = false, sempreNova = false } = {}) {
+  if (sempreNova) return { acao: 'inserir' };
+  const lista = (doDia || []).filter((x) => Number.isFinite(x?.minutos));
+  if (retroativa && Number.isFinite(nova?.minutos)) {
+    const naMesmaHora = lista.filter((x) => Math.abs(x.minutos - nova.minutos) <= JANELA_MESMA_HORA_MIN).sort((a, b) => a.minutos - b.minutos)[0];
+    if (naMesmaHora) return { acao: 'substituir', alvo: naMesmaHora };
+  }
+  const ultima = [...lista].sort((a, b) => b.minutos - a.minutos)[0];
+  // mesma refeição: mesmo tipo em até 30 min; tipo diferente só funde quando não foi dito de propósito (sobremesa 7 min
+  // depois da janta funde; "lanche" nomeado 1 min depois do almoço não funde, nem o registro manual)
+  const mesmaRefeicao = ultima && Math.abs(nova.minutos - ultima.minutos) <= JANELA_MESMA_REFEICAO_MIN && (ultima.slot === nova.slot || (!nova.manual && !slotExplicito));
+  if (!mesmaRefeicao) return { acao: 'inserir' };
+  // a pessoa descreveu em texto a comida que já tinha mandado em foto (ou mandou a foto do que já descreveu): é a mesma
+  // refeição contada de novo, não um item a mais. Substitui em vez de somar.
+  const repeteDescricao = !nova.correcao && Boolean(nova.estimativa) && Boolean(ultima.estimativa?.kcal) && pareceMesmaDescricao(ultima.descricao || ultima.resumo, nova.descricao || nova.resumo);
+  return { acao: 'fundir', alvo: ultima, correcao: Boolean(nova.correcao) || repeteDescricao, repeteDescricao };
+}
+
+// Virada do dia LOCAL (revisão F2, I2): desde 13/10 a refeição vai pro dia local da pessoa, e pro Heitor em Sofia a virada
+// caiu pras 18:00 de São Paulo, quando ele ainda come. Quem procura "o registro anterior" atravessa a meia-noite local, mas
+// só perto dela: longe da virada tudo continua no dia de hoje, como antes.
+export const JANELA_VIRADA_MIN = 60; // 1ª hora do dia local: sem registro hoje, "a última refeição" ainda é a de ontem
+export const MADRUGADA_MIN = 6 * 60; // hora dita "depois" de agora só vira ontem na madrugada
+
+/**
+ * Puro. Dia de uma refeição retroativa (a linha REFEICAO trouxe a hora em que a pessoa comeu). Na madrugada, hora dita mais
+ * de 1 h DEPOIS de agora é de ontem: "jantei às 23h" dito à 00:30 é o jantar de ontem, não o fim do dia de hoje.
+ */
+export function diaDoRetroativo(diaHoje, horaDita, horaAgora) {
+  const dita = minutosDe(horaDita);
+  const agoraMin = minutosDe(horaAgora);
+  return agoraMin < MADRUGADA_MIN && dita > agoraMin + JANELA_VIRADA_MIN ? diasAnteriores(diaHoje, 2)[0] : diaHoje;
+}
+
+/**
+ * Puro. Os registros da pessoa entre os quais se procura "o anterior" (correção, REGISTRO de apagar/corrigir, !apagar): os de
+ * hoje; na 1ª hora do dia local, sem nenhum hoje, os de ontem (a ceia das 23:55 corrigida à 00:03).
+ */
+export function registrosDaVirada(deHoje, deOntem, minutosAgora) {
+  if ((deHoje || []).length || !(minutosAgora < JANELA_VIRADA_MIN)) return deHoje || [];
+  return deOntem || [];
+}
+
+/**
+ * Puro. A última refeição da pessoa (de registrosDaVirada). Se for de ontem, `minutos` fica relativo a hoje (−1440), pra
+ * "minutos desde a última" valer do mesmo jeito; `minutosNoDia` guarda o original, que é o que se grava.
+ */
+export function ultimaRefeicao(deHoje, deOntem, minutosAgora) {
+  const deHojeMesmo = (deHoje || []).length > 0;
+  const u = registrosDaVirada(deHoje, deOntem, minutosAgora).filter((r) => Number.isFinite(r?.minutos)).sort((a, b) => b.minutos - a.minutos)[0];
+  if (!u) return undefined;
+  return deHojeMesmo ? u : { ...u, minutos: u.minutos - 1440, minutosNoDia: u.minutos };
+}
+
+/**
+ * Puro. Onde gravar a refeição: a correção cai no dia e nos minutos do registro que corrige (`correcaoDe`, que pode ser de
+ * ontem); a retroativa, na hora dita (e no dia de diaDoRetroativo); o resto, agora, hoje.
+ * @returns {{ dia: string, minutos: number, horaLocal: string }}
+ */
+export function destinoDaRefeicao({ diaHoje, horaAgora, horaDita = null, retroativa = false, correcaoDe = null }) {
+  if (correcaoDe) return { dia: correcaoDe.dia || diaHoje, minutos: correcaoDe.minutosNoDia ?? correcaoDe.minutos, horaLocal: horaAgora };
+  if (retroativa && horaDita) return { dia: diaDoRetroativo(diaHoje, horaDita, horaAgora), minutos: minutosDe(horaDita), horaLocal: horaDita };
+  return { dia: diaHoje, minutos: minutosDe(horaAgora), horaLocal: horaAgora };
 }
 
 /**

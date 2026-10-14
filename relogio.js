@@ -4,9 +4,10 @@
 // (saude.js: resumo no dossiê, pesagens, peso e indicadores no perfil, Nutri-Saude.md). Fica tudo guardado por dia na
 // coleção saude_relogio, então o app pode mandar só os últimos dias que o histórico se mantém.
 
-import { colecao, listarPerfis } from './mongo.js';
+import { colecao, listarPerfis, salvarPerfil } from './mongo.js';
 import { aplicarDadosSaude } from './saude.js';
-import { fusoDe } from './util.js';
+import { fusoDe, decidirFuso, marcaDeTempo } from './util.js';
+import { fusoDasCoordenadas } from './clima.js';
 import { preferirPesagem } from './progresso.js';
 import { receberLocais, descreverSituacao } from './lugares.js';
 import { perguntarCompra } from './despensa.js';
@@ -174,6 +175,8 @@ export async function receberEnvio({ token, corpo, hoje, pastaDe, lembrar }) {
     if (local?.recebidos) console.log(`[lugares] ${perfil.nome}: ${local.recebidos} ponto(s); ${descreverSituacao(local.situacao)}`);
     // saiu do mercado/padaria depois de 10 min+ lá: pergunta se comprou algo pra despensa (fora do caminho da resposta ao app)
     if (local?.evento?.evento === 'saiu_de_compra') perguntarCompra(perfil, local.evento.lugar, { lembrar }).catch((e) => console.warn('[despensa] pergunta:', e.message));
+    // o fuso da pessoa acompanha a localização (viagem): fora do caminho da resposta ao app; falhou, fica o fuso de antes
+    atualizarFusoPelaLocalizacao(perfil, corpo.locais).catch((e) => console.warn('[fuso] pela localização:', e.message));
   }
   const hojeAt = dados.atividades.find((a) => a.dia === hoje);
   const ultimoPeso = dados.pesos[dados.pesos.length - 1];
@@ -189,6 +192,48 @@ export async function receberEnvio({ token, corpo, hoje, pastaDe, lembrar }) {
       local?.situacao ? descreverSituacao(local.situacao) : null,
     ].filter(Boolean).join(' · '),
   };
+}
+
+/**
+ * O fuso da pessoa pela localização do celular (13/10; decisão do dono: "o app e a bot sabem pela minha localização" quando
+ * ele for visitar o Heitor). O ponto mais recente (precisão até 500 m) vira uma leitura de fuso no Open-Meteo
+ * (clima.fusoDasCoordenadas, grátis, com cache); util.decidirFuso só troca quando o fuso novo se mantém (2 leituras com 30+
+ * min entre elas) e ignora fuso equivalente (Bahia = São Paulo). Na troca grava `fuso`, o histórico curto `fusos: [{ fuso,
+ * desde }]` (10 últimos) e a data em `atualizacoes.fuso`; enquanto não troca, só a pendência (`fusoPendente`), e só quando ela
+ * muda. Sem rede ou sem leitura: nada muda. Quem não usa o app (Heitor) fica com o fuso do cadastro.
+ * @returns {Promise<{ trocou: boolean, de?: string, para?: string, pendente?: object|null } | null>}
+ */
+export async function atualizarFusoPelaLocalizacao(perfil, locais, { buscar, salvar = salvarPerfil } = {}) {
+  if (!perfil?.jids?.length) return null;
+  const pontos = (locais || [])
+    .map((l) => ({ lat: Number(l?.lat), lon: Number(l?.lon), acc: l?.acc == null ? null : Number(l.acc), ts: Date.parse(l?.ts || l?.hora || '') }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && (p.acc == null || p.acc <= 500))
+    .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  const ultimo = pontos[pontos.length - 1];
+  if (!ultimo) return null;
+  const leitura = await fusoDasCoordenadas(ultimo.lat, ultimo.lon, buscar ? { buscar } : {});
+  if (!leitura) return null;
+  const em = Number.isFinite(ultimo.ts) ? new Date(ultimo.ts).toISOString() : new Date().toISOString();
+  const atual = fusoDe(perfil);
+  const d = decidirFuso({ atual, pendente: perfil.fusoPendente || null, leitura, em });
+  if (d.trocar) {
+    const historico = perfil.fusos?.length ? perfil.fusos : [{ fuso: atual, desde: perfil.atualizacoes?.fuso || null }];
+    const fusos = [...historico, { fuso: d.fuso, desde: em }].slice(-10);
+    // só `atualizacoes.fuso` (caminho com ponto no $set): o `perfil` foi lido no começo do POST, e o saude.js pode ter acabado
+    // de gravar `atualizacoes.peso`; regravar o objeto inteiro desfazia isso. Com `atualizacoes` nulo o caminho com ponto
+    // falha no Mongo, e aí grava o objeto (não há o que perder).
+    const diaFuso = marcaDeTempo({ fuso: d.fuso }).dia;
+    const semObjeto = perfil.atualizacoes !== undefined && (perfil.atualizacoes === null || typeof perfil.atualizacoes !== 'object');
+    const dataFuso = semObjeto ? { atualizacoes: { fuso: diaFuso } } : { 'atualizacoes.fuso': diaFuso };
+    await salvar({ jids: perfil.jids, fuso: d.fuso, fusos, fusoPendente: null, ...dataFuso });
+    console.log(`[fuso] ${perfil.nome}: ${atual} -> ${d.fuso} pela localização (desde ${em}); dia e hora dos registros seguem o fuso novo`);
+    return { trocou: true, de: atual, para: d.fuso };
+  }
+  if (JSON.stringify(perfil.fusoPendente || null) !== JSON.stringify(d.pendente)) {
+    await salvar({ jids: perfil.jids, fusoPendente: d.pendente });
+    if (d.pendente) console.log(`[fuso] ${perfil.nome}: localização em ${d.pendente.fuso} (${d.pendente.n}ª leitura; fuso atual ${atual})`);
+  }
+  return { trocou: false, pendente: d.pendente };
 }
 
 /** Texto do resumo vindo do app, se for recente (senão null e a planilha, se existir, continua valendo). */
