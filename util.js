@@ -57,7 +57,8 @@ export function marcaDeTempo(perfil, quando = new Date()) {
  * Puro. O registro foi feito durante a conversa do dia `dia` do GRUPO? (pelo criadoEm; sem ele, pelo `dia`). O `dia` do
  * registro é o local da pessoa e pode ser o seguinte (quem está à frente do grupo), mas a mensagem é da conversa de hoje.
  */
-export const registroDaConversa = (r, dia, tz = TZ) => (r?.criadoEm ? agora(tz, new Date(r.criadoEm)).dia === dia : r?.dia === dia);
+// Registro feito pelo app pode ser de um dia passado (a pessoa preenche o diário depois): aí vale o `dia` dele, não o criadoEm
+export const registroDaConversa = (r, dia, tz = TZ) => (r?.origem === 'app' ? r?.dia === dia : r?.criadoEm ? agora(tz, new Date(r.criadoEm)).dia === dia : r?.dia === dia);
 
 /** Puro. Diferença do fuso em relação ao UTC (minutos) num instante. null se o fuso não existe. */
 function deslocamentoMin(tz, quando) {

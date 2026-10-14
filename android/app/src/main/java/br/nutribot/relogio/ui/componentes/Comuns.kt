@@ -43,7 +43,8 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,13 +57,16 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import br.nutribot.relogio.ui.Carga
+import br.nutribot.relogio.ui.Escrita
 import br.nutribot.relogio.ui.Formato
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
@@ -211,13 +215,13 @@ fun BarraFaixa(valor: Double?, min: Double?, max: Double?, escala: Double, modif
 @Composable
 fun Esqueleto(modifier: Modifier = Modifier, blocos: List<Dp> = listOf(180.dp, 96.dp, 140.dp, 72.dp, 72.dp)) {
     val parado = LocalReduzirMovimento.current
-    val a = if (parado) 0.7f else {
+    // o valor animado só é lido no graphicsLayer (fase de desenho), para não recompor a cada quadro
+    val a: State<Float> = if (parado) remember { mutableFloatStateOf(0.7f) } else {
         val t = rememberInfiniteTransition(label = "esqueleto")
-        val v by t.animateFloat(0.45f, 0.9f, infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "pulsa")
-        v
+        t.animateFloat(0.45f, 0.9f, infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "pulsa")
     }
     Column(modifier.fillMaxWidth().padding(horizontal = 18.dp).semantics { contentDescription = "Carregando" }, verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        blocos.forEach { h -> Box(Modifier.fillMaxWidth().height(h).graphicsLayer { alpha = a }.clip(Formas.Medio).background(Cores.Branco)) }
+        blocos.forEach { h -> Box(Modifier.fillMaxWidth().height(h).graphicsLayer { alpha = a.value }.clip(Formas.Medio).background(Cores.Branco)) }
     }
 }
 
@@ -326,6 +330,38 @@ fun Segmentado(opcoes: List<String>, selecionada: Int, aoEscolher: (Int) -> Unit
                 Text(o, fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 14.sp, color = if (ativo) Cores.AcaiEscuro else Cores.Tinta3)
             }
         }
+    }
+}
+
+/** Chip em pílula para escolher uma opção (slot da refeição, tipo de evento, nota de 1 a 5). Alvo de toque de 48 dp. */
+@Composable
+fun Chip(texto: String, ativo: Boolean, modifier: Modifier = Modifier, aoTocar: () -> Unit) {
+    Box(
+        modifier.heightIn(min = 48.dp).clip(Formas.Pilula).background(if (ativo) Cores.Acai else Cores.Trilho)
+            .clickable(role = Role.RadioButton, onClick = aoTocar).semantics { selected = ativo }.padding(horizontal = 14.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(texto, fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 14.sp, color = if (ativo) Cores.Branco else Cores.LilasTexto, maxLines = 1)
+    }
+}
+
+/** Recado de erro de uma escrita (dentro de uma folha ou diálogo). */
+@Composable
+fun AvisoErro(texto: String, modifier: Modifier = Modifier) {
+    Text(
+        texto, color = Cores.CuidadoTinta, style = MaterialTheme.typography.bodySmall,
+        modifier = modifier.fillMaxWidth().clip(Formas.Pequeno).background(Cores.CuidadoFundo).padding(horizontal = 12.dp, vertical = 8.dp),
+    )
+}
+
+/** Enquanto uma escrita espera o servidor: mascote, a explicação e, passados 4 s, o aviso de que ele está acordando. */
+@Composable
+fun Esperando(texto: String, escrita: Escrita, pose: Pose = Pose.CorgiLupa) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Mascote(pose, 96.dp)
+        Text(texto, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        if (escrita.acordando) Text("O servidor está acordando: pode levar até 1 minuto.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, textAlign = TextAlign.Center)
+        CircularProgressIndicator(color = Cores.Acai)
     }
 }
 

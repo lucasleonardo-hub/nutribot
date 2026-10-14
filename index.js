@@ -199,7 +199,7 @@ app.get('/logout', async (req, res) => {
 // e os erros em { erro: { codigo, mensagem } } valem só dentro de /api/v1; as rotas acima não mudam.
 app.use('/api/v1', criarApi());
 app.listen(PORT, () => console.log(`[http] servidor na porta ${PORT} (GET /, /privacidade, /ping, /qr, /estado, /status?token=, /logout?token=)`));
-console.log('[http] API do app em /api/v1 (POST /parear; GET /perfis, /perfis/:id/{hoje,refeicoes,progresso,corpo,nutri,resumos}, /integracoes)');
+console.log('[http] API do app em /api/v1 (POST /parear; GET /perfis, /perfis/:id/{hoje,refeicoes,progresso,corpo,nutri,resumos,eventos}, /integracoes; escrita: refeicoes, humor, eventos, pesagens, perfil)');
 
 // Anti-sleep interno: o próprio bot bate na URL pública. Combine com um monitor externo (UptimeRobot / cron-job.org)
 // pra cobrir o intervalo em que o processo está reiniciando.

@@ -1,6 +1,7 @@
 package br.nutribot.relogio.legado
 
 import android.content.Context
+import br.nutribot.relogio.dados.Cofre
 
 /** Configuração e estado do app (URL do bot, pessoa, token, último envio). */
 class Prefs(context: Context) {
@@ -14,9 +15,26 @@ class Prefs(context: Context) {
         get() = sp.getString("pessoa", "") ?: ""
         set(v) = sp.edit().putString("pessoa", v.trim()).apply()
 
+    /**
+     * Token do Relógio (x-relogio-token), guardado cifrado pelo Cofre (a mesma chave AES do Keystore do token do app),
+     * com o prefixo "cofre:" para não confundir com o valor antigo em texto puro. Um valor antigo é devolvido como está e
+     * regravado cifrado uma vez (migração transparente na 2.1). Ler e gravar passam pelo Keystore: chame fora da thread principal.
+     */
     var token: String
-        get() = sp.getString("token", "") ?: ""
-        set(v) = sp.edit().putString("token", v.trim()).apply()
+        get() {
+            val guardado = sp.getString("token", "") ?: ""
+            if (guardado.isBlank()) return ""
+            if (guardado.startsWith(PREFIXO_COFRE)) return Cofre.decifrar(guardado.removePrefix(PREFIXO_COFRE)) ?: ""
+            // valor antigo em texto puro: migra para cifrado (se o Keystore falhar agora, fica como está e tenta na próxima leitura)
+            runCatching { sp.edit().putString("token", PREFIXO_COFRE + Cofre.cifrar(guardado)).apply() }
+            return guardado
+        }
+        set(v) {
+            val limpo = v.trim()
+            if (limpo.isBlank()) { sp.edit().putString("token", "").apply(); return }
+            val cifrado = runCatching { PREFIXO_COFRE + Cofre.cifrar(limpo) }.getOrElse { limpo }
+            sp.edit().putString("token", cifrado).apply()
+        }
 
     var ultimoEnvio: Long
         get() = sp.getLong("ultimoEnvio", 0L)
@@ -41,5 +59,10 @@ class Prefs(context: Context) {
         get() = sp.getString("notaResultado", "") ?: ""
         set(v) = sp.edit().putString("notaResultado", v).apply()
 
-    val configurado: Boolean get() = url.isNotBlank() && pessoa.isNotBlank() && token.isNotBlank()
+    /** URL, nome e token preenchidos (confere só se HÁ token guardado, sem decifrar: serve na thread principal). */
+    val configurado: Boolean get() = url.isNotBlank() && pessoa.isNotBlank() && !(sp.getString("token", "") ?: "").isBlank()
+
+    private companion object {
+        const val PREFIXO_COFRE = "cofre:"
+    }
 }

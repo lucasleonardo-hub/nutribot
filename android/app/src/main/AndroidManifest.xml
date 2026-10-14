@@ -62,6 +62,18 @@
             </intent-filter>
         </activity>
 
+        <!-- Fotos da câmera (registrar refeição, 2.1): o app de câmera do sistema grava num arquivo do cacheDir por este provedor;
+             sem permissão CAMERA. A foto é reduzida e enviada; não fica guardada. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fotos"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/caminhos" />
+        </provider>
+
         <!-- Android 14+: mesma explicação, pelo caminho novo do sistema -->
         <activity-alias
             android:name="ViewPermissionUsageActivity"

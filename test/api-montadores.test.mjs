@@ -109,8 +109,10 @@ test('perfil: só os campos do contrato, id string, sem jids; ehDono pelo ADMIN_
 // ---------- refeição ----------
 test('refeição: id, hora local, faixa pela incerteza, macros, origem e itens da descrição', () => {
   const r = M.montarRefeicao({ _id: { toString: () => '65f0c0ffee' }, slot: 'almoco', hora: '15:27', horaLocal: '12:31', resumo: '[3 fotos]', descricao: 'arroz, feijão, 150 g de frango grelhado e salada', estimativa: { kcal: 812.4, p: 52.2, c: 90, g: 21 }, incerteza: 'media' });
+  const item = (nome) => ({ nome, gramas: null, kcal: null, p: null, c: null, g: null });
   assert.deepEqual(r, {
     id: '65f0c0ffee',
+    dia: null,
     slot: 'almoco',
     nome: 'Almoço',
     hora: '12:31',
@@ -121,12 +123,9 @@ test('refeição: id, hora local, faixa pela incerteza, macros, origem e itens d
     g: 21,
     descricao: 'arroz, feijão, 150 g de frango grelhado e salada',
     origem: 'foto',
-    itens: [
-      { nome: 'arroz', gramas: null, kcal: null },
-      { nome: 'feijão', gramas: null, kcal: null },
-      { nome: '150 g de frango grelhado', gramas: null, kcal: null },
-      { nome: 'salada', gramas: null, kcal: null },
-    ],
+    incerteza: 'media',
+    itens: [item('arroz'), item('feijão'), item('150 g de frango grelhado'), item('salada')],
+    miniatura: null,
   });
   const semEst = M.montarRefeicao({ _id: 'x', slot: 'lanche', hora: '16:00', resumo: 'um pão de queijo', manual: true });
   assert.equal(semEst.kcal, null);
@@ -134,7 +133,7 @@ test('refeição: id, hora local, faixa pela incerteza, macros, origem e itens d
   assert.equal(semEst.p, null);
   assert.equal(semEst.origem, 'manual');
   assert.equal(semEst.hora, '16:00'); // sem horaLocal (registro antigo), a hora do grupo
-  assert.deepEqual(semEst.itens, [{ nome: 'um pão de queijo', gramas: null, kcal: null }]);
+  assert.deepEqual(semEst.itens, [{ nome: 'um pão de queijo', gramas: null, kcal: null, p: null, c: null, g: null }]);
   assert.equal(M.montarRefeicao({ _id: 'y', slot: 'jantar', resumo: '[áudio]', descricao: 'sopa' }).origem, 'audio');
   assert.equal(M.montarRefeicao({ _id: 'z', slot: 'jantar', resumo: 'janta', descricao: 'sopa' }).origem, 'texto');
 });
@@ -163,7 +162,7 @@ test('hoje: os números batem com o !progresso e a visão do !hoje (mesmos dados
   const pes = pesagens();
   const s = saude();
   const h = M.montarHoje({ perfil, dia: DIA, hoje: DIA, horaAgora: '13:50', refeicoes: refs, pesagens: pes, saude: s, treinos: [], termosLocal: M.termosDeLugar([perfil]) });
-  assert.deepEqual(Object.keys(h), ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana']);
+  assert.deepEqual(Object.keys(h), ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana', 'humor', 'eventos']);
   assert.deepEqual(ida(h), h, 'só JSON puro');
 
   // a mesma análise que o !progresso e o !hoje montam (acompanhamento.progressoDe com os dados de 31 dias)
@@ -243,7 +242,7 @@ test('refeições por dia: todo dia do intervalo, totais, completo pelo critéri
   assert.equal(r.dias[3].kcal, 600);
   // dia sem registro aparece vazio
   const vazio = M.montarRefeicoes({ refeicoes: [], de: DIA, ate: DIA, hoje: DIA });
-  assert.deepEqual(vazio, { dias: [{ dia: DIA, completo: false, kcal: 0, p: 0, c: 0, g: 0, refeicoes: [] }] });
+  assert.deepEqual(vazio, { dias: [{ dia: DIA, completo: false, kcal: 0, p: 0, c: 0, g: 0, refeicoes: [], eventos: [] }] });
 });
 
 // ---------- progresso ----------
@@ -449,18 +448,21 @@ test('avisos: rótulo em caixa alta sai; rápido demais = cuidado; sono e treino
 // ---------- I4: todas as chaves do contrato, sempre (com null quando falta), em dados mínimos ----------
 const ESQUEMA = {
   Perfil: ['id', 'nome', 'primeiroNome', 'apelido', 'fuso', 'objetivo', 'metaPeso', 'metaPrazo', 'temRelogio', 'temHevy', 'ehDono'],
-  Hoje: ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana'],
+  Hoje: ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana', 'humor', 'eventos'],
   Kcal: ['consumido', 'faixa', 'err', 'situacao'],
   Macro: ['g', 'meta'],
-  Refeicao: ['id', 'slot', 'nome', 'hora', 'kcal', 'faixa', 'p', 'c', 'g', 'descricao', 'origem', 'itens'],
-  Item: ['nome', 'gramas', 'kcal'],
+  // fase 2: dia, incerteza, miniatura e itens com macros (o ajuste por gramas parte deles)
+  Refeicao: ['id', 'dia', 'slot', 'nome', 'hora', 'kcal', 'faixa', 'p', 'c', 'g', 'descricao', 'origem', 'incerteza', 'itens', 'miniatura'],
+  Item: ['nome', 'gramas', 'kcal', 'p', 'c', 'g'],
+  Evento: ['id', 'dia', 'hora', 'titulo', 'tipo', 'nota', 'criadoEm'],
+  Humor: ['humor', 'energia', 'sono', 'texto', 'atualizadoEm'],
   Pendente: ['slot', 'nome'],
   Peso: ['atual', 'kgSemana', 'ic', 'veredito', 'texto'],
   Relogio: ['sonoMin', 'passos', 'gastoKcal', 'gastoPrevisto', 'fcRepouso', 'treinos', 'atualizadoEm'],
   TreinoRelogio: ['nome', 'min', 'hora'],
   Energia: ['nota', 'sono', 'recuperacao', 'carga', 'texto'],
   Aviso: ['tom', 'titulo', 'texto'],
-  DiaRefeicoes: ['dia', 'completo', 'kcal', 'p', 'c', 'g', 'refeicoes'],
+  DiaRefeicoes: ['dia', 'completo', 'kcal', 'p', 'c', 'g', 'refeicoes', 'eventos'],
   Progresso: ['pesagens', 'tendencia', 'veredito', 'meta', 'alertas', 'texto'],
   Pesagem: ['dia', 'peso', 'gordura', 'fonte', 'hora', 'descartada', 'motivo'],
   Corpo: ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'medidas'],
@@ -505,13 +507,32 @@ test('I4: chaves do contrato sempre presentes com dados mínimos (sem relógio, 
   assert.equal(h.refeicoes.find((r) => r.id === 'r2').kcal, null);
   h.pendentes.forEach((p) => confere(p, 'Pendente'));
   h.avisos.forEach((a) => confere(a, 'Aviso'));
-  assert.deepEqual([h.peso, h.relogio, h.energia, h.resumoSemana], [null, null, null, null]);
+  assert.deepEqual([h.peso, h.relogio, h.energia, h.resumoSemana, h.humor], [null, null, null, null, null]);
+  assert.deepEqual(h.eventos, []);
 
-  const r = M.montarRefeicoes({ refeicoes: refs, de: somarDias(DIA, -1), ate: DIA, hoje: DIA });
+  // fase 2: humor e eventos do dia no /hoje; eventos por dia no /refeicoes (só os do dia)
+  const ev = [{ _id: 'e1', dia: DIA, hora: '19:30', titulo: 'Jantar fora', tipo: 'comer_fora', criadoEm: new Date('2030-01-01T00:00:00Z') }, { _id: 'e2', dia: somarDias(DIA, -1), titulo: 'Viagem', tipo: 'viagem' }];
+  const h2 = M.montarHoje({ perfil: minima, dia: DIA, hoje: DIA, horaAgora: '23:00', refeicoes: refs, humor: { humor: 4, energia: 3, texto: 'cansado' }, eventos: ev });
+  confere(h2, 'Hoje');
+  confere(h2.humor, 'Humor');
+  assert.deepEqual(h2.humor, { humor: 4, energia: 3, sono: null, texto: 'cansado', atualizadoEm: null });
+  assert.equal(h2.eventos.length, 1);
+  confere(h2.eventos[0], 'Evento');
+  assert.equal(h2.eventos[0].criadoEm, '2030-01-01T00:00:00.000Z');
+
+  const r = M.montarRefeicoes({ refeicoes: refs, eventos: ev, de: somarDias(DIA, -1), ate: DIA, hoje: DIA });
   r.dias.forEach((d) => {
     confere(d, 'DiaRefeicoes');
     d.refeicoes.forEach(confereRefeicao);
+    d.eventos.forEach((e) => confere(e, 'Evento'));
   });
+  assert.deepEqual(r.dias.map((d) => d.eventos.map((e) => e.id)), [['e2'], ['e1']]);
+
+  // registro feito pelo app: itens gravados (com gramas e macros) vencem os da descrição; miniatura vira data URI; origem app
+  const doApp = M.montarRefeicao({ _id: 'a1', dia: DIA, slot: 'almoco', horaLocal: '12:10', origem: 'app', incerteza: 'media', miniatura: 'AAAA', descricao: 'arroz, frango', estimativa: { kcal: 500, p: 40, c: 50, g: 12 }, itens: [{ nome: 'arroz', gramas: 150, kcal: 190, p: 4, c: 42, g: 0.3 }, { nome: 'frango', gramas: 120, kcal: 310, p: 36, c: 8, g: 11.7 }] });
+  confereRefeicao(doApp);
+  assert.deepEqual([doApp.origem, doApp.incerteza, doApp.miniatura, doApp.dia], ['app', 'media', 'data:image/jpeg;base64,AAAA', DIA]);
+  assert.deepEqual(doApp.itens.map((i) => [i.nome, i.gramas, i.kcal]), [['arroz', 150, 190], ['frango', 120, 310]]);
 
   const p = M.montarProgresso({ perfil: minima, dia: DIA, refeicoes: refs, pesagens: [] });
   confere(p, 'Progresso');

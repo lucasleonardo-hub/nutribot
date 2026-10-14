@@ -101,6 +101,11 @@ export function aplicarAtualizacao(perfil, a, dia) {
     novo.metaPrazo = null;
     novo.atualizacoes.metaPeso = dia;
   }
+  // só o prazo sai (app: "sem prazo"); a meta de peso fica
+  if (a.sem_meta_prazo === true && a.sem_meta_peso !== true && perfil.metaPrazo != null) {
+    novo.metaPrazo = null;
+    novo.atualizacoes.metaPrazo = dia;
+  }
   // produto de uso fixo com rótulo lido ("vai ser sempre esse hipercalórico, deixa salvo"): porção e números pra copiar depois
   if (a.produto && typeof a.produto === 'object') {
     const nome = str(a.produto.nome)?.toLowerCase();

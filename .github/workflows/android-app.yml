@@ -5,7 +5,7 @@
 name: android-app
 on:
   push:
-    branches: [app-fase1, main]
+    branches: [app-fase1, app-fase2, main]
     paths: ['android/**', '.github/workflows/android-app.yml']
   workflow_dispatch:
 permissions:
@@ -35,7 +35,11 @@ jobs:
           RELOGIO_KEYSTORE_PASS: ${{ secrets.RELOGIO_KEYSTORE_PASS }}
         run: gradle -p android --no-daemon assembleRelease
       - name: renomear
-        run: cp android/app/build/outputs/apk/release/app-release.apk nutribot-app.apk && ls -la nutribot-app.apk
+        # além do nutribot-app.apk (sempre o mais novo), uma cópia com a versão no nome fica na release pra voltar atrás
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk nutribot-app.apk && ls -la nutribot-app.apk
+          V=$(grep -oE 'versionName = "[^"]+"' android/app/build.gradle.kts | head -1 | grep -oE '[0-9.]+')
+          cp nutribot-app.apk "nutribot-app-${V:-sem-versao}.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: nutribot-app-apk
@@ -45,4 +49,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view app >/dev/null 2>&1 || gh release create app --prerelease --latest=false --target app-fase1 --title "App NutriBot (fase 1, só o celular do dono)" --notes "APK do app NutriBot 2.0. Instala por cima do Relógio (mesma assinatura) e mantém permissões, sincronização, localização e cupom. Para entrar: mande !app no privado do bot e digite o código de 6 dígitos."
-          gh release upload app nutribot-app.apk --clobber
+          gh release upload app nutribot-app.apk nutribot-app-*.apk --clobber

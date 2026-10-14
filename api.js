@@ -10,9 +10,11 @@
 // fuso da pessoa (util.marcaDeTempo). Lugares e localização não saem (decisão do dono pra esta fase).
 
 import express from 'express';
-import { listarPerfis, refeicoesDesde, pesagensDesde, colecao } from './mongo.js';
+import { listarPerfis, refeicoesDesde, pesagensDesde, colecao, humorDe, eventosDe, comMiniaturas } from './mongo.js';
 import { authPadrao, erroApi, ipDe, criarDiagnosticoXff } from './api-auth.js';
-import { montarPerfil, montarHoje, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, termosDeLugar } from './api-montadores.js';
+import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, termosDeLugar } from './api-montadores.js';
+import { rotasDeEscrita, escritaPadrao } from './api-escrita.js';
+import { estimarRefeicaoApp } from './gemini.js';
 import { marcaDeTempo, diasAnteriores } from './util.js';
 import { temHevy } from './treino.js';
 import { ehDonoDaAgenda } from './agenda.js';
@@ -38,17 +40,27 @@ export function dadosPadrao() {
   return {
     listarPerfis: () => listarPerfis(),
 
-    /** Hoje, corpo: 35 dias de refeições, 120 de pesagens (uma por dia), relógio e treinos (as janelas de tendenciaCompleta). */
+    /**
+     * Hoje, corpo: 35 dias de refeições, 120 de pesagens (uma por dia), relógio e treinos (as janelas de tendenciaCompleta),
+     * e o humor e os eventos do dia registrados no app (fase 2).
+     */
     async doDia(perfil, dia, { treinosCompletos = false } = {}) {
       const projecao = treinosCompletos ? {} : { inicio: 1 };
-      const [refeicoes, pesagens, saude, treinos] = await Promise.all([
+      const [refeicoes, pesagens, saude, treinos, humor, eventos] = await Promise.all([
         refeicoesDesde(perfil.jids || [], diasAnteriores(dia, 35)[0], dia),
         pesagensDesde(perfil.jids || [], diasAnteriores(dia, 120)[0], dia),
         colecao('saude_relogio').findOne({ _id: perfil.jids?.[0] }),
         colecao('treinos').find({ jid: doJid(perfil), inicio: { $gte: isoMenos(dia, 100), $lte: `${dia}T23:59:59.999Z` } }).project(projecao).toArray(),
+        humorDe(perfil.jids || [], dia, dia),
+        eventosDe(perfil.jids || [], dia, dia),
       ]);
-      return { refeicoes, pesagens, saude, treinos };
+      // miniaturas só do dia pedido (é o que o app mostra); os 35 dias de histórico servem só às contas
+      const doDiaComMini = await comMiniaturas(refeicoes.filter((r) => r.dia === dia));
+      return { refeicoes: [...refeicoes.filter((r) => r.dia !== dia), ...doDiaComMini], pesagens, saude, treinos, humor: humor[0] || null, eventos };
     },
+
+    /** Eventos criados no app num intervalo (diário da Comida e agenda). */
+    eventosEntre: (perfil, de, ate) => eventosDe(perfil.jids || [], de, ate),
 
     /**
      * Refeições de [de, ate] e dos 28 dias fechados antes de hoje (a mediana do critério de dia completo), em duas consultas
@@ -60,7 +72,7 @@ export function dadosPadrao() {
         refeicoesDesde(perfil.jids || [], diasAnteriores(hoje, 29)[0], diasAnteriores(hoje, 2)[0]),
       ]);
       const vistos = new Set(doIntervalo.map((r) => String(r._id)));
-      return [...doIntervalo, ...base.filter((r) => !vistos.has(String(r._id)))];
+      return [...(await comMiniaturas(doIntervalo)), ...base.filter((r) => !vistos.has(String(r._id)))];
     },
 
     /** Progresso e resumos: os 31 dias de acompanhamento.dadosDe. */
@@ -117,14 +129,18 @@ function enviarErro(res, status, codigo, mensagem) {
  * Roteador da API v1. `auth` = api-auth.criarAuth (pareamento e token); `dados` = dadosPadrao() ou um dublê; `agora()` o
  * instante (dia e hora de cada pessoa saem dele, no fuso dela); `adminJid` marca o perfil do dono.
  */
-export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda } = {}) {
+export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita = escritaPadrao(), ia = { estimarRefeicaoApp }, agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda, podeAnalisar } = {}) {
   const r = express.Router();
   const diagnosticoXff = criarDiagnosticoXff();
   r.use((req, _res, next) => {
     diagnosticoXff(req); // uma vez por processo: quantos endereços o X-Forwarded-For traz (pra acertar API_PROXY_SALTOS)
     next();
   });
-  r.use(express.json({ limit: '32kb' }));
+  // 32 kb pra tudo, menos o registro de refeição pelo app, que leva até 2 fotos em base64 (fase 2): esse corpo só é lido
+  // na própria rota, depois do token (revisão: anônimo não faz o servidor parsear 6 MB)
+  const jsonPequeno = express.json({ limit: '32kb' });
+  const jsonFoto = express.json({ limit: '6mb' });
+  r.use((req, res, next) => (req.method === 'POST' && /^\/perfis\/[^/]+\/refeicoes\/?$/.test(req.path) ? next() : jsonPequeno(req, res, next)));
 
   // ---------- pareamento (sem token) ----------
   r.post('/parear', async (req, res) => {
@@ -159,6 +175,7 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), agora = (
     const perfis = await dados.listarPerfis();
     const perfil = perfis.find((p) => String(p._id) === String(req.params.id));
     if (!perfil) throw erroApi(404, 'perfil_nao_encontrado', 'perfil não encontrado');
+    if (!Array.isArray(perfil.jids) || !perfil.jids.length) throw erroApi(409, 'perfil_sem_jid', 'perfil sem número de WhatsApp ligado');
     const t = marcaDeTempo(perfil, agora());
     return { perfil, perfis, hoje: t.dia, hora: t.horaLocal };
   }
@@ -175,11 +192,16 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), agora = (
     res.json({ perfis: perfis.map((p) => montarPerfil(p, { temHevy: temHevyDe(p), adminJid })) });
   });
 
-  r.get('/perfis/:id/hoje', async (req, res) => {
-    const { perfil, perfis, hoje, hora } = await perfilDo(req);
-    const dia = diaDoPedido(req, hoje);
+  /** O /hoje de um dia (a leitura e as escritas devolvem o mesmo objeto). */
+  async function hojeDe(perfil, perfis, dia) {
+    const t = marcaDeTempo(perfil, agora());
     const d = await dados.doDia(perfil, dia);
-    res.json(montarHoje({ perfil, dia, hoje, horaAgora: hora, ...d, atrasoMin: ATRASO_COBRANCA_MIN, termosLocal: termosDeLugar(perfis) }));
+    return montarHoje({ perfil, dia, hoje: t.dia, horaAgora: t.horaLocal, ...d, atrasoMin: ATRASO_COBRANCA_MIN, termosLocal: termosDeLugar(perfis) });
+  }
+
+  r.get('/perfis/:id/hoje', async (req, res) => {
+    const { perfil, perfis, hoje } = await perfilDo(req);
+    res.json(await hojeDe(perfil, perfis, diaDoPedido(req, hoje)));
   });
 
   r.get('/perfis/:id/refeicoes', async (req, res) => {
@@ -192,8 +214,8 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), agora = (
     if (de > ateDia) throw erroApi(400, 'intervalo_invalido', 'de depois de ate');
     if (ateDia > hoje) throw erroApi(400, 'intervalo_invalido', `ate no futuro (hoje é ${hoje} no fuso da pessoa)`);
     if (diasAnteriores(ateDia, MAX_DIAS_REFEICOES)[0] > de) throw erroApi(400, 'intervalo_invalido', `no máximo ${MAX_DIAS_REFEICOES} dias por pedido`);
-    const refeicoes = await dados.refeicoesEntre(perfil, de, ateDia, hoje);
-    res.json(montarRefeicoes({ refeicoes, de, ate: ateDia, hoje, termosLocal: termosDeLugar(perfis) }));
+    const [refeicoes, eventos] = await Promise.all([dados.refeicoesEntre(perfil, de, ateDia, hoje), dados.eventosEntre ? dados.eventosEntre(perfil, de, ateDia) : []]);
+    res.json(montarRefeicoes({ refeicoes, eventos, de, ate: ateDia, hoje, termosLocal: termosDeLugar(perfis) }));
   });
 
   r.get('/perfis/:id/progresso', async (req, res) => {
@@ -226,6 +248,9 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), agora = (
     const x = await dados.integracoes(perfis);
     res.json(montarIntegracoes({ perfis, ...x, temHevy: temHevyDe, ehDonoDaAgenda: ehDonoDaAgendaDe, agoraMs: agora().getTime() }));
   });
+
+  // ---------- escrita (fase 2): refeição, humor, eventos, pesagem, perfil ----------
+  rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, lerJsonFoto: jsonFoto, agora, temHevyDe, adminJid, montarPerfil, montarRefeicao, ...(podeAnalisar ? { podeAnalisar } : {}) });
 
   // ---------- o resto: 404 e erros no formato do contrato ----------
   r.use((_req, res) => enviarErro(res, 404, 'rota_inexistente', 'rota inexistente na API v1'));

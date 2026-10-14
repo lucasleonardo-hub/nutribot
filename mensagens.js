@@ -39,6 +39,16 @@ import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
 import { notaDeAtraso, atrasoEmMinutos, ATRASO_DESCULPAS_MIN, RESGATE_IDADE_MAX_H } from './retomada.js';
 import { comandoApp } from './api-auth.js';
+import { blocoApp, somarDias } from './api-escrita.js';
+import { humorDe, eventosDe } from './mongo.js';
+
+/** Bloco "PELO APP" do prompt (fase 2): humor de hoje e eventos de hoje a 3 dias à frente, criados pela pessoa no app. '' sem nada. */
+async function blocoAppDe(perfil, dia) {
+  const jids = perfil?.jids || [];
+  if (!jids.length) return '';
+  const [humor, eventos] = await Promise.all([humorDe(jids, dia, dia), eventosDe(jids, dia, somarDias(dia, 3))]);
+  return blocoApp({ humor: humor[0] || null, eventos, hoje: dia });
+}
 
 const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood após o bot voltar do sleep)
 // Pedido de desculpas pela demora: uma vez por "volta" (não em cada mensagem atrasada do mesmo lote)
@@ -928,7 +938,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // pergunta de progresso (responde com o bloco PROGRESSO DE PESO, sem registrar nada): a regra está em progresso.js, a mesma
   // que a avaliação importa (nunca quando a mensagem também conta refeição, corrige registro, contesta ou continua a refeição)
   const perguntaProgresso = rotaPerguntaProgresso({ texto, temImagem, temAudio, metaConversa, contestacao, emAndamento });
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', app: motivo ? await blocoAppDe(eu, diaPessoa).catch(() => '') : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;

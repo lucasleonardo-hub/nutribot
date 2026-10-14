@@ -1,7 +1,7 @@
 // mongo.js - Conexão com MongoDB Atlas + sessão do Baileys salva remotamente
 // (assim o bot NÃO perde o QR Code quando o Render reinicia e apaga o disco)
 
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import { initAuthCreds, BufferJSON, proto } from '@whiskeysockets/baileys';
 import { decidirGravacaoRefeicao } from './util.js';
 import { fonteDaPesagem, filtroPesagem, pesagensPorDia } from './progresso.js';
@@ -43,6 +43,9 @@ export async function garantirIndices() {
     colecao('notas_brutas').createIndex({ criadoEm: 1 }, { expireAfterSeconds: 3 * 86400 }), // texto de nota que o parser não leu (3 dias)
     colecao('intervencoes').createIndex({ dia: 1 }), // intervenções proativas (1 por dia no grupo)
     colecao('correcoes_estimativa').createIndex({ jid: 1, criadoEm: -1 }), // correções da pessoa (antes x depois) pra calibração
+    // app (fase 2): humor é um por {jid, dia}; eventos criados pela pessoa, lidos por dia
+    colecao('humor').createIndex({ jid: 1, dia: 1 }, { unique: true }),
+    colecao('eventos_app').createIndex({ jid: 1, dia: 1 }),
   ]).catch((e) => console.warn('[mongo] índices:', e.message));
 }
 
@@ -211,7 +214,7 @@ export async function registrarRefeicao(entrada) {
     if (r.descricao) set.descricao = r.descricao.slice(0, 220);
     set.resumo = `${naMesmaHora.resumo || ''} (corrigido)`.slice(0, 200);
     await col.updateOne({ _id: naMesmaHora._id }, { $set: set });
-    return;
+    return naMesmaHora._id;
   }
   if (decisao.acao === 'fundir') {
     const ultima = decisao.alvo;
@@ -248,14 +251,73 @@ export async function registrarRefeicao(entrada) {
       }
     }
     await col.updateOne({ _id: ultima._id }, { $set: set });
-    return;
+    return ultima._id;
   }
-  await col.insertOne({ ...r, criadoEm: new Date() });
+  // devolve o _id do registro gravado (a API do app lê o registro de volta); quem chamava antes ignora o retorno
+  const { insertedId } = await col.insertOne({ ...r, criadoEm: new Date() });
+  return insertedId;
 }
 
 /** Ajusta campos de um registro (ex.: tipo da refeição quando a pessoa diz "era o lanche da tarde"). */
 export async function atualizarRefeicao(id, set) {
-  await colecao('refeicoes').updateOne({ _id: id }, { $set: { ...set, atualizadoEm: new Date() } });
+  await colecao('refeicoes').updateOne({ _id: idDe(id) }, { $set: { ...set, atualizadoEm: new Date() } });
+}
+
+/** _id de Mongo a partir do que vier: ObjectId fica; string de 24 hex vira ObjectId; o resto fica como está. */
+export const idDe = (id) => (typeof id === 'string' && /^[0-9a-f]{24}$/i.test(id) ? new ObjectId(id) : id);
+
+/** Um registro de refeição pelo _id (string ou ObjectId); null se não existe. */
+export async function refeicaoPorId(id) {
+  if (id == null || id === '') return null;
+  return colecao('refeicoes').findOne({ _id: idDe(id) });
+}
+
+// ---------- App (fase 2): miniatura da foto, humor e eventos criados pela pessoa ----------
+
+/**
+ * Miniatura JPEG (base64, ≤ 24 KB) de uma refeição registrada pelo app, em coleção própria: `refeicoes` é lida a cada
+ * mensagem do WhatsApp e não precisa carregar imagem. Só a API junta as duas (miniaturasDe).
+ */
+export async function salvarMiniatura(refeicaoId, base64) {
+  await colecao('miniaturas').replaceOne({ _id: idDe(refeicaoId) }, { _id: idDe(refeicaoId), jpeg: base64, criadoEm: new Date() }, { upsert: true });
+}
+export async function apagarMiniatura(refeicaoId) {
+  await colecao('miniaturas').deleteOne({ _id: idDe(refeicaoId) });
+}
+/** Map de id (string) -> base64 das miniaturas que existem entre os ids dados. */
+export async function miniaturasDe(ids) {
+  const lista = (ids || []).filter((x) => x != null).map(idDe);
+  if (!lista.length) return new Map();
+  const docs = await colecao('miniaturas').find({ _id: { $in: lista } }).toArray();
+  return new Map(docs.map((d) => [String(d._id), d.jpeg]));
+}
+/** Os registros com a miniatura anexada (os que têm). */
+export async function comMiniaturas(refeicoes) {
+  const mapa = await miniaturasDe(refeicoes.map((r) => r._id));
+  return mapa.size ? refeicoes.map((r) => (mapa.has(String(r._id)) ? { ...r, miniatura: mapa.get(String(r._id)) } : r)) : refeicoes;
+}
+
+/** Humor/energia/sono do dia, um por {jid, dia} (o último salvo vence). Devolve o documento gravado. */
+export async function salvarHumor({ jid, nome, dia, humor, energia, sono, texto }) {
+  const doc = { jid, nome, dia, humor, energia: energia ?? null, sono: sono ?? null, texto: texto || null, atualizadoEm: new Date() };
+  await colecao('humor').replaceOne({ jid, dia }, doc, { upsert: true });
+  return doc;
+}
+export async function humorDe(jids, diaInicial, diaFinal = diaInicial) {
+  return colecao('humor').find({ jid: { $in: jids }, dia: { $gte: diaInicial, $lte: diaFinal } }).sort({ dia: 1 }).toArray();
+}
+
+export async function inserirEvento(doc) {
+  const { insertedId } = await colecao('eventos_app').insertOne(doc);
+  return { _id: insertedId, ...doc };
+}
+export async function eventosDe(jids, diaInicial, diaFinal) {
+  return colecao('eventos_app').find({ jid: { $in: jids }, dia: { $gte: diaInicial, $lte: diaFinal } }).sort({ dia: 1, hora: 1 }).toArray();
+}
+/** Apaga um evento da pessoa (o filtro pelos jids garante que ninguém apaga evento alheio). Devolve quantos apagou. */
+export async function apagarEvento(id, jids) {
+  const r = await colecao('eventos_app').deleteOne({ _id: idDe(id), jid: { $in: jids } });
+  return r.deletedCount || 0;
 }
 
 // ---------- Caderno de aprendizado (lições com causa e regra; as regras ativas entram no prompt) ----------
@@ -283,7 +345,7 @@ export async function correcoesDoDia(dia) {
 
 /** Apaga um registro pelo _id (pedido da pessoa: "remove esse almoço das 11:03", ou !apagar). */
 export async function apagarRefeicaoPorId(id) {
-  const r = await colecao('refeicoes').deleteOne({ _id: id });
+  const r = await colecao('refeicoes').deleteOne({ _id: idDe(id) });
   return r.deletedCount || 0;
 }
 

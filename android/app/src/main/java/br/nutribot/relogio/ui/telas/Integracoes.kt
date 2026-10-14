@@ -60,6 +60,9 @@ import br.nutribot.relogio.ui.componentes.Pose
 import br.nutribot.relogio.ui.iconeVoltar
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
@@ -160,7 +163,18 @@ fun TelaIntegracoes(vm: AppVM, legado: Legado, voltar: () -> Unit) {
     val prefs = remember { Prefs(ctx) }
     var url by remember { mutableStateOf(prefs.url) }
     var pessoa by remember { mutableStateOf(prefs.pessoa) }
-    var token by remember { mutableStateOf(prefs.token) }
+    // o token é cifrado pelo Keystore (2.1): lê e grava em IO, e grava só depois de a pessoa parar de digitar
+    var token by remember { mutableStateOf("") }
+    var tokenLido by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        token = withContext(Dispatchers.IO) { prefs.token }
+        tokenLido = true
+    }
+    LaunchedEffect(token, tokenLido) {
+        if (!tokenLido) return@LaunchedEffect
+        delay(600)
+        withContext(Dispatchers.IO) { if (prefs.token != token.trim()) prefs.token = token }
+    }
 
     Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding().verticalScroll(rememberScrollState())) {
         CabecalhoVoltar("De onde vêm os dados", "Integrações e o relógio deste celular", Pose.LontraRelogio, voltar)
@@ -204,7 +218,7 @@ fun TelaIntegracoes(vm: AppVM, legado: Legado, voltar: () -> Unit) {
                 OutlinedTextField(url, { url = it; prefs.url = it }, label = { Text(stringResource(R.string.rotulo_url)) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(pessoa, { pessoa = it; prefs.pessoa = it }, label = { Text(stringResource(R.string.rotulo_pessoa)) }, placeholder = { Text(stringResource(R.string.dica_pessoa)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(
-                    token, { token = it; prefs.token = it },
+                    token, { token = it },
                     label = { Text(stringResource(R.string.rotulo_token)) }, placeholder = { Text(stringResource(R.string.dica_token)) },
                     singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth(),
                 )

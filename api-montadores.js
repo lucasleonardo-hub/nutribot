@@ -112,8 +112,9 @@ export function itensDaRefeicao(descricao) {
     .map((nome) => ({ nome: nome.slice(0, 80), gramas: null, kcal: null }));
 }
 
-/** Puro. De onde veio o registro: 'foto' | 'audio' | 'manual' (!refeicao e registro retroativo) | 'texto'. */
+/** Puro. De onde veio o registro: 'app' | 'foto' | 'audio' | 'manual' (!refeicao e registro retroativo) | 'texto'. */
 export function origemDaRefeicao(r) {
+  if (r?.origem === 'app') return 'app';
   const res = String(r?.resumo || '');
   if (/\[(\d+\s+)?fotos?\]/i.test(res)) return 'foto';
   if (/\[[áa]udio\]/i.test(res)) return 'audio';
@@ -121,7 +122,20 @@ export function origemDaRefeicao(r) {
   return 'texto';
 }
 
-/** Refeicao = { id, slot, nome, hora, kcal, faixa, p, c, g, descricao, origem, itens }. */
+/**
+ * Puro. Itens gravados no registro (fase 2: a análise pelo app traz nome, gramas e kcal/p/c/g por item); null quando o
+ * registro não tem itens (aí os itens saem da descrição, sem gramas).
+ */
+function itensGravados(r, termosLocal) {
+  if (!Array.isArray(r?.itens) || !r.itens.length) return null;
+  const n = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  return r.itens
+    .filter((i) => i && typeof i.nome === 'string' && i.nome.trim())
+    .slice(0, 15)
+    .map((i) => ({ nome: tirarLocalizacao(i.nome, termosLocal).slice(0, 80), gramas: n(i.gramas), kcal: n(i.kcal), p: n(i.p), c: n(i.c), g: n(i.g) }));
+}
+
+/** Refeicao = { id, dia, slot, nome, hora, kcal, faixa, p, c, g, descricao, origem, incerteza, itens, miniatura }. */
 export function montarRefeicao(r, termosLocal = []) {
   const e = r?.estimativa || {};
   const kcal = Number(e.kcal ?? r?.kcal) > 0 ? Math.round(Number(e.kcal ?? r.kcal)) : null;
@@ -129,8 +143,10 @@ export function montarRefeicao(r, termosLocal = []) {
   // itens saem da descrição já filtrada
   const descricao = tirarLocalizacao(String(r?.descricao || r?.resumo || ''), termosLocal);
   const baseItens = r?.descricao ? descricao : /^\[/.test(String(r?.resumo || '')) ? '' : descricao;
+  const incerteza = /^(alta|m[eé]dia|baixa)$/i.test(String(r?.incerteza || '')) ? String(r.incerteza).toLowerCase().replace('é', 'e') : null;
   return completar({
     id: String(r?._id ?? ''),
+    dia: r?.dia || null,
     slot: r?.slot || null,
     nome: r?.slot ? nomeDoSlot(r.slot) : null,
     hora: r?.horaLocal || r?.hora || null,
@@ -141,7 +157,10 @@ export function montarRefeicao(r, termosLocal = []) {
     g: kcal != null ? int(e.g ?? 0) : null,
     descricao,
     origem: origemDaRefeicao(r),
-    itens: itensDaRefeicao(baseItens),
+    incerteza,
+    itens: itensGravados(r, termosLocal) || itensDaRefeicao(baseItens).map((i) => ({ ...i, p: null, c: null, g: null })),
+    // miniatura JPEG feita pelo app (≤ 24 KB) no registro pelo app; a foto em si não fica guardada
+    miniatura: typeof r?.miniatura === 'string' && r.miniatura ? `data:image/jpeg;base64,${r.miniatura}` : null,
   });
 }
 const porMinuto = (a, b) => (Number(a.minutos) || 0) - (Number(b.minutos) || 0);
@@ -282,7 +301,7 @@ function textoSemana(sete, metaP) {
  * GET /perfis/:id/hoje. `refeicoes` (35+ dias até `dia`), `pesagens` (até 120 dias, uma por dia como pesagensDesde devolve),
  * `saude` (doc de saude_relogio ou null), `treinos` (Hevy, só `inicio` basta), `hoje`/`horaAgora` no fuso da pessoa.
  */
-export function montarHoje({ perfil, dia, hoje = dia, horaAgora = '00:00', refeicoes = [], pesagens = [], saude = null, treinos = [], atrasoMin = 75, termosLocal = [] }) {
+export function montarHoje({ perfil, dia, hoje = dia, horaAgora = '00:00', refeicoes = [], pesagens = [], saude = null, treinos = [], atrasoMin = 75, termosLocal = [], humor = null, eventos = [] }) {
   const { r31, analise, visao, proj } = analisesDoDia({ perfil, dia, refeicoes, pesagens, saude, treinos });
   const doDia = r31.filter((r) => r.dia === dia).sort(porMinuto);
   const tot = somaEstimativas(doDia);
@@ -346,8 +365,16 @@ export function montarHoje({ perfil, dia, hoje = dia, horaAgora = '00:00', refei
     avisos: montarAvisos({ analise, pensamento: perfil.pensamento?.dia === dia ? perfil.pensamento : null, avisosTendencia: proj?.avisos || [], termosLocal }),
     brotinho: { dias, murcho: dias === 0 },
     resumoSemana: semana ? { texto: semana } : null,
+    // fase 2: o que a pessoa registrou no app nesse dia (humor é um por dia; eventos criados por ela)
+    humor: montarHumor(humor),
+    eventos: (eventos || []).filter((e) => e?.dia === dia).map(montarEvento),
   });
 }
+
+/** Puro. Evento criado no app: { id, dia, hora, titulo, tipo, nota, criadoEm }. */
+export const montarEvento = (e) => ({ id: String(e?._id ?? ''), dia: e?.dia || null, hora: e?.hora || null, titulo: String(e?.titulo || ''), tipo: e?.tipo || 'outro', nota: e?.nota || null, criadoEm: e?.criadoEm ? new Date(e.criadoEm).toISOString() : null });
+/** Puro. Humor do dia: { humor, energia, sono, texto, atualizadoEm } | null. */
+export const montarHumor = (h) => (h && h.humor != null ? { humor: h.humor, energia: h.energia ?? null, sono: h.sono ?? null, texto: h.texto || null, atualizadoEm: h.atualizadoEm ? new Date(h.atualizadoEm).toISOString() : null } : null);
 
 // ============================================================
 // Refeições por dia (diário da Comida)
@@ -356,7 +383,7 @@ export function montarHoje({ perfil, dia, hoje = dia, horaAgora = '00:00', refei
  * GET /perfis/:id/refeicoes. `refeicoes` cobre [de, ate] e os 28 dias fechados antes de `hoje` (pra mediana do critério de
  * dia completo, a mesma do progresso e da meta adaptativa). Todo dia do intervalo aparece, mesmo sem registro.
  */
-export function montarRefeicoes({ refeicoes = [], de, ate, hoje, termosLocal = [] }) {
+export function montarRefeicoes({ refeicoes = [], de, ate, hoje, termosLocal = [], eventos = [] }) {
   const base = diasDeComida(refeicoes, { dia: hoje, de: diasAnteriores(hoje, 29)[0] });
   const marcados = diasDeComida(refeicoes, { dia: hoje, de, ate, medianaRef: base.mediana });
   const completos = new Set(marcados.completos.map((c) => c.dia));
@@ -364,7 +391,16 @@ export function montarRefeicoes({ refeicoes = [], de, ate, hoje, termosLocal = [
     dias: diasEntre(de, ate).map((dia) => {
       const regs = refeicoes.filter((r) => r.dia === dia).sort(porMinuto);
       const tot = somaEstimativas(regs);
-      return { dia, completo: completos.has(dia), kcal: Math.round(tot.kcal), p: Math.round(tot.p), c: Math.round(tot.c), g: Math.round(tot.g), refeicoes: regs.map((r) => montarRefeicao(r, termosLocal)) };
+      return {
+        dia,
+        completo: completos.has(dia),
+        kcal: Math.round(tot.kcal),
+        p: Math.round(tot.p),
+        c: Math.round(tot.c),
+        g: Math.round(tot.g),
+        refeicoes: regs.map((r) => montarRefeicao(r, termosLocal)),
+        eventos: (eventos || []).filter((e) => e?.dia === dia).map(montarEvento),
+      };
     }),
   });
 }

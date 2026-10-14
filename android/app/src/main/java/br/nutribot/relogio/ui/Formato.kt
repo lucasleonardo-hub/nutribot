@@ -110,6 +110,17 @@ object Formato {
     /** "HH:MM" dentro de um texto (o campo agora/hora pode vir como ISO ou só a hora). */
     fun hora(s: String?): String? = s?.let { Regex("(\\d{1,2}):(\\d{2})").find(it)?.value }
 
+    private val horaHHMM = Regex("^([01]\\d|2[0-3]):[0-5]\\d$")
+
+    /** Hora digitada pela pessoa no formato que a API aceita (HH:MM, 24 h). */
+    fun horaValida(s: String?): Boolean = s != null && horaHHMM.matches(s.trim())
+
+    /** A hora de agora como "HH:MM" (padrão dos campos de hora). */
+    fun agoraHHMM(): String = "%02d:%02d".format(java.time.LocalTime.now().hour, java.time.LocalTime.now().minute)
+
+    /** Número digitado pela pessoa, com vírgula ou ponto ("68,2" ou "68.2"). */
+    fun numeroDigitado(s: String?): Double? = s?.trim()?.replace(',', '.')?.toDoubleOrNull()?.takeIf { it.isFinite() }
+
     fun saudacao(hora: String?): String {
         val h = hora?.substringBefore(':')?.toIntOrNull() ?: java.time.LocalTime.now().hour
         return when (h) {

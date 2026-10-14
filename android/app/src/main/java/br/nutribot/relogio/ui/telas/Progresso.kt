@@ -18,7 +18,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -43,10 +47,12 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.nutribot.relogio.dados.Perfil
+import br.nutribot.relogio.dados.api.ErroApi
 import br.nutribot.relogio.dados.arr
 import br.nutribot.relogio.dados.bool
 import br.nutribot.relogio.dados.num
@@ -55,6 +61,8 @@ import br.nutribot.relogio.dados.objs
 import br.nutribot.relogio.dados.str
 import br.nutribot.relogio.ui.AppVM
 import br.nutribot.relogio.ui.Formato
+import br.nutribot.relogio.ui.componentes.AvisoErro
+import br.nutribot.relogio.ui.componentes.Botao
 import br.nutribot.relogio.ui.componentes.Cabecalho
 import br.nutribot.relogio.ui.componentes.Cartao
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
@@ -67,6 +75,8 @@ import br.nutribot.relogio.ui.componentes.animaAte
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
 import br.nutribot.relogio.ui.tema.Fredoka
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
@@ -97,9 +107,59 @@ fun TelaProgresso(vm: AppVM, perfil: Perfil?) {
     val rota = AppVM.rotaProgresso(perfil.id)
     val carga by vm.carga(rota).collectAsStateWithLifecycle()
     LaunchedEffect(rota) { vm.carregar(rota) }
+    var pesar by rememberSaveable { mutableStateOf(false) }
     ConteudoCarga(carga, { vm.carregar(rota, forcar = true) }, topo = { Cabecalho("Progresso", "${perfil.curto} · peso e energia", Pose.CorgiBalanca, 64.dp) }) { j ->
+        Botao("Registrar peso", Modifier.fillMaxWidth()) { pesar = true }
         ConteudoProgresso(j)
     }
+    if (pesar) DialogoPeso(vm, perfil.id, aoFechar = { pesar = false }) { pesar = false; vm.invalidar(perfil.id) }
+}
+
+/** "Registrar peso": peso em kg (vírgula ou ponto) e gordura % opcional -> POST /perfis/:id/pesagens (fonte app; o relógio vence). */
+@Composable
+private fun DialogoPeso(vm: AppVM, perfilId: String, aoFechar: () -> Unit, aoRegistrar: () -> Unit) {
+    val escopo = rememberCoroutineScope()
+    var peso by rememberSaveable { mutableStateOf("") }
+    var gordura by rememberSaveable { mutableStateOf("") }
+    var enviando by remember { mutableStateOf(false) }
+    var erro by remember { mutableStateOf<String?>(null) }
+    fun enviar() {
+        val kg = Formato.numeroDigitado(peso)
+        if (kg == null || kg < 25 || kg > 400) { erro = "Peso entre 25 e 400 kg (ex.: 68,2)."; return }
+        val pct = if (gordura.isBlank()) null else Formato.numeroDigitado(gordura)
+        if (gordura.isNotBlank() && (pct == null || pct < 3 || pct > 70)) { erro = "Gordura entre 3 e 70% (ou deixe em branco)."; return }
+        escopo.launch {
+            enviando = true
+            erro = null
+            try {
+                val corpo = JSONObject().put("peso", kg)
+                if (pct != null) corpo.put("gordura", pct)
+                vm.escrever("POST", AppVM.rotaPesagens(perfilId), corpo)
+                aoRegistrar()
+            } catch (e: ErroApi) {
+                erro = if (e.semConexao) "O servidor está acordando (ou sem conexão). Tente de novo em instantes." else e.paraPessoa
+            } catch (e: CancellationException) {
+                throw e
+            } finally {
+                enviando = false
+            }
+        }
+    }
+    AlertDialog(
+        onDismissRequest = { if (!enviando) aoFechar() },
+        containerColor = Cores.Branco,
+        title = { Text("Registrar peso", style = MaterialTheme.typography.headlineSmall) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Vale como pesagem de hoje. Se o relógio também mandar, a dele vence.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                OutlinedTextField(peso, { peso = it.take(6) }, label = { Text("Peso (kg)") }, placeholder = { Text("68,2") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(gordura, { gordura = it.take(5) }, label = { Text("Gordura % (opcional)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+                erro?.let { AvisoErro(it) }
+            }
+        },
+        confirmButton = { Botao(if (enviando) "Salvando…" else "Salvar", habilitado = !enviando) { enviar() } },
+        dismissButton = { Botao("Cancelar", suave = true, habilitado = !enviando) { aoFechar() } },
+    )
 }
 
 @Composable

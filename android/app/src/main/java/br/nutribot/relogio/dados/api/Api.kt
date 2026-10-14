@@ -57,6 +57,12 @@ object Api {
 
     fun post(base: String, caminho: String, token: String?, corpo: JSONObject): JSONObject = pedir("POST", base, caminho, token, corpo)
 
+    /** Alterar (o HttpURLConnection do Android não manda PATCH; o servidor aceita PUT com só os campos que mudaram). */
+    fun put(base: String, caminho: String, token: String?, corpo: JSONObject): JSONObject = pedir("PUT", base, caminho, token, corpo)
+
+    /** Apagar: sem corpo; a resposta é `{ apagada: true, ... }`. */
+    fun delete(base: String, caminho: String, token: String?): JSONObject = pedir("DELETE", base, caminho, token, null)
+
     private fun pedir(metodo: String, base: String, caminho: String, token: String?, corpo: JSONObject?): JSONObject {
         val url = base.trimEnd('/') + (if (caminho.startsWith("/")) caminho else "/$caminho")
         if (!ehSeguro(url)) throw ErroApi(0, "url_insegura", "O endereço do servidor precisa começar com https://.")

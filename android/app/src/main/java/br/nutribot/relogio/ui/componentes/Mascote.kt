@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.TransformOrigin
@@ -91,23 +90,25 @@ fun Mascote(pose: Pose, altura: Dp, modifier: Modifier = Modifier, atraso: Int =
     var mod = modifier.width(largura).height(altura)
     if (descricao) mod = mod.semantics { contentDescription = pose.nome }
     if (!parado) {
+        // o valor animado só é lido dentro do graphicsLayer: a animação mexe na camada de desenho, sem recompor a cada quadro
         val t = rememberInfiniteTransition(label = "mascote")
         when {
             pose.festa -> {
-                val f by t.animateFloat(
+                val f = t.animateFloat(
                     0f, 1f,
                     infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Restart, StartOffset(atraso)),
                     label = "pula",
                 )
-                // pula: sobe 12 px, amassa ao cair, quica pequeno
-                val dy = when {
-                    f < 0.25f -> -12f * (f / 0.25f)
-                    f < 0.5f -> -12f * (1 - (f - 0.25f) / 0.25f)
-                    f < 0.7f -> -4f * ((f - 0.5f) / 0.2f)
-                    else -> -4f * (1 - (f - 0.7f) / 0.3f)
-                }
-                val sx = if (f in 0.4f..0.6f) 1.03f else 1f
                 mod = mod.graphicsLayer {
+                    val v = f.value
+                    // pula: sobe 12 px, amassa ao cair, quica pequeno
+                    val dy = when {
+                        v < 0.25f -> -12f * (v / 0.25f)
+                        v < 0.5f -> -12f * (1 - (v - 0.25f) / 0.25f)
+                        v < 0.7f -> -4f * ((v - 0.5f) / 0.2f)
+                        else -> -4f * (1 - (v - 0.7f) / 0.3f)
+                    }
+                    val sx = if (v in 0.4f..0.6f) 1.03f else 1f
                     translationY = dy * density
                     scaleX = sx
                     scaleY = 2f - sx
@@ -115,16 +116,16 @@ fun Mascote(pose: Pose, altura: Dp, modifier: Modifier = Modifier, atraso: Int =
                 }
             }
             pose.dorme -> {
-                val s by t.animateFloat(1f, 1.025f, infiniteRepeatable(tween(1900, easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(atraso)), label = "respira")
+                val s = t.animateFloat(1f, 1.025f, infiniteRepeatable(tween(1900, easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(atraso)), label = "respira")
                 mod = mod.graphicsLayer {
-                    scaleX = s
-                    scaleY = s
+                    scaleX = s.value
+                    scaleY = s.value
                     transformOrigin = TransformOrigin(0.5f, 1f)
                 }
             }
             else -> {
-                val y by t.animateFloat(0f, -4f, infiniteRepeatable(tween(1700, easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(atraso)), label = "boia")
-                mod = mod.graphicsLayer { translationY = y * density }
+                val y = t.animateFloat(0f, -4f, infiniteRepeatable(tween(1700, easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(atraso)), label = "boia")
+                mod = mod.graphicsLayer { translationY = y.value * density }
             }
         }
     }

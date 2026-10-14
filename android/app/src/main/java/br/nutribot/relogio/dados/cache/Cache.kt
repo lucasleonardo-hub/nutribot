@@ -44,6 +44,11 @@ class Cache(context: Context) {
         }
     }
 
+    /** Apaga uma rota (depois de uma escrita: o que estava guardado ficou velho). */
+    fun apagar(chave: String) {
+        runCatching { arquivo(chave).delete() }
+    }
+
     /** Apaga tudo (ao desparear: os dados das pessoas não ficam no aparelho sem token). */
     fun limpar() {
         pasta.listFiles()?.forEach { it.delete() }

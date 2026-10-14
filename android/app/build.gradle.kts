@@ -14,8 +14,8 @@ android {
         applicationId = "br.nutribot.relogio"
         minSdk = 28
         targetSdk = 36
-        versionCode = 8
-        versionName = "2.0" // 1.3: alta precisão (GNSS) e envio mais robusto · 1.4: leitor de cupom · 1.5: envio da nota pelo WorkManager · 1.6: página da SEFAZ visível quando a nota demora · 2.0: app NutriBot (Compose): Hoje, Comida, Progresso, Corpo, Nutri, lendo a API v1 do bot; o Relógio vira a tela Integrações
+        versionCode = 9
+        versionName = "2.1" // 1.3: alta precisão (GNSS) e envio mais robusto · 1.4: leitor de cupom · 1.5: envio da nota pelo WorkManager · 1.6: página da SEFAZ visível quando a nota demora · 2.0: app NutriBot (Compose): Hoje, Comida, Progresso, Corpo, Nutri, lendo a API v1 do bot; o Relógio vira a tela Integrações · 2.1: registrar e ajustar refeição, humor, eventos, peso e meta pelo app
     }
 
     // Assinatura estável (mesma chave em todo build, senão o Android recusa atualizar por cima):
@@ -36,7 +36,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // 2.1: R8 só pra ENCOLHER (o APK de 36 MB era quase só DEX de biblioteca); -dontobfuscate nas regras mantém os
+            // nomes, então o stack trace continua legível e nada que use reflexão por nome quebra
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (keystore != null && senha != null) signingConfig = signingConfigs.getByName("release")
         }
     }

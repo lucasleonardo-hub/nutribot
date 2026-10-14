@@ -24,6 +24,10 @@ class Sessao(context: Context) {
     val token: String?
         get() = Cofre.decifrar(sp.getString("token", null))
 
+    /** Há um token guardado (sem decifrar: serve para decidir a tela inicial sem ir ao Keystore na thread principal). */
+    val temToken: Boolean
+        get() = !sp.getString("token", null).isNullOrBlank()
+
     fun guardarToken(token: String) {
         sp.edit().putString("token", Cofre.cifrar(token)).apply()
     }

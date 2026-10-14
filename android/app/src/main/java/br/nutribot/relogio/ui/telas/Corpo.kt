@@ -31,7 +31,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -192,21 +194,22 @@ private fun Numero(rotulo: String, valor: String?) {
 private fun Boneco(costas: Boolean, series: Map<Regiao, Double>) {
     val max = series.values.maxOrNull()?.takeIf { it > 0 } ?: 1.0
     val parado = LocalReduzirMovimento.current
-    val pulso = if (parado) 1f else {
+    // o pulso só é lido dentro do Canvas (fase de desenho): a animação não recompõe o boneco a cada quadro
+    val pulso: State<Float> = if (parado) remember { mutableFloatStateOf(1f) } else {
         val t = rememberInfiniteTransition(label = "musculos")
-        val v by t.animateFloat(0.85f, 1.1f, infiniteRepeatable(tween(1300, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "pulsa")
-        v
+        t.animateFloat(0.85f, 1.1f, infiniteRepeatable(tween(1300, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "pulsa")
     }
     val treinados = series.entries.sortedByDescending { it.value }.joinToString(", ") { "${it.key.nome} ${Formato.inteiro(it.value)} séries" }
     Box(Modifier.size(200.dp, 266.dp).semantics { contentDescription = (if (costas) "Corpo de costas" else "Corpo de frente") + if (treinados.isBlank()) ", sem treino registrado na semana" else ": $treinados" }) {
         Image(painterResource(if (costas) R.drawable.corpo_costas else R.drawable.corpo_frente), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
         Canvas(Modifier.fillMaxSize()) {
+            val p = pulso.value
             (if (costas) zonasCostas else zonasFrente).forEach { (r, z) ->
                 val s = series[r] ?: return@forEach
                 if (s <= 0) return@forEach
-                val op = (0.25 + 0.6 * (s / max)).toFloat().coerceAtMost(0.92f) * pulso.coerceAtMost(1f)
-                val w = size.width * z[2] / 100f * (if (parado) 1f else pulso)
-                val h = size.height * z[3] / 100f * (if (parado) 1f else pulso)
+                val op = (0.25 + 0.6 * (s / max)).toFloat().coerceAtMost(0.92f) * p.coerceAtMost(1f)
+                val w = size.width * z[2] / 100f * p
+                val h = size.height * z[3] / 100f * p
                 val c = Offset(size.width * z[0] / 100f, size.height * z[1] / 100f)
                 drawOval(
                     Brush.radialGradient(0f to r.cor.copy(alpha = op), 0.35f to r.cor.copy(alpha = op), 0.72f to r.cor.copy(alpha = 0f), center = c, radius = maxOf(w, h) / 2),

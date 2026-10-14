@@ -693,7 +693,7 @@ const FERRAMENTAS_CONVERSA =
   '\n\nFERRAMENTAS: se a resposta ficar melhor com um dado que NÃO está acima (refeições de dias anteriores, agenda, tendência até a etapa, treino e força, relógio, despensa, lembranças, sua base de conhecimento), consulte: no máximo 2 consultas, só o que muda a resposta. Pergunta simples, opinião ou papo não precisa de ferramenta. ' +
   'anotar_memoria só pra fato que vale daqui a 30 dias (preferência, aversão, restrição, rotina fixa, combinado); atualizar_perfil só com dado que a pessoa ACABOU de dizer. Depois responda normalmente (mesmo formato e mesmas linhas ocultas de sempre).';
 
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, lugares, roteiro, atividades, treinoHoje, forca, jaDito, despensa, rotulos, planejando = false, perguntaProgresso = false, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false, ferramentas = null, maxRodadas = 2, calibracao = '' }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, app = '', lugares, roteiro, atividades, treinoHoje, forca, jaDito, despensa, rotulos, planejando = false, perguntaProgresso = false, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false, ferramentas = null, maxRodadas = 2, calibracao = '' }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -723,6 +723,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (calibracao ? `${calibracao}\n\n` : '') +
     (perfil.anotacoes?.length ? `ANOTAÇÕES QUE VOCÊ GUARDOU SOBRE ${perfil.nome.split(' ')[0].toUpperCase()} (fatos de longo prazo que você mesma anotou em outros dias; use, não repita pra pessoa como novidade): ${perfil.anotacoes.slice(-10).map((x) => x.texto).join(' · ')}\n\n` : '') +
     (agenda ? `AGENDA DE ${perfil.nome} (Google Agenda DELA(E), só pra falar COM ELA(E)):\n${agenda}\n\n` : '') +
+    (app ? `PELO APP (o que ${perfil.nome} registrou no aplicativo do NutriBot: como está se sentindo hoje e compromissos que ela(e) mesma(o) marcou; é contexto DELA(E), pra encaixar a dica no dia real: jantar fora hoje muda o almoço, humor ou energia baixos pedem resposta mais leve e sem cobrança; use UMA vez, sem repetir, e NUNCA comente com outra pessoa):\n${app}\n\n` : '') +
     (lugares ? `${lugares}\n\n` : '') +
     (roteiro ? `${roteiro}\n\n` : '') +
     (atividades ? `${atividades}\n\n` : '') +
@@ -1152,6 +1153,77 @@ export async function estimarRefeicaoManual({ descricao, perfil }) {
   } catch {
     return { estimativa: null, descricao: descricao.slice(0, 120), tipo: null };
   }
+}
+
+/**
+ * Análise de refeição registrada PELO APP (fase 2): texto e/ou até 2 fotos → JSON com a estimativa, a incerteza e os itens
+ * com gramas (é deles que o ajuste por barra parte). Sem conversa, sem persona: só a conta. Devolve
+ * { estimativa: {kcal,p,c,g} | null, motivo, descricao, tipo, incerteza, itens: [{ nome, gramas, kcal, p, c, g }] }.
+ * estimativa null = a IA diz que não é comida consumida (receita, rótulo solto, cardápio, foto sem comida): nada é gravado.
+ * `_gerar` é injetável pro teste.
+ */
+export async function estimarRefeicaoApp({ descricao = null, fotos = [], perfil, horaLocal = null, slot = null, _gerar = gerar }) {
+  const ancoras = descricao ? blocoAncoras(descricao) : '';
+  const texto =
+    `Você está estimando uma refeição que ${perfil?.nome || 'uma pessoa'}${perfil?.peso ? ` (${perfil.peso} kg` : ''}${perfil?.objetivo ? `${perfil?.peso ? ', ' : ' ('}objetivo: ${perfil.objetivo}` : ''}${perfil?.peso || perfil?.objetivo ? ')' : ''} registrou no aplicativo` +
+    `${horaLocal ? ` às ${horaLocal}` : ''}${slot ? ` como ${slot}` : ''}.\n` +
+    (fotos.length ? `Há ${fotos.length === 1 ? 'uma FOTO anexada: olhe o prato' : `${fotos.length} FOTOS anexadas (ângulos ou partes da mesma refeição: some sem contar o mesmo prato duas vezes)`}. ` : '') +
+    (descricao ? `O que a pessoa escreveu (prevalece sobre a foto nas quantidades): """${descricao}"""\n` : 'Sem texto: estime só pelo que vê.\n') +
+    `Decida primeiro se isso é COMIDA CONSUMIDA por ela. Receita, cardápio, rótulo de produto sem dizer que comeu, foto sem comida ou texto que não descreve comida: eh_refeicao=false e um motivo curto em português, falando com a pessoa.\n` +
+    `Se for refeição: liste os ITENS, cada um com a porção em GRAMAS (líquidos em mL contam como gramas; use porções brasileiras usuais quando faltar quantidade: 1 ovo 50 g, 1 colher de arroz 25 g, 1 pão francês 50 g, 1 filé de frango 120 g) e as calorias e macros DESSE item nessa porção. ` +
+    `Os totais da refeição são a soma dos itens. incerteza: baixa (porções ditas ou rótulo), media (foto nítida de prato comum), alta (porção escondida, molho, fritura, prato misto). descricao: até 100 caracteres, itens separados por vírgula, sem a quantidade de cada um.` +
+    (ancoras ? `\n\nÂNCORAS DA TABELA TACO (valores oficiais dos itens com porção declarada; use-os como estão e estime só o resto):\n${ancoras}` : '');
+  const parts = [{ text: texto }];
+  for (const f of fotos.slice(0, 2)) parts.push({ inlineData: { mimeType: f.mimeType || 'image/jpeg', data: Buffer.isBuffer(f.data) ? f.data.toString('base64') : String(f.data) } });
+  const json = await _gerar({
+    contents: [{ role: 'user', parts }],
+    config: {
+      temperature: 0.2,
+      pensar: false,
+      leve: !fotos.length, // texto: modelo leve basta (como o !refeicao); foto: o principal lê o prato melhor
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'object',
+        properties: {
+          eh_refeicao: { type: 'boolean' },
+          motivo: { type: 'string', nullable: true },
+          tipo: { type: 'string', nullable: true, enum: ['cafe', 'lanche_manha', 'almoco', 'lanche', 'jantar', 'ceia'] },
+          descricao: { type: 'string' },
+          incerteza: { type: 'string', enum: ['alta', 'media', 'baixa'] },
+          itens: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { nome: { type: 'string' }, gramas: { type: 'number' }, kcal: { type: 'number' }, proteina_g: { type: 'number' }, carboidratos_g: { type: 'number' }, gorduras_g: { type: 'number' } },
+              required: ['nome', 'gramas', 'kcal', 'proteina_g', 'carboidratos_g', 'gorduras_g'],
+            },
+          },
+          kcal: { type: 'number' },
+          proteina_g: { type: 'number' },
+          carboidratos_g: { type: 'number' },
+          gorduras_g: { type: 'number' },
+        },
+        required: ['eh_refeicao', 'descricao', 'incerteza', 'itens', 'kcal', 'proteina_g', 'carboidratos_g', 'gorduras_g'],
+      },
+      maxOutputTokens: 900,
+    },
+  });
+  const d = parseJsonTolerante(json);
+  if (!d || typeof d !== 'object') throw new Error('análise do app sem JSON');
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const itens = (Array.isArray(d.itens) ? d.itens : []).map((i) => ({ nome: String(i?.nome || '').trim(), gramas: n(i?.gramas), kcal: n(i?.kcal), p: n(i?.proteina_g), c: n(i?.carboidratos_g), g: n(i?.gorduras_g) })).filter((i) => i.nome);
+  // totais: os da IA; se vierem zerados e houver itens, a soma dos itens
+  const soma = (k) => itens.reduce((a, i) => a + i[k], 0);
+  const kcal = n(d.kcal) > 0 ? n(d.kcal) : soma('kcal');
+  const ehRefeicao = d.eh_refeicao !== false && kcal > 0 && kcal < 8000;
+  return {
+    estimativa: ehRefeicao ? { kcal: Math.round(kcal), p: Math.round(n(d.proteina_g) || soma('p')), c: Math.round(n(d.carboidratos_g) || soma('c')), g: Math.round(n(d.gorduras_g) || soma('g')) } : null,
+    motivo: ehRefeicao ? null : String(d.motivo || 'não consegui ver uma refeição aí').slice(0, 200),
+    descricao: String(d.descricao || descricao || '').slice(0, 120),
+    tipo: ['cafe', 'lanche_manha', 'almoco', 'lanche', 'jantar', 'ceia'].includes(d.tipo) ? d.tipo : null,
+    incerteza: ['alta', 'media', 'baixa'].includes(d.incerteza) ? d.incerteza : 'media',
+    itens,
+  };
 }
 
 /**

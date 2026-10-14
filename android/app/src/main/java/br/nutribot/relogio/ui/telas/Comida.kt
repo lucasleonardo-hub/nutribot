@@ -1,12 +1,12 @@
 package br.nutribot.relogio.ui.telas
 
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,6 +32,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,7 +42,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -50,6 +55,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.nutribot.relogio.dados.Perfil
 import br.nutribot.relogio.dados.Refeicao
+import br.nutribot.relogio.dados.api.ErroApi
 import br.nutribot.relogio.dados.arr
 import br.nutribot.relogio.dados.bool
 import br.nutribot.relogio.dados.num
@@ -58,6 +64,8 @@ import br.nutribot.relogio.dados.objs
 import br.nutribot.relogio.dados.str
 import br.nutribot.relogio.ui.AppVM
 import br.nutribot.relogio.ui.Formato
+import br.nutribot.relogio.ui.componentes.AvisoErro
+import br.nutribot.relogio.ui.componentes.Botao
 import br.nutribot.relogio.ui.componentes.Cabecalho
 import br.nutribot.relogio.ui.componentes.Cartao
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
@@ -67,9 +75,16 @@ import br.nutribot.relogio.ui.componentes.Vazio
 import br.nutribot.relogio.ui.componentes.animaAte
 import br.nutribot.relogio.ui.componentes.tracejado
 import br.nutribot.relogio.ui.icone
+import br.nutribot.relogio.ui.telas.comida.FolhaAjustar
+import br.nutribot.relogio.ui.telas.comida.FolhaRegistrar
+import br.nutribot.relogio.ui.telas.comida.Imagens
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
 import br.nutribot.relogio.ui.tema.Fredoka
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.time.LocalDate
 
@@ -86,7 +101,7 @@ private val iconeSeta = icone("M6 9l6 6 6-6")
 @Composable
 fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: String?) {
     if (perfil == null) { Vazio("Escolha um perfil no Hoje."); return }
-    val ctx = LocalContext.current
+    val escopo = rememberCoroutineScope()
     // "hoje" é o dia da pessoa (do /hoje guardado); sem ele, o do celular
     val hojeCarga by vm.carga(AppVM.rotaHoje(perfil.id)).collectAsStateWithLifecycle()
     LaunchedEffect(perfil.id) { vm.carregar(AppVM.rotaHoje(perfil.id)) }
@@ -97,6 +112,13 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
         mutableStateOf(Formato.iso(if (d != null && d.isBefore(hoje.minusDays(6))) d else hoje))
     }
     var aberta by rememberSaveable { mutableStateOf(refeicaoAberta) }
+    // folhas e diálogos da fase 2: registrar (com o slot sugerido), ajustar (id) e apagar (id)
+    var registrar by rememberSaveable { mutableStateOf(false) }
+    var slotRegistrar by rememberSaveable { mutableStateOf<String?>(null) }
+    var ajustar by rememberSaveable { mutableStateOf<String?>(null) }
+    var apagar by rememberSaveable { mutableStateOf<String?>(null) }
+    var erroApagar by rememberSaveable { mutableStateOf<String?>(null) }
+    var apagando by rememberSaveable { mutableStateOf(false) }
     // nunca pede "ate" depois do hoje da pessoa (o servidor responde 400 intervalo_invalido)
     val fim = minOf(Formato.dia(fimSemana) ?: hoje, hoje)
     val ini = fim.minusDays(6)
@@ -105,6 +127,14 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
     LaunchedEffect(rota) { vm.carregar(rota) }
     val dias = diasDe(carga.dados)
     val sel = minOf(Formato.dia(diaSel) ?: hoje, hoje)
+
+    /** Depois de registrar ou ajustar: o /hoje recalculado que veio na resposta entra na hora; o resto é buscado de novo. */
+    fun aplicar(r: Refeicao, hojeNovo: JSONObject?) {
+        if (hojeNovo != null && (r.dia == null || r.dia == Formato.iso(hoje))) vm.semear(AppVM.rotaHoje(perfil.id), hojeNovo)
+        vm.invalidar(perfil.id)
+        r.dia?.let { diaSel = it }
+        aberta = r.id
+    }
 
     ConteudoCarga(
         carga,
@@ -164,12 +194,15 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
                     }
                 }
             }
+            Botao("Registrar refeição", Modifier.fillMaxWidth().padding(top = 12.dp)) { slotRegistrar = null; registrar = true }
         }
 
         val refeicoes = d?.refeicoes.orEmpty()
         if (refeicoes.isEmpty()) Vazio(if (ehHoje) "Nada registrado hoje ainda." else "Nenhuma refeição registrada neste dia.", Pose.LontraTriste)
         refeicoes.forEach { r ->
-            LinhaDoTempo(r.hora) { CartaoRefeicao(r, r.id == aberta) { aberta = if (aberta == r.id) null else r.id } }
+            LinhaDoTempo(r.hora) {
+                CartaoRefeicao(r, r.id == aberta, aoTocar = { aberta = if (aberta == r.id) null else r.id }, aoAjustar = { ajustar = r.id }, aoApagar = { erroApagar = null; apagar = r.id })
+            }
         }
         if (ehHoje) {
             hojeCarga.dados.arr("pendentes").objs().forEach { p ->
@@ -186,7 +219,7 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
                         }
                         Box(
                             Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp)).background(Cores.AcaiEscuro)
-                                .clickable(role = Role.Button) { Toast.makeText(ctx, "Registrar pelo app chega na próxima versão. Por enquanto, mande foto, texto ou áudio no WhatsApp.", Toast.LENGTH_LONG).show() }
+                                .clickable(role = Role.Button) { slotRegistrar = p.str("slot"); registrar = true }
                                 .padding(horizontal = 12.dp),
                             contentAlignment = Alignment.Center,
                         ) { Text("Registrar", color = Cores.Branco, style = MaterialTheme.typography.labelLarge, fontSize = 13.sp) }
@@ -200,13 +233,64 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Mascote(Pose.DuplaCelular, 54.dp)
-            Text("Registre pelo WhatsApp (foto, texto ou áudio). Registrar e ajustar pelo app chega na próxima versão.", style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352))
+            Text("Registre aqui (foto ou texto) ou pelo WhatsApp (foto, texto ou áudio): tudo cai no mesmo diário, e dá para ajustar e apagar aqui.", style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352))
         }
+    }
+
+    if (registrar) {
+        FolhaRegistrar(vm, perfil.id, Formato.iso(sel), slotRegistrar, aoFechar = { registrar = false }) { r, hojeNovo ->
+            registrar = false
+            aplicar(r, hojeNovo)
+        }
+    }
+    val refAjustar = ajustar?.let { id -> dias.values.flatMap { it.refeicoes }.firstOrNull { it.id == id } }
+    if (refAjustar != null) {
+        FolhaAjustar(vm, perfil.id, refAjustar, aoFechar = { ajustar = null }) { r, hojeNovo ->
+            ajustar = null
+            aplicar(r, hojeNovo)
+        }
+    }
+    val refApagar = apagar?.let { id -> dias.values.flatMap { it.refeicoes }.firstOrNull { it.id == id } }
+    if (refApagar != null) {
+        AlertDialog(
+            onDismissRequest = { if (!apagando) apagar = null },
+            containerColor = Cores.Branco,
+            title = { Text("Apagar ${refApagar.nome}?", style = MaterialTheme.typography.headlineSmall) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Some do diário e das contas do dia. Não dá para desfazer.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+                    erroApagar?.let { AvisoErro(it) }
+                }
+            },
+            confirmButton = {
+                Botao(if (apagando) "Apagando…" else "Apagar", habilitado = !apagando) {
+                    escopo.launch {
+                        apagando = true
+                        try {
+                            val j = vm.escrever("DELETE", AppVM.rotaRefeicao(perfil.id, refApagar.id), null)
+                            j.obj("hoje")?.let { if (refApagar.dia == null || refApagar.dia == Formato.iso(hoje)) vm.semear(AppVM.rotaHoje(perfil.id), it) }
+                            vm.invalidar(perfil.id)
+                            if (aberta == refApagar.id) aberta = null
+                            apagar = null
+                        } catch (e: ErroApi) {
+                            erroApagar = if (e.semConexao) "O servidor está acordando (ou sem conexão). Tente de novo." else e.paraPessoa
+                        } catch (e: CancellationException) {
+                            throw e
+                        } finally {
+                            apagando = false
+                        }
+                    }
+                }
+            },
+            dismissButton = { Botao("Cancelar", suave = true, habilitado = !apagando) { apagar = null } },
+        )
     }
 }
 
 @Composable
 private fun SemanaTopo(ini: LocalDate, sel: LocalDate, hoje: LocalDate, dias: Map<LocalDate, DiaComida>, aoEscolher: (LocalDate) -> Unit, aoMudarSemana: (Int) -> Unit) {
+    // com a fonte grande do sistema os chips crescem junto (até 1,3x) para o número do dia não cortar
+    val alturaChip = 60.dp * LocalDensity.current.fontScale.coerceAtMost(1.3f)
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         BotaoSeta("Semana anterior", 90f) { aoMudarSemana(-1) }
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -217,7 +301,7 @@ private fun SemanaTopo(ini: LocalDate, sel: LocalDate, hoje: LocalDate, dias: Ma
                 val info = dias[d]
                 val ponto = when { info == null -> Cores.Trilho; info.completo -> Cores.Verde; else -> Cores.Carbo }
                 Column(
-                    Modifier.weight(1f).heightIn(min = 60.dp).clip(Formas.Pequeno)
+                    Modifier.weight(1f).heightIn(min = alturaChip).clip(Formas.Pequeno)
                         .background(if (ativo) Cores.Acai else Cores.Branco)
                         .let { if (d == hoje && !ativo) it.border(2.dp, Cores.LilasForte, Formas.Pequeno) else it }
                         .clickable(enabled = !futuro, role = Role.Tab) { aoEscolher(d) }
@@ -256,16 +340,29 @@ private fun LinhaDoTempo(hora: String?, conteudo: @Composable () -> Unit) {
     }
 }
 
+private fun rotuloIncerteza(s: String?): String? = when (s) {
+    "alta" -> "estimativa incerta"
+    "media" -> "estimativa razoável"
+    "baixa" -> "estimativa firme"
+    else -> null
+}
+
 @Composable
-private fun CartaoRefeicao(r: Refeicao, aberta: Boolean, aoTocar: () -> Unit) {
+private fun CartaoRefeicao(r: Refeicao, aberta: Boolean, aoTocar: () -> Unit, aoAjustar: () -> Unit, aoApagar: () -> Unit) {
     val giro by animateFloatAsState(if (aberta) 180f else 0f, label = "giro")
+    // a miniatura (160 px) é decodificada fora da thread principal; até chegar, o ícone do prato
+    val miniatura by produceState<ImageBitmap?>(initialValue = null, r.miniatura) {
+        value = r.miniatura?.let { m -> withContext(Dispatchers.IO) { Imagens.deDataUri(m) } }
+    }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Cores.Branco).border(2.dp, if (aberta) Cores.LilasMedio else Color.Transparent, RoundedCornerShape(22.dp))) {
         Row(
             Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = if (aberta) "Fechar detalhes" else "Ver detalhes", onClick = aoTocar).padding(10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            IconePrato(r.slot, 52.dp)
+            val mini = miniatura
+            if (mini != null) Image(mini, contentDescription = "Foto do prato", contentScale = ContentScale.Crop, modifier = Modifier.size(52.dp).clip(RoundedCornerShape(18.dp)))
+            else IconePrato(r.slot, 52.dp)
             Column(Modifier.weight(1f)) {
                 Row {
                     Text(r.nome, style = MaterialTheme.typography.labelLarge, fontSize = 15.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -273,7 +370,7 @@ private fun CartaoRefeicao(r: Refeicao, aberta: Boolean, aoTocar: () -> Unit) {
                 }
                 r.descricao?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) }
                 Text(
-                    listOfNotNull(r.origem, if (r.faixaMin != null && r.faixaMax != null) "faixa ${Formato.kcal(r.faixaMin)}–${Formato.kcal(r.faixaMax)}" else null).joinToString(" · "),
+                    listOfNotNull(r.origem, if (r.faixaMin != null && r.faixaMax != null) "faixa ${Formato.kcal(r.faixaMin)}–${Formato.kcal(r.faixaMax)}" else null, rotuloIncerteza(r.incerteza)).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp,
                 )
             }
@@ -298,7 +395,7 @@ private fun CartaoRefeicao(r: Refeicao, aberta: Boolean, aoTocar: () -> Unit) {
                             if (it2.gramas != null) Text("${Formato.gramas(it2.gramas)} g", fontFamily = Fredoka, fontWeight = FontWeight.W700, fontSize = 16.sp)
                             if (it2.kcal != null) Text(" · ${Formato.kcal(it2.kcal)} kcal", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp)
                         }
-                        // barra em gramas só quando o servidor manda as gramas (fase 2); só leitura nesta versão
+                        // barra em gramas quando o servidor manda as gramas (análise feita pelo app); o ajuste é na folha "Ajustar"
                         if (it2.gramas != null && maxG != null && maxG > 0) {
                             Box(Modifier.fillMaxWidth().height(10.dp).clip(Formas.Pilula).background(Cores.Trilho)) {
                                 Box(Modifier.fillMaxWidth((it2.gramas / (maxG * 1.25)).toFloat().coerceIn(0.02f, 1f)).height(10.dp).clip(Formas.Pilula).background(Brush.horizontalGradient(listOf(Color(0xFFD9CEFA), Cores.LilasForte))))
@@ -306,12 +403,9 @@ private fun CartaoRefeicao(r: Refeicao, aberta: Boolean, aoTocar: () -> Unit) {
                         }
                     }
                 }
-                if (r.itens.none { it.gramas != null }) {
-                    Text(
-                        "Ajuste por gramas chega na próxima versão. Por enquanto os itens vêm da descrição da refeição.",
-                        style = MaterialTheme.typography.bodySmall, color = Color(0xFF4A3B00),
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Cores.AtencaoFundo).padding(horizontal = 10.dp, vertical = 8.dp),
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Botao("Ajustar", Modifier.weight(1f), suave = true, aoTocar = aoAjustar)
+                    Botao("Apagar", Modifier.weight(1f), suave = true, aoTocar = aoApagar)
                 }
             }
         }

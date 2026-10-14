@@ -232,11 +232,11 @@ fun TelaHoje(vm: AppVM, perfisCarga: Carga, perfis: List<Perfil>, perfil: Perfil
         carga,
         aoRecarregar = { vm.carregar(rota, forcar = true) },
         topo = { SeletorPerfis(perfis, perfil, relogioEm, vm::escolherPerfil, nav) },
-    ) { j -> ConteudoHoje(j, perfil, nav) }
+    ) { j -> ConteudoHoje(vm, j, perfil, nav) }
 }
 
 @Composable
-private fun ConteudoHoje(j: JSONObject, perfil: Perfil, nav: (String) -> Unit) {
+private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String) -> Unit) {
     val dia = Formato.dia(j.str("dia")) ?: java.time.LocalDate.now()
     val horaAgora = Formato.hora(j.str("agora"))
     val broto = j.obj("brotinho")
@@ -256,6 +256,9 @@ private fun ConteudoHoje(j: JSONObject, perfil: Perfil, nav: (String) -> Unit) {
         }
         MascoteHumor(if (murcho) Humor.Sonolento else Humor.Feliz, 70.dp)
     }
+
+    // como você está? (humor, energia e sono de hoje, que a Nutri lê na conversa)
+    CartaoHumor(vm, perfil.id, Formato.iso(dia), j.obj("humor"))
 
     // recados (avisos) em carrossel
     val avisos = j.arr("avisos").objs()

@@ -37,12 +37,16 @@ data class Carga(
     val doCache: Boolean = false,
 )
 
+/** Andamento de uma escrita (POST/PUT/DELETE): a tela mostra "enviando" e, passados 4 s, "acordando o servidor". */
+data class Escrita(val ativa: Boolean = false, val acordando: Boolean = false)
+
 /** Um ViewModel para o app todo: sessão, perfis, perfil ativo e o estado de cada rota (com cache em arquivo). */
 class AppVM(app: Application) : AndroidViewModel(app) {
     private val sessao = Sessao(app)
     private val cache = Cache(app)
 
-    private val _pareado = MutableStateFlow(sessao.token != null)
+    // só confere se HÁ token guardado (sem decifrar): o Keystore não é consultado na criação do VM, na thread principal
+    private val _pareado = MutableStateFlow(sessao.temToken)
     val pareado: StateFlow<Boolean> = _pareado.asStateFlow()
 
     /** Recado mostrado na tela de pareamento (ex.: o token foi revogado). */
@@ -55,13 +59,24 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     private val cargas = ConcurrentHashMap<String, MutableStateFlow<Carga>>()
     private val buscas = ConcurrentHashMap<String, Job>()
 
+    private val _escrita = MutableStateFlow(Escrita())
+    val escrita: StateFlow<Escrita> = _escrita.asStateFlow()
+
     val base: String get() = sessao.base
 
     fun carga(rota: String): StateFlow<Carga> = fluxo(rota)
 
+    /**
+     * O fluxo de uma rota começa vazio e o cache em disco entra logo depois, lido em IO (nunca durante a composição).
+     * Se a rede responder antes do disco, o cache não sobrescreve a resposta nova.
+     */
     private fun fluxo(rota: String): MutableStateFlow<Carga> = cargas.getOrPut(rota) {
-        val c = cache.ler(rota)
-        MutableStateFlow(Carga(dados = c?.dados, salvoEm = c?.salvoEm, doCache = c != null))
+        MutableStateFlow(Carga()).also { f ->
+            viewModelScope.launch {
+                val c = withContext(Dispatchers.IO) { cache.ler(rota) } ?: return@launch
+                f.update { if (it.dados == null) it.copy(dados = c.dados, salvoEm = c.salvoEm, doCache = true) else it }
+            }
+        }
     }
 
     /**
@@ -81,9 +96,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
                 f.update { it.copy(acordando = true) }
             }
             try {
-                // token que não deu para decifrar agora (Keystore ocupado, por exemplo): não pede sem token nem desfaz o pareamento
-                val token = withContext(Dispatchers.IO) { sessao.token }
-                    ?: throw ErroApi(0, "token_local", "Não consegui ler o token guardado neste celular. Puxe para tentar de novo; se continuar, desparear em Integrações e parear de novo.")
+                val token = lerToken()
                 val j = withContext(Dispatchers.IO) { Api.get(sessao.base, rota, token) }
                 val agora = System.currentTimeMillis()
                 withContext(Dispatchers.IO) { cache.salvar(rota, j, agora) }
@@ -91,8 +104,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
                 if (rota == ROTA_PERFIS) escolherPadraoSePreciso(Perfil.lista(j))
             } catch (e: ErroApi) {
                 f.update { it.copy(carregando = false, acordando = false, erro = e) }
-                // só o servidor dizendo que o token é inválido ou revogado desfaz o pareamento (nunca sem_token ou falha local)
-                if (e.naoAutorizado && (e.codigo == "token_invalido" || e.codigo == "token_revogado")) sair("Este aparelho não está mais autorizado (o token foi revogado ou expirou). Mande !app no privado do bot para parear de novo.")
+                tratarNaoAutorizado(e)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -101,6 +113,75 @@ class AppVM(app: Application) : AndroidViewModel(app) {
                 aviso.cancel()
             }
         }
+    }
+
+    /** O token guardado, decifrado em IO. Não ter como ler agora (Keystore ocupado) não desfaz o pareamento. */
+    private suspend fun lerToken(): String = withContext(Dispatchers.IO) { sessao.token }
+        ?: throw ErroApi(0, "token_local", "Não consegui ler o token guardado neste celular. Puxe para tentar de novo; se continuar, desparear em Integrações e parear de novo.")
+
+    /** Só o servidor dizendo que o token é inválido ou revogado desfaz o pareamento (nunca sem_token ou falha local). */
+    private fun tratarNaoAutorizado(e: ErroApi) {
+        if (e.naoAutorizado && (e.codigo == "token_invalido" || e.codigo == "token_revogado")) sair("Este aparelho não está mais autorizado (o token foi revogado ou expirou). Mande !app no privado do bot para parear de novo.")
+    }
+
+    /**
+     * Escrita na API (POST, PUT ou DELETE), em IO, com o token do aparelho. Lança ErroApi para a tela mostrar a mensagem
+     * (422 nao_e_refeicao, 503 acordando etc.). Quem chama invalida as rotas do perfil depois do sucesso.
+     */
+    suspend fun escrever(metodo: String, rota: String, corpo: JSONObject?): JSONObject {
+        _escrita.value = Escrita(ativa = true)
+        val aviso = viewModelScope.launch {
+            delay(4_000)
+            _escrita.update { it.copy(acordando = true) }
+        }
+        try {
+            val token = lerToken()
+            return withContext(Dispatchers.IO) {
+                when (metodo) {
+                    "POST" -> Api.post(sessao.base, rota, token, corpo ?: JSONObject())
+                    "PUT" -> Api.put(sessao.base, rota, token, corpo ?: JSONObject())
+                    "DELETE" -> Api.delete(sessao.base, rota, token)
+                    else -> throw ErroApi(0, "metodo_invalido", "Método $metodo não existe.")
+                }
+            }
+        } catch (e: ErroApi) {
+            tratarNaoAutorizado(e)
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw ErroApi(0, "falha", e.message ?: "Falha inesperada.")
+        } finally {
+            aviso.cancel()
+            _escrita.value = Escrita()
+        }
+    }
+
+    /**
+     * Depois de uma escrita: tudo o que estava guardado desse perfil ficou velho. As rotas que alguma tela está observando
+     * (hoje, refeições da semana, progresso, eventos...) são buscadas de novo; as outras são esquecidas (e o cache delas apagado).
+     */
+    fun invalidar(perfilId: String) {
+        val prefixo = "/perfis/$perfilId/"
+        val rotas = cargas.keys.filter { it.startsWith(prefixo) }
+        viewModelScope.launch(Dispatchers.IO) { rotas.forEach { cache.apagar(it) } }
+        rotas.forEach { rota ->
+            val f = cargas[rota] ?: return@forEach
+            if (f.subscriptionCount.value > 0) {
+                f.update { it.copy(doCache = true) }
+                carregar(rota, forcar = true)
+            } else {
+                buscas.remove(rota)?.cancel()
+                cargas.remove(rota)
+            }
+        }
+    }
+
+    /** Guarda uma resposta que já veio pronta numa escrita (ex.: o `hoje` recalculado que o POST da refeição devolve). */
+    fun semear(rota: String, dados: JSONObject) {
+        val agora = System.currentTimeMillis()
+        viewModelScope.launch(Dispatchers.IO) { cache.salvar(rota, dados, agora) }
+        fluxo(rota).value = Carga(dados = dados, salvoEm = agora)
     }
 
     fun escolherPerfil(id: String) {
@@ -176,8 +257,15 @@ class AppVM(app: Application) : AndroidViewModel(app) {
 
     companion object {
         const val ROTA_PERFIS = "/perfis"
+        fun rotaPerfil(id: String) = "/perfis/$id"
         fun rotaHoje(id: String, dia: String? = null) = "/perfis/$id/hoje" + (dia?.let { "?dia=$it" } ?: "")
         fun rotaRefeicoes(id: String, de: String, ate: String) = "/perfis/$id/refeicoes?de=$de&ate=$ate"
+        fun rotaNovaRefeicao(id: String) = "/perfis/$id/refeicoes"
+        fun rotaRefeicao(id: String, rid: String) = "/perfis/$id/refeicoes/$rid"
+        fun rotaHumor(id: String) = "/perfis/$id/humor"
+        fun rotaEventos(id: String, de: String, ate: String) = "/perfis/$id/eventos?de=$de&ate=$ate"
+        fun rotaEvento(id: String, eid: String) = "/perfis/$id/eventos/$eid"
+        fun rotaPesagens(id: String) = "/perfis/$id/pesagens"
         fun rotaProgresso(id: String) = "/perfis/$id/progresso"
         fun rotaCorpo(id: String) = "/perfis/$id/corpo"
         fun rotaNutri(id: String) = "/perfis/$id/nutri"

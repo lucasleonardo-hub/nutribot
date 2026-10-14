@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -120,7 +121,9 @@ fun AnelNumero(
 ) {
     val f = animaAte(fracao.coerceIn(0f, 1f))
     val f2 = animaAte((fracao2 ?: 0f).coerceIn(0f, 1f))
-    Box(Modifier.size(tamanho).semantics { contentDescription = rotulo }, contentAlignment = Alignment.Center) {
+    // com a fonte grande do sistema o anel cresce junto (até 1,3x), senão o número do centro sai do miolo
+    val caixa = tamanho * LocalDensity.current.fontScale.coerceAtMost(1.3f)
+    Box(Modifier.size(caixa).semantics { contentDescription = rotulo }, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             val esp = size.minDimension * espessuraRel
             val r = size.minDimension / 2 - esp / 2 - size.minDimension * 0.05f
