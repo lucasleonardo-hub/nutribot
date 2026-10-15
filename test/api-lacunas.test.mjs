@@ -275,6 +275,8 @@ test('lugares: só o perfil do dono (403 nos outros), sem coordenada; marcar por
 test('agenda do Google: só do dono da credencial; sem local nem descrição; janelas livres', async () => {
   let r = await pedir('GET', `/perfis/${IDB}/agenda-google`);
   assert.deepEqual(r.corpo, { ativa: false, eventos: [], janelas: [] });
+  r = await pedir('GET', `/perfis/${IDA}/agenda-google`, null, outro());
+  assert.deepEqual(r.corpo, { ativa: false, eventos: [], janelas: [] }, 'a agenda do dono, mas pelo aparelho de outra pessoa');
   r = await pedir('GET', `/perfis/${IDA}/agenda-google?dias=2`);
   assert.deepEqual(r.corpo.eventos, [{ dia: DIA, inicio: '14:00', fim: '16:00', diaTodo: false, titulo: 'Aula de cálculo', tipo: 'aula' }]);
   assert.deepEqual(r.corpo.janelas, [{ dia: DIA, inicio: '07:00', fim: '14:00' }, { dia: DIA, inicio: '16:00', fim: '23:00' }, { dia: '2030-03-30', inicio: '07:00', fim: '23:00' }]);

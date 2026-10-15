@@ -276,7 +276,9 @@ export function rotasDeLacunas(r, { lacunas = lacunasPadrao(), perfilDo, listarP
     const { perfil, hoje } = await perfilDo(req);
     const dias = inteiro(req.query.dias, { padrao: 7, min: 1, max: 14, rotulo: 'dias' });
     // quem não é dono da credencial recebe a agenda vazia (a agenda é de uma pessoa só; nada dela vaza pras outras)
-    if (!(await lacunas.ehDonoDaAgenda(perfil))) return res.json({ ativa: false, eventos: [], janelas: [] });
+    // e só pelo aparelho dessa pessoa (o dono vem do pareamento, como nas outras rotas do dono)
+    const doAparelho = Array.isArray(perfil?.jids) && perfil.jids.includes(jidDoAparelho(req));
+    if (!doAparelho || !(await lacunas.ehDonoDaAgenda(perfil))) return res.json({ ativa: false, eventos: [], janelas: [] });
     const a = await lacunas.agendaDe(perfil, { dias }).catch(() => null);
     if (!a?.lista) return res.json({ ativa: false, eventos: [], janelas: [], indisponivel: true });
     res.json(M.montarAgendaGoogle({ lista: a.lista, fuso: fusoDe(perfil), hoje, dias }));
