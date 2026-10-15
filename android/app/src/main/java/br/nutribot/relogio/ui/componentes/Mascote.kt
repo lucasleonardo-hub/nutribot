@@ -50,10 +50,23 @@ enum class Pose(@DrawableRes val img: Int, val largura: Int, val nome: String) {
     DuplaCozinhando(R.drawable.dupla_cozinhando, 472, "Caju e Lia preparando uma salada"),
     DuplaCelular(R.drawable.dupla_celular, 657, "Caju e Lia registrando a refeição no celular"),
     DuplaCorrendo(R.drawable.dupla_correndo, 638, "Caju e Lia correndo"),
-    DuplaProgresso(R.drawable.dupla_progresso, 671, "Caju e Lia com a barra de progresso");
+    DuplaProgresso(R.drawable.dupla_progresso, 671, "Caju e Lia com a barra de progresso"),
 
-    val festa: Boolean get() = this == CorgiFesta || this == LontraTrofeu || this == DuplaTocaqui || this == LontraFesta
-    val dorme: Boolean get() = this == CorgiDormindo || this == LontraTriste || this == DuplaDescansando
+    // água e esporte (folhas do dono de 15/10)
+    CorgiAgua(R.drawable.corgi_agua, 325, "Caju bebendo água"),
+    CorgiCansado(R.drawable.corgi_cansado, 420, "Caju enxugando o suor"),
+    CorgiJoinha(R.drawable.corgi_joinha, 399, "Caju fazendo joinha com a garrafinha"),
+    LontraAgua(R.drawable.lontra_agua, 418, "Lia bebendo água"),
+    LontraGarrafa(R.drawable.lontra_garrafa, 396, "Lia com a garrafinha"),
+    LontraMaisUm(R.drawable.lontra_mais1, 392, "Lia comemorando mais um copo"),
+    DuplaVolei(R.drawable.dupla_volei, 699, "Caju e Lia jogando vôlei"),
+    CorgiSupino(R.drawable.corgi_supino, 455, "Caju levantando a barra"),
+    LontraKettlebell(R.drawable.lontra_kettlebell, 506, "Lia treinando com kettlebell"),
+    DuplaAgua(R.drawable.dupla_agua, 800, "Caju e Lia se hidratando"),
+    DuplaCansados(R.drawable.dupla_cansados, 1092, "Caju e Lia descansando depois do treino");
+
+    val festa: Boolean get() = this == CorgiFesta || this == LontraTrofeu || this == DuplaTocaqui || this == LontraFesta || this == LontraMaisUm
+    val dorme: Boolean get() = this == CorgiDormindo || this == LontraTriste || this == DuplaDescansando || this == DuplaCansados
 }
 
 enum class Humor { Feliz, Pensando, Sonolento, Comemorando, Comendo }

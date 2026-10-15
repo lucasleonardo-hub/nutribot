@@ -56,6 +56,8 @@ import br.nutribot.relogio.dados.Evento
 import br.nutribot.relogio.dados.Perfil
 import br.nutribot.relogio.dados.Refeicao
 import br.nutribot.relogio.dados.EventoGoogle
+import br.nutribot.relogio.dados.FixaProxima
+import br.nutribot.relogio.dados.RotasDespensa
 import br.nutribot.relogio.dados.api.ErroApi
 import br.nutribot.relogio.dados.arr
 import br.nutribot.relogio.dados.bool
@@ -71,6 +73,7 @@ import br.nutribot.relogio.ui.componentes.Cartao
 import br.nutribot.relogio.ui.componentes.Chip
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
 import br.nutribot.relogio.ui.componentes.Esperando
+import br.nutribot.relogio.ui.componentes.Mascote
 import br.nutribot.relogio.ui.componentes.Pilula
 import br.nutribot.relogio.ui.componentes.Pose
 import br.nutribot.relogio.ui.componentes.Vazio
@@ -134,6 +137,9 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
     val cargaGoogle by (rotaGoogle?.let { vm.carga(it) } ?: vm.carga(rotaEv)).collectAsStateWithLifecycle()
     LaunchedEffect(rotaGoogle) { rotaGoogle?.let { vm.carregar(it) } }
     val doGoogle = if (rotaGoogle == null) emptyList() else EventoGoogle.lista(cargaGoogle.dados)
+    val rotaFixas = RotasDespensa.atividades(perfil.id)
+    val cargaFixas by vm.carga(rotaFixas).collectAsStateWithLifecycle()
+    LaunchedEffect(rotaFixas) { vm.carregar(rotaFixas) }
     var selStr by rememberSaveable { mutableStateOf(Formato.iso(hoje)) }
     val sel = Formato.dia(selStr) ?: hoje
     var novo by rememberSaveable { mutableStateOf(false) }
@@ -144,7 +150,7 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
     ConteudoCarga(
         cargaEv, {
             vm.carregar(rotaEv, forcar = true); rotaRef?.let { vm.carregar(it, forcar = true) }; rotaDias?.let { vm.carregar(it, forcar = true) }
-            rotaGoogle?.let { vm.carregar(it, forcar = true) }
+            rotaGoogle?.let { vm.carregar(it, forcar = true) }; vm.carregar(rotaFixas, forcar = true)
         },
         topo = { CabecalhoVoltar("Agenda", "${perfil.curto} · o que aconteceu e o que vem", Pose.LontraRelogio, voltar) },
     ) { jEv ->
@@ -189,6 +195,19 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
             }
         }
 
+        // atividades fixas do dia (hoje e as próximas duas semanas): marcar aqui se vai ter, e a Nutri já adapta o dia
+        val fixasDoDia = FixaProxima.lista(cargaFixas.dados).filter { it.dia == Formato.iso(sel) }
+        if (fixasDoDia.isNotEmpty()) {
+            Cartao(cor = Color(0xFFFFF6E5), forma = Formas.Cartao, padding = PaddingValues(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Pilula("Atividade fixa", Cores.Branco, Color(0xFF8A4B12))
+                    Spacer(Modifier.weight(1f))
+                    Mascote(Pose.DuplaVolei, 36.dp)
+                }
+                fixasDoDia.forEach { AvisoAtividade(vm, perfil.id, it, mostrarDia = false, modifier = Modifier.padding(top = 6.dp)) }
+            }
+        }
+
         val diaRef = cargaRef.dados.arr("dias").objs().firstOrNull { Formato.dia(it.str("dia")) == sel }
         val refeicoes = if (sel.isAfter(hoje)) emptyList() else Refeicao.lista(diaRef)
         val treinos = if (sel == hoje) hojeCarga.dados.obj("relogio").arr("treinos").objs() else emptyList()
@@ -199,7 +218,7 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
             treinos.map { ItemDia(it.str("hora"), "Treino", it.str("nome") ?: "Treino", it.int("min")?.let { m -> "$m min" }, Color(0xFFEEFAF3), Cores.GorduraTinta) } +
             eventos.map { e -> val (f, t) = corDoTipo(e.tipo); ItemDia(e.hora, Evento.rotulo(e.tipo), e.titulo, e.nota, f, t, eventoId = e.id) } +
             google.map { g -> ItemDia(g.inicio, "Google", g.titulo, g.fim?.let { f -> "até $f" } ?: if (g.inicio == null) "o dia todo" else null, Color(0xFFE8F3FF), Color(0xFF1F4E8A)) }
-        if (itens.isEmpty()) Vazio(if (sel.isAfter(hoje)) "Nada marcado. Conte o que vem: jantar fora, viagem, festa." else "Dia livre: nada registrado.", Pose.DuplaDescansando)
+        if (itens.isEmpty() && fixasDoDia.isEmpty()) Vazio(if (sel.isAfter(hoje)) "Nada marcado. Conte o que vem: jantar fora, viagem, festa." else "Dia livre: nada registrado.", Pose.DuplaDescansando)
         itens.sortedBy { it.hora ?: "99:99" }.forEach { e ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(e.hora ?: "—", style = MaterialTheme.typography.labelMedium, color = Cores.Tinta2, modifier = Modifier.width(42.dp).padding(top = 14.dp))

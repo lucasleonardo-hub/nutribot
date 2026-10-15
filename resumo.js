@@ -616,6 +616,36 @@ const _diasAte = (dia, n) => {
  */
 const NOME_DIA = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
 const _dow = (d) => new Date(`${d}T12:00:00Z`).getUTCDay();
+const _minDe = (h) => (/^\d{1,2}:\d{2}$/.test(String(h || '')) ? Number(h.split(':')[0]) * 60 + Number(h.split(':')[1]) : null);
+
+/**
+ * Puro. Quanto as atividades fixas avisadas antes mudam o gasto previsto de `dia` (perfil.atividadesAvisos, pelo app ou pela
+ * conversa). O gasto líquido da atividade é (MET − 1) × peso × horas (o que passa do repouso, o mesmo que o atividades.js
+ * soma); a média usada já traz a atividade nos dias em que ela aconteceu (`diasBase`), então "não vai ter" tira o líquido na
+ * proporção em que ela costumava acontecer e "vai ter" soma na proporção em que faltava. Devolve { kcal, texto } ou null.
+ */
+export function ajusteAtividadesFixas(perfil, dia, diasBase = []) {
+  const avisos = perfil?.atividadesAvisos?.[dia];
+  if (!avisos || !Array.isArray(perfil?.atividades)) return null;
+  const dw = _dow(dia);
+  const peso = Number(perfil.peso) > 0 ? Number(perfil.peso) : 70;
+  let kcal = 0;
+  const partes = [];
+  for (const a of perfil.atividades) {
+    const v = avisos[String(a.id)];
+    if (!v || !a.dias?.includes(dw)) continue;
+    const min = (_minDe(a.fim) ?? 0) - (_minDe(a.inicio) ?? 0);
+    if (!(min > 0)) continue;
+    const liquida = (Math.max(0, (Number(a.met) || 5) - 1) * peso * min) / 60;
+    const vezes = diasBase.filter((d) => (perfil.atividadesFeitas?.[d] || []).some((f) => f.id === a.id && f.feita)).length;
+    const frac = diasBase.length ? vezes / diasBase.length : 0;
+    const delta = v === 'nao' ? -liquida * frac : v === 'vai' ? liquida * (1 - frac) : 0;
+    if (Math.abs(delta) < 20) continue;
+    kcal += delta;
+    partes.push(v === 'nao' ? `sem ${a.nome}: −${Math.round(-delta)} kcal` : `com ${a.nome} confirmado: +${Math.round(delta)} kcal`);
+  }
+  return partes.length ? { kcal: Math.round(kcal), texto: partes.join(', ') } : null;
+}
 
 /**
  * Quanto a pessoa deve gastar AMANHÃ, pelo relógio: média das últimas semanas no mesmo dia da semana (sábado gasta menos
@@ -635,7 +665,8 @@ export function previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlv
   amanha.setUTCDate(amanha.getUTCDate() + 1);
   const diaAmanha = diaAlvo || amanha.toISOString().slice(0, 10);
   const dow = _dow(diaAmanha);
-  const mesmos = entradas.filter(([d]) => _dow(d) === dow).slice(-4).map(([, k]) => Number(k));
+  const mesmosE = entradas.filter(([d]) => _dow(d) === dow).slice(-4);
+  const mesmos = mesmosE.map(([, k]) => Number(k));
   const geral = entradas.slice(-14).map(([, k]) => Number(k));
   const usaDia = mesmos.length >= 2;
   const base = usaDia ? media(mesmos) : media(geral);
@@ -648,7 +679,9 @@ export function previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlv
     const relogio28 = media(entradas.slice(-28).map(([, k]) => Number(k)));
     if (relogio28) fator = Math.min(1.6, Math.max(0.7, metaAdaptativa.gasto / relogio28));
   }
-  const previsto = Math.round((base * fator) / 10) * 10;
+  // atividade fixa avisada antes ("quinta não vai ter vôlei"): a média do dia da semana já traz o vôlei de sempre
+  const aj = perfil ? ajusteAtividadesFixas(perfil, diaAmanha, (usaDia ? mesmosE : entradas.slice(-14)).map(([d]) => d)) : null;
+  const previsto = Math.round((base * fator + (aj?.kcal || 0)) / 10) * 10;
   // mesma faixa da meta adaptativa (que já vem da faixaDaMeta); sem ela, a do perfil ou a genérica do objetivo
   const alvo = metaAdaptativa?.faixa || (perfil ? metaBalancoPara({ objetivo: perfil.objetivo || objetivo, peso: perfil.peso, metaPeso: perfil.metaPeso, metaPrazo: perfil.metaPrazo, dia, ritmo: perfil.ritmo, metaModo: perfil.metaModo }) : metaBalanco(objetivo));
   const min = Math.round((previsto + alvo.min) / 10) * 10;
@@ -669,8 +702,9 @@ export function previsaoGastoDia({ gastos, dia, objetivo, metaAdaptativa, diaAlv
     amostras: usaDia ? mesmos.length : geral.length,
     alvo: { min, max },
     mediaGeral,
-    texto: `AMANHÃ (${NOME_DIA[dow]}): gasto previsto ${_kcal(previsto)} (${criterio}${ajuste})${comparacao}; objetivo "${objetivo || '?'}" pede ${alvo.rotulo} -> comer entre ${_kcal(min)} e ${_kcal(max)}.`,
-    zap: `*Amanhã* (${NOME_DIA[dow]}): você costuma gastar ${_kcal(previsto)}${comparacao} → mire ${_kcal(min)} a ${_kcal(max)}`,
+    atividadesFixas: aj,
+    texto: `AMANHÃ (${NOME_DIA[dow]}): gasto previsto ${_kcal(previsto)} (${criterio}${ajuste}${aj ? `; ${aj.texto}, a pessoa avisou antes` : ''})${comparacao}; objetivo "${objetivo || '?'}" pede ${alvo.rotulo} -> comer entre ${_kcal(min)} e ${_kcal(max)}.`,
+    zap: `*Amanhã* (${NOME_DIA[dow]}): você ${aj ? `deve gastar ${_kcal(previsto)} (${aj.texto})` : `costuma gastar ${_kcal(previsto)}`}${comparacao} → mire ${_kcal(min)} a ${_kcal(max)}`,
   };
 }
 

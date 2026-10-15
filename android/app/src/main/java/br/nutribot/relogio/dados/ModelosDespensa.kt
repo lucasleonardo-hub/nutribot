@@ -42,6 +42,12 @@ object RotasDespensa {
 
     /** POST { dia, feita } → { feita, kcal }. */
     fun respostaAtividade(perfilId: String, aid: String) = "/perfis/$perfilId/atividades/${cod(aid)}/resposta"
+
+    /** POST { dia, valor: 'vai'|'nao'|null } → { dia, aviso }; 409 ja_registrada quando o dia já foi registrado. */
+    fun avisoAtividade(perfilId: String, aid: String) = "/perfis/$perfilId/atividades/${cod(aid)}/aviso"
+
+    /** PUT { nome, dias, inicio, fim, met } → { atividade } (mesmo id; o lugar continua o que era). */
+    fun atividade(perfilId: String, aid: String) = "/perfis/$perfilId/atividades/${cod(aid)}"
 }
 
 /** Os corpos das escritas da despensa, dos hábitos e das atividades fixas. */
@@ -61,6 +67,9 @@ object CorposDespensa {
     }
 
     fun resposta(dia: String, feita: Boolean): JSONObject = JSONObject().put("dia", dia).put("feita", feita)
+
+    /** valor: "vai", "nao" ou null (desfaz o aviso). */
+    fun aviso(dia: String, valor: String?): JSONObject = JSONObject().put("dia", dia).put("valor", valor ?: JSONObject.NULL)
 }
 
 /** Selo de validade de um item: laranja quando vence em até 2 dias, vermelho quando passou do prazo. */
@@ -272,11 +281,28 @@ data class HabitosHoje(val aguaMl: Double, val alcoolDoses: Double) {
  * Atividade fixa de hoje: { id, nome, inicio, fim, feita (true|false|null), kcal }. O `como` não é lido: pode vir da
  * localização.
  */
-data class FixaDoDia(val id: String, val nome: String, val inicio: String?, val feita: Boolean?, val kcal: Double?) {
+data class FixaDoDia(val id: String, val nome: String, val inicio: String?, val feita: Boolean?, val kcal: Double?, val fim: String? = null, val aviso: String? = null, val passou: Boolean? = null) {
     companion object {
         fun lista(j: JSONObject?): List<FixaDoDia> = j.arr("hoje").objs().mapNotNull { a ->
             val id = a.str("id") ?: return@mapNotNull null
-            FixaDoDia(id, a.str("nome") ?: "Atividade", a.str("inicio"), a.bool("feita"), a.num("kcal"))
+            FixaDoDia(id, a.str("nome") ?: "Atividade", a.str("inicio"), a.bool("feita"), a.num("kcal"), a.str("fim"), a.str("aviso"), a.bool("passou"))
+        }
+    }
+}
+
+/**
+ * Uma ocorrência das próximas duas semanas (GET /atividades → proximas): { dia, id, nome, inicio, fim, aviso: 'vai'|'nao'|null,
+ * feita: true|false|null, como }. `como` = "aviso" quando o "não vai" foi marcado antes; outro valor = já registrado.
+ */
+data class FixaProxima(val dia: String, val id: String, val nome: String, val inicio: String?, val fim: String?, val aviso: String?, val feita: Boolean?, val como: String?) {
+    /** Já registrada de outro jeito (localização, "teve / não teve"): o aviso não muda mais. */
+    val registrada: Boolean get() = feita != null && como != "aviso"
+
+    companion object {
+        fun lista(j: JSONObject?): List<FixaProxima> = j.arr("proximas").objs().mapNotNull { a ->
+            val id = a.str("id") ?: return@mapNotNull null
+            val dia = a.str("dia")?.take(10) ?: return@mapNotNull null
+            FixaProxima(dia, id, a.str("nome") ?: "Atividade", a.str("inicio"), a.str("fim"), a.str("aviso"), a.bool("feita"), a.str("como"))
         }
     }
 }

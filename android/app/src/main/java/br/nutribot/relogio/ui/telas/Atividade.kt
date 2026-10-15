@@ -182,7 +182,7 @@ private fun ConteudoAtividade(j: JSONObject, dia: LocalDate, horaAtual: Int?, ao
             ).joinToString(" · ")
             Cartao(Modifier.semantics(mergeDescendants = true) {}, forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = 60 + i * 40) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Mascote(Pose.CorgiHalter, 44.dp)
+                    Mascote(Pose.CorgiSupino, 44.dp)
                     Column(Modifier.weight(1f)) {
                         Text(nome, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (detalhe.isNotBlank()) Text(detalhe, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2)

@@ -196,7 +196,21 @@ export function validarAtividade(corpo) {
   const met = c.met == null || c.met === '' ? 5 : numero(c.met);
   if (!Number.isFinite(met) || met < 1 || met > 20) throw invalido('intensidade (MET) entre 1 e 20');
   const lugarId = c.lugarId == null || c.lugarId === '' ? null : String(c.lugarId).slice(0, 80);
-  return { nome, dias, inicio, fim, met: Math.round(met * 10) / 10, lugarId, aqui: !lugarId && c.aqui === true };
+  const aqui = !lugarId && c.aqui === true;
+  // só na edição: sem lugarId nem aqui o lugar fica o que era; semLugar: true tira
+  return { nome, dias, inicio, fim, met: Math.round(met * 10) / 10, lugarId, aqui, semLugar: !lugarId && !aqui && c.semLugar === true };
+}
+
+/** Puro. Corpo do POST /atividades/:aid/aviso → { dia, valor: 'vai'|'nao'|null }; dia de hoje até 13 dias pra frente. */
+export function validarAvisoAtividade(corpo, { hoje }) {
+  const c = corpo && typeof corpo === 'object' ? corpo : {};
+  const bruto = c.valor === undefined ? c.vai : c.valor;
+  const valor = bruto === true || bruto === 'vai' ? 'vai' : bruto === false || bruto === 'nao' || bruto === 'não' ? 'nao' : bruto == null || bruto === '' ? null : undefined;
+  if (valor === undefined) throw invalido("valor: 'vai', 'nao' ou null (desfazer)");
+  const dia = c.dia == null || c.dia === '' ? hoje : String(c.dia);
+  if (!ehDiaTxt(dia)) throw erroApi(400, 'dia_invalido', 'dia no formato YYYY-MM-DD');
+  if (dia < hoje || diasEntre(hoje, dia) > 13) throw erroApi(400, 'dia_invalido', 'dia de hoje até 13 dias pra frente');
+  return { dia, valor };
 }
 
 /** Puro. Corpo do POST /atividades/:aid/resposta → { dia, feita }; dia de até 7 dias atrás (padrão: hoje). */
@@ -213,13 +227,26 @@ export function validarRespostaAtividade(corpo, { hoje }) {
  * Puro. GET /atividades: as fixas (sem coordenada; o nome do lugar passa pelo filtro de localização, porque o app mostra as
  * atividades das três pessoas), as de hoje com o que já se sabe (feita, não houve, em dúvida) e as perguntas em aberto.
  */
-export function montarAtividades({ perfil, dia, termos = [] }) {
+export function montarAtividades({ perfil, dia, hora = null, termos = [] }) {
   const lista = perfil?.atividades || [];
   const dow = diaDaSemana(dia);
   const feitas = perfil?.atividadesFeitas?.[dia] || [];
   const pend = perfil?.atividadesPendentes || [];
   const duracao = (a) => Math.max(0, minutosDe(a.fim || '00:00') - minutosDe(a.inicio || '00:00'));
   const lugarDe = (a) => (a.lugar ? { nome: tirarLocalizacao(String(a.lugar.nome || ''), termos).trim() || 'lugar marcado' } : null);
+  const avisoDe = (d, id) => perfil?.atividadesAvisos?.[d]?.[String(id)] ?? null;
+  const agoraMin = ehHora(String(hora || '')) ? minutosDe(hora) : null;
+  // as próximas duas semanas (a agenda e o "vai ter?" do app): o que a pessoa avisou e o que já foi registrado
+  const proximas = [];
+  for (let i = 0; i <= 13; i++) {
+    const d = new Date(Date.parse(`${dia}T12:00:00Z`) + i * 86400_000).toISOString().slice(0, 10);
+    const dw = diaDaSemana(d);
+    for (const a of lista) {
+      if (!(a.dias || []).includes(dw)) continue;
+      const f = (perfil?.atividadesFeitas?.[d] || []).find((x) => x.id === a.id);
+      proximas.push({ dia: d, id: String(a.id), nome: a.nome, inicio: a.inicio, fim: a.fim, aviso: avisoDe(d, a.id), feita: f ? Boolean(f.feita) : null, como: f?.como || null });
+    }
+  }
   return {
     fixas: lista.map((a) => ({ id: String(a.id), nome: a.nome, dias: a.dias || [], diasTexto: (a.dias || []).map((d) => NOME_DOW[d]).join(', '), inicio: a.inicio, fim: a.fim, met: a.met, lugar: lugarDe(a), kcal: kcalMet(a.met, perfil?.peso, duracao(a)) })),
     hoje: lista
@@ -227,8 +254,11 @@ export function montarAtividades({ perfil, dia, termos = [] }) {
       .map((a) => {
         const f = feitas.find((x) => x.id === a.id);
         const emDuvida = pend.some((p) => p.id === a.id && p.dia === dia);
-        return { id: String(a.id), nome: a.nome, inicio: a.inicio, fim: a.fim, feita: f ? Boolean(f.feita) : null, kcal: f?.feita ? Math.round(Number(f.kcal) || 0) : null, como: f?.como || null, emDuvida: !f && emDuvida };
+        // passou = o horário de hoje já acabou: o app troca o "vai ter?" pelo "teve?"
+        const passou = agoraMin != null && ehHora(String(a.fim || '')) ? agoraMin >= minutosDe(a.fim) : null;
+        return { id: String(a.id), nome: a.nome, inicio: a.inicio, fim: a.fim, feita: f ? Boolean(f.feita) : null, kcal: f?.feita ? Math.round(Number(f.kcal) || 0) : null, como: f?.como || null, emDuvida: !f && emDuvida, aviso: avisoDe(dia, a.id), passou };
       }),
+    proximas,
     pendentes: pend
       .map((p) => ({ p, a: lista.find((a) => a.id === p.id) }))
       .filter(({ a }) => a)

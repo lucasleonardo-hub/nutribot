@@ -12,7 +12,8 @@ const { criarAuth } = await import('../api-auth.js');
 const M = await import('../api-lacunas-montadores.js');
 const D = await import('../despensa.js');
 const { aplicarMarcacao } = await import('../lugares.js');
-const { atividadeDeObjeto } = await import('../atividades.js');
+const { atividadeDeObjeto, atividadeEditada, avisosComMudanca, blocoAtividades } = await import('../atividades.js');
+const { ajusteAtividadesFixas, previsaoGastoDia } = await import('../resumo.js');
 const { planoDuplicatasDespensa, garantirIndiceDespensa } = await import('../mongo.js');
 const { estado, definirPersistenciaSilencio } = await import('../estado.js');
 const E = await import('../api-escrita.js');
@@ -97,6 +98,8 @@ const lacunas = {
   criarAtividade: async (p, v) => (anota('criarAtividade', p.nome, v), v.nome === 'Sem lugar' ? { erro: 'Lugar não encontrado.' } : atividadeDeObjeto(p, v, { id: 'anovo', dia: DIA })),
   removerAtividade: async (_p, aid) => (aid === 'av1' ? { id: 'av1' } : null),
   responderAtividade: async (_p, r) => (anota('responderAtividade', r), r.id === 'av1' ? { feita: r.feita, kcal: 960, somadas: 800 } : null),
+  editarAtividade: async (p, aid, v) => (anota('editarAtividade', aid, v), aid === 'av1' ? atividadeEditada(p, p.atividades[0], v, { dia: DIA }) : null),
+  avisarAtividade: async (_p, r) => (anota('avisarAtividade', r), r.dia === '2030-04-05' && r.valor === 'vai' ? { conflito: true, feita: true } : { dia: r.dia, aviso: r.valor }),
   situacaoAtual: async (p) => ({ estado: 'lugar', lugar: p.lugares[0], desde: '19:40', minutos: 20 }),
   marcarLugar: async (p, lid, m) => (anota('marcarLugar', lid, m), aplicarMarcacao(p.lugares, lid, m)?.lugar || null),
   esquecerLugares: async () => anota('esquecerLugares'),
@@ -231,14 +234,14 @@ test('atividades: lista sem coordenada e com o nome do lugar filtrado, cria, apa
   let r = await pedir('GET', `/perfis/${IDB}/atividades`);
   assert.equal(r.status, 200);
   assert.deepEqual(r.corpo.fixas[0], { id: 'av1', nome: 'Vôlei', dias: [5], diasTexto: 'sex', inicio: '20:00', fim: '22:00', met: 6, lugar: { nome: 'lugar marcado' }, kcal: 960 });
-  assert.deepEqual(r.corpo.hoje, [{ id: 'av1', nome: 'Vôlei', inicio: '20:00', fim: '22:00', feita: null, kcal: null, como: null, emDuvida: true }]); // 29/03/2030 é sexta
+  assert.deepEqual(r.corpo.hoje, [{ id: 'av1', nome: 'Vôlei', inicio: '20:00', fim: '22:00', feita: null, kcal: null, como: null, emDuvida: true, aviso: null, passou: false }]); // 29/03/2030 é sexta, 12:00
   assert.deepEqual(r.corpo.pendentes, [{ id: 'av1', nome: 'Vôlei', dia: DIA }]);
   assert.equal(JSON.stringify(r.corpo).includes('-10.1'), false);
   assert.equal(JSON.stringify(r.corpo).includes('Secreta'), false);
 
   r = await pedir('POST', `/perfis/${IDA}/atividades`, { nome: 'Futebol', dias: ['ter', 'qui'], inicio: '19:00', fim: '20:30', met: 7, lugarId: 'l1' });
   assert.equal(r.status, 201);
-  assert.deepEqual(ultima('criarAtividade')[2], { nome: 'Futebol', dias: [2, 4], inicio: '19:00', fim: '20:30', met: 7, lugarId: 'l1', aqui: false });
+  assert.deepEqual(ultima('criarAtividade')[2], { nome: 'Futebol', dias: [2, 4], inicio: '19:00', fim: '20:30', met: 7, lugarId: 'l1', aqui: false, semLugar: false });
   assert.deepEqual([r.corpo.atividade.id, r.corpo.atividade.kcal, r.corpo.atividade.lugar], ['anovo', 735, { nome: 'lugar marcado' }]);
   assert.equal((await pedir('POST', `/perfis/${IDA}/atividades`, { nome: 'Sem lugar', dias: [1], inicio: '10:00', fim: '11:00' })).corpo.erro.mensagem, 'Lugar não encontrado.');
   assert.equal((await pedir('POST', `/perfis/${IDA}/atividades`, { nome: 'X', dias: [1], inicio: '11:00', fim: '10:00' })).status, 400);
@@ -252,6 +255,32 @@ test('atividades: lista sem coordenada e com o nome do lugar filtrado, cria, apa
   assert.equal((await pedir('POST', `/perfis/${IDB}/atividades/av1/resposta`, { feita: 'sim' })).status, 400);
   assert.equal((await pedir('POST', `/perfis/${IDB}/atividades/av1/resposta`, { feita: false, dia: '2030-03-10' })).status, 400);
   assert.equal((await pedir('POST', `/perfis/${IDB}/atividades/zzz/resposta`, { feita: false })).status, 404);
+});
+
+test('atividades: editar pelo id e avisar antes se vai ter (hoje e próximos 13 dias, só nos dias dela); próximas na agenda', async () => {
+  const b = perfis[1];
+  b.atividadesAvisos = { '2030-04-05': { av1: 'nao' } };
+  let r = await pedir('GET', `/perfis/${IDB}/atividades`);
+  assert.deepEqual(r.corpo.proximas.map((p) => [p.dia, p.aviso]), [[DIA, null], ['2030-04-05', 'nao']]);
+  delete b.atividadesAvisos;
+
+  r = await pedir('PUT', `/perfis/${IDB}/atividades/av1`, { nome: 'Vôlei de areia', dias: ['sex', 'sab'], inicio: '19:00', fim: '21:00', met: 7 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(ultima('editarAtividade').slice(1), ['av1', { nome: 'Vôlei de areia', dias: [5, 6], inicio: '19:00', fim: '21:00', met: 7, lugarId: null, aqui: false, semLugar: false }]);
+  assert.deepEqual([r.corpo.atividade.nome, r.corpo.atividade.diasTexto, r.corpo.atividade.lugar], ['Vôlei de areia', 'sex, sáb', { nome: 'lugar marcado' }]);
+  assert.equal((await pedir('PUT', `/perfis/${IDB}/atividades/zzz`, { nome: 'X', dias: [1], inicio: '10:00', fim: '11:00' })).status, 404);
+
+  r = await pedir('POST', `/perfis/${IDB}/atividades/av1/aviso`, { valor: 'nao' });
+  assert.deepEqual([r.status, r.corpo], [200, { dia: DIA, aviso: 'nao' }]);
+  assert.deepEqual(ultima('avisarAtividade')[1], { id: 'av1', dia: DIA, valor: 'nao' });
+  r = await pedir('POST', `/perfis/${IDB}/atividades/av1/aviso`, { dia: '2030-04-05', valor: null });
+  assert.deepEqual(r.corpo, { dia: '2030-04-05', aviso: null });
+  assert.equal((await pedir('POST', `/perfis/${IDB}/atividades/av1/aviso`, { dia: '2030-04-01', valor: 'vai' })).corpo.erro.codigo, 'dia_invalido', 'segunda não é dia de vôlei');
+  assert.equal((await pedir('POST', `/perfis/${IDB}/atividades/av1/aviso`, { dia: '2030-03-22', valor: 'vai' })).status, 400, 'passado');
+  assert.equal((await pedir('POST', `/perfis/${IDB}/atividades/av1/aviso`, { dia: '2030-04-19', valor: 'vai' })).status, 400, 'mais de 13 dias');
+  assert.equal((await pedir('POST', `/perfis/${IDB}/atividades/av1/aviso`, { valor: 'talvez' })).status, 400);
+  r = await pedir('POST', `/perfis/${IDB}/atividades/av1/aviso`, { valor: 'vai', dia: '2030-04-05' });
+  assert.deepEqual([r.status, r.corpo.erro.codigo], [409, 'ja_registrada']);
 });
 
 test('lugares: só o perfil do dono (403 nos outros), sem coordenada; marcar por id e esquecer com confirmação', async () => {
@@ -486,6 +515,47 @@ test('lugares.aplicarMarcacao: casa e trabalho são um lugar só; id inexistente
   const t = aplicarMarcacao(lugares, 'b', { tipo: 'trabalho', nome: 'Firma' });
   assert.deepEqual(t.lugares.map((l) => l.papel || null), ['casa', 'trabalho', null]);
   assert.equal(aplicarMarcacao(lugares, 'zz', { nome: 'x' }), null);
+});
+
+test('atividades: edição mantém id e lugar; avisos limpam o velho; a Nutri lê o aviso de hoje e dos próximos dias', () => {
+  const antiga = { id: 'av1', nome: 'Vôlei', dias: [5], inicio: '20:00', fim: '22:00', met: 6, lugar: { lat: 1, lon: 2, nome: 'Quadra' }, criadoEm: '2030-01-01' };
+  const v = { nome: 'Vôlei de areia', dias: [5, 6], inicio: '19:00', fim: '21:00', met: 7, lugarId: null, aqui: false, semLugar: false };
+  assert.deepEqual(atividadeEditada(perfis[0], antiga, v, { dia: DIA }).atividade, { ...antiga, nome: 'Vôlei de areia', dias: [5, 6], inicio: '19:00', fim: '21:00', met: 7, editadaEm: DIA });
+  assert.equal(atividadeEditada(perfis[0], antiga, { ...v, semLugar: true }, { dia: DIA }).atividade.lugar, null);
+  assert.equal(atividadeEditada(perfis[0], antiga, { ...v, lugarId: 'l1' }, { dia: DIA }).atividade.lugar.nome, 'Quadra Secreta');
+  assert.equal(atividadeEditada(perfis[0], antiga, { ...v, lugarId: 'nada' }, { dia: DIA }).erro, 'Lugar não encontrado.');
+
+  const avisos = avisosComMudanca({ '2030-03-01': { av1: 'nao' }, '2030-03-22': { av1: 'vai', b: 'nao' } }, { id: 'av1', dia: '2030-04-05', valor: 'nao', hoje: DIA });
+  assert.deepEqual(avisos, { '2030-03-22': { av1: 'vai', b: 'nao' }, '2030-04-05': { av1: 'nao' } }, 'mais de 14 dias atrás sai');
+  assert.deepEqual(avisosComMudanca(avisos, { id: 'av1', dia: '2030-04-05', valor: null, hoje: DIA }), { '2030-03-22': { av1: 'vai', b: 'nao' } });
+
+  const p = { nome: 'B', peso: 80, atividades: [antiga], atividadesAvisos: { [DIA]: { av1: 'vai' }, '2030-04-05': { av1: 'nao' } } };
+  const bloco = blocoAtividades(p, { dia: DIA, dow: 5 });
+  assert.match(bloco, /HOJE: CONFIRMOU que vai ter hoje \(20:00–22:00/);
+  assert.match(bloco, /AVISOS DOS PRÓXIMOS DIAS.*sex 05\/04: Vôlei NÃO vai ter/);
+  const naoHoje = blocoAtividades({ ...p, atividadesFeitas: { [DIA]: [{ id: 'av1', feita: false, como: 'aviso' }] } }, { dia: DIA, dow: 5 });
+  assert.match(naoHoje, /HOJE: NÃO vai ter hoje \(ela\(e\) avisou antes/);
+});
+
+test('previsão do gasto: "não vai ter" desconta a atividade na proporção em que ela acontecia; "vai ter" soma o que faltava', () => {
+  const vol = { id: 'v', nome: 'vôlei', dias: [5], inicio: '20:00', fim: '22:00', met: 6 };
+  const sextas = ['2030-03-08', '2030-03-15', '2030-03-22'];
+  const feitas = { '2030-03-08': [{ id: 'v', feita: true }], '2030-03-15': [{ id: 'v', feita: true }], '2030-03-22': [{ id: 'v', feita: false }] };
+  const base = { peso: 80, atividades: [vol], atividadesFeitas: feitas };
+  // líquido = (6 − 1) × 80 × 2 h = 800 kcal; aconteceu em 2 de 3 sextas
+  assert.deepEqual(ajusteAtividadesFixas({ ...base, atividadesAvisos: { [DIA]: { v: 'nao' } } }, DIA, sextas), { kcal: -533, texto: 'sem vôlei: −533 kcal' });
+  assert.deepEqual(ajusteAtividadesFixas({ ...base, atividadesAvisos: { [DIA]: { v: 'vai' } } }, DIA, sextas), { kcal: 267, texto: 'com vôlei confirmado: +267 kcal' });
+  assert.equal(ajusteAtividadesFixas(base, DIA, sextas), null);
+  assert.equal(ajusteAtividadesFixas({ ...base, atividadesAvisos: { '2030-04-01': { v: 'nao' } } }, '2030-04-01', sextas), null, 'segunda não é dia de vôlei');
+
+  const gastos = {};
+  for (let i = 1; i <= 28; i++) gastos[new Date(Date.parse('2030-03-01T12:00:00Z') + (i - 1) * 86400_000).toISOString().slice(0, 10)] = 2500;
+  for (const d of sextas) gastos[d] = 3000;
+  const sem = previsaoGastoDia({ gastos, dia: DIA, objetivo: 'manter', diaAlvo: DIA, perfil: { ...base, objetivo: 'manter' } });
+  const nao = previsaoGastoDia({ gastos, dia: DIA, objetivo: 'manter', diaAlvo: DIA, perfil: { ...base, objetivo: 'manter', atividadesAvisos: { [DIA]: { v: 'nao' } } } });
+  assert.equal(sem.previsto - nao.previsto, 400); // na média entram 4 sextas (01, 08, 15 e 22/03), vôlei em 2
+  assert.match(nao.texto, /sem vôlei: −400 kcal, a pessoa avisou antes/);
+  assert.match(nao.zap, /deve gastar/);
 });
 
 test('atividades.atividadeDeObjeto: lugar pelo id, "aqui" pelo último ponto, erros curtos', () => {

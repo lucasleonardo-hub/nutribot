@@ -234,7 +234,7 @@ internal fun CartaoTreinos(treinos: List<Treino>, temHevy: Boolean, hoje: LocalD
     var aberto by rememberSaveable { mutableStateOf<String?>(null) }
     Cartao(atraso = 30) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Mascote(Pose.CorgiHalter, 40.dp)
+            Mascote(Pose.CorgiSupino, 40.dp)
             Text("Seus treinos", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             if (treinos.isNotEmpty()) Text("8 semanas", style = MaterialTheme.typography.labelMedium, color = Cores.Tinta3)
         }
@@ -345,7 +345,7 @@ private fun FolhaTreino(t: Treino, sugestoes: List<JSONObject>, aoFechar: () -> 
                     ).joinToString(" · ")
                     if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
                 }
-                Mascote(Pose.CorgiHalter, 56.dp)
+                Mascote(Pose.LontraKettlebell, 56.dp)
             }
             if (t.exercicios.isEmpty()) {
                 Text("Sem exercícios com carga nesse treino.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)

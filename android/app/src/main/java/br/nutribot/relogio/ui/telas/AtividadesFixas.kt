@@ -1,5 +1,6 @@
 package br.nutribot.relogio.ui.telas
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -48,6 +50,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.nutribot.relogio.dados.AtividadeDoDia
 import br.nutribot.relogio.dados.AtividadeFixa
 import br.nutribot.relogio.dados.AtividadePendente
+import br.nutribot.relogio.dados.CorposDespensa
+import br.nutribot.relogio.dados.FixaProxima
+import br.nutribot.relogio.dados.RotasDespensa
 import br.nutribot.relogio.dados.Perfil
 import br.nutribot.relogio.dados.api.ErroApi
 import br.nutribot.relogio.dados.diasDaSemana
@@ -107,6 +112,57 @@ private fun minutos(h: String): Int? = horaDigitada(h)?.split(':')?.let { it[0].
 private fun diaDaPergunta(dia: String): String = Formato.dia(dia)?.let { Formato.semanaCurta(it) + ", " + Formato.diaCurto(it) } ?: dia
 
 /**
+ * "Vai ter?" de uma ocorrência (hoje ou até 13 dias pra frente), usado no Hoje, na Agenda e aqui: Vai / Não vai, e tocar de
+ * novo no marcado desfaz. POST /perfis/:id/atividades/:aid/aviso. A Nutri lê na hora: "não vai" tira a atividade do gasto
+ * previsto do dia (e da faixa de calorias) e ela não pergunta no grupo; "vai" deixa somar sem perguntar. Dia que já foi
+ * registrado (localização, "teve / não teve") mostra só o que aconteceu.
+ */
+@Composable
+internal fun AvisoAtividade(vm: AppVM, perfilId: String, p: FixaProxima, mostrarDia: Boolean, modifier: Modifier = Modifier) {
+    val escopo = rememberCoroutineScope()
+    var marcado by remember(p.dia, p.id, p.aviso) { mutableStateOf(p.aviso) }
+    var enviando by remember { mutableStateOf(false) }
+    var erro by remember { mutableStateOf<String?>(null) }
+
+    fun marcar(v: String?) {
+        if (enviando) return
+        escopo.launch {
+            enviando = true
+            erro = null
+            try {
+                vm.escrever("POST", RotasDespensa.avisoAtividade(perfilId, p.id), CorposDespensa.aviso(p.dia, v))
+                marcado = v
+                vm.invalidar(perfilId) // o gasto previsto e a faixa do Hoje mudam
+            } catch (e: ErroApi) {
+                erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
+            } catch (e: CancellationException) {
+                throw e
+            } finally {
+                enviando = false
+            }
+        }
+    }
+
+    val horario = if (p.inicio != null && p.fim != null) "${p.inicio} às ${p.fim}" else p.inicio
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f).semantics(mergeDescendants = true) {}) {
+                Text(p.nome.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelLarge, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val sub = listOfNotNull(if (mostrarDia) diaDaPergunta(p.dia) else null, horario).joinToString(" · ")
+                if (sub.isNotBlank()) Text(sub, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+            }
+            if (p.registrada) {
+                if (p.feita == true) Pilula("teve", Cores.BomFundo, Cores.BomTinta) else Pilula("não teve", Cores.Lavanda, Cores.Tinta2)
+            } else {
+                Chip(if (enviando && marcado != "vai") "…" else "Vai", marcado == "vai", papel = Role.Checkbox) { marcar(if (marcado == "vai") null else "vai") }
+                Chip("Não vai", marcado == "nao", papel = Role.Checkbox) { marcar(if (marcado == "nao") null else "nao") }
+            }
+        }
+        erro?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.CuidadoTinta, modifier = Modifier.padding(top = 4.dp)) }
+    }
+}
+
+/**
  * Atividades fixas (fase 7, W17–W20; das três pessoas, D15): esporte ou aula sem relógio, com dias, horário e intensidade.
  * O "teve?" ainda sem resposta fica no topo (responder aqui cancela a pergunta no grupo); depois, o que já se sabe de hoje
  * e a lista com criar e apagar. GET/POST /perfis/:id/atividades, DELETE /perfis/:id/atividades/:aid,
@@ -116,7 +172,7 @@ private fun diaDaPergunta(dia: String): String = Formato.dia(dia)?.let { Formato
 fun TelaAtividadesFixas(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
     if (perfil == null) {
         Column(Modifier.fillMaxSize()) {
-            CabecalhoVoltar("Atividades fixas", null, Pose.DuplaCorrendo, voltar)
+            CabecalhoVoltar("Atividades fixas", null, Pose.DuplaVolei, voltar)
             Vazio("Escolha um perfil no Hoje.")
         }
         return
@@ -127,6 +183,7 @@ fun TelaAtividadesFixas(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
     val escopo = rememberCoroutineScope()
     var nova by rememberSaveable { mutableStateOf(false) }
     var apagar by remember { mutableStateOf<AtividadeFixa?>(null) }
+    var editar by remember { mutableStateOf<AtividadeFixa?>(null) }
     var respondendo by remember { mutableStateOf<String?>(null) }
     var recado by remember { mutableStateOf<String?>(null) }
     var erro by remember { mutableStateOf<String?>(null) }
@@ -153,7 +210,7 @@ fun TelaAtividadesFixas(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
 
     ConteudoCarga(
         carga, { vm.carregar(rota, forcar = true) },
-        topo = { CabecalhoVoltar("Atividades fixas", "${perfil.curto} · esporte e aula sem relógio", Pose.DuplaCorrendo, voltar) },
+        topo = { CabecalhoVoltar("Atividades fixas", "${perfil.curto} · esporte e aula sem relógio", Pose.DuplaVolei, voltar) },
     ) { j ->
         val fixas = AtividadeFixa.lista(j)
         val hoje = AtividadeDoDia.lista(j)
@@ -173,7 +230,21 @@ fun TelaAtividadesFixas(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
             }
         }
 
-        if (hoje.isNotEmpty()) {
+        // hoje e as próximas duas semanas: marcar antes se vai ter (a Nutri adapta comida e gasto do dia)
+        val proximas = FixaProxima.lista(j)
+        if (proximas.isNotEmpty()) {
+            TituloSecao("Vai ter?")
+            Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp)) {
+                proximas.take(10).forEachIndexed { i, p ->
+                    if (i > 0) Box(Modifier.fillMaxWidth().padding(vertical = 8.dp).height(1.dp).background(Cores.Trilho))
+                    AvisoAtividade(vm, perfil.id, p, mostrarDia = true)
+                }
+                Text(
+                    "Marque antes e a Nutri já sabe: \"não vai\" tira a atividade do gasto previsto do dia e ela não pergunta no grupo.",
+                    style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, modifier = Modifier.padding(top = 10.dp),
+                )
+            }
+        } else if (hoje.isNotEmpty()) {
             TituloSecao("Hoje")
             hoje.forEach { a ->
                 val (texto, fundo, tinta) = when (a.feita) {
@@ -190,12 +261,12 @@ fun TelaAtividadesFixas(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
 
         TituloSecao("Toda semana") { Botao("Nova", suave = true) { nova = true } }
         if (fixas.isEmpty()) {
-            Vazio("Nenhuma atividade fixa. Ex.: vôlei, segunda e quarta, 20:00 às 22:00.", Pose.DuplaCorrendo)
+            Vazio("Nenhuma atividade fixa. Ex.: vôlei, segunda e quarta, 20:00 às 22:00.", Pose.DuplaVolei)
         } else {
-            fixas.forEachIndexed { i, a -> CartaoAtividade(a, (i * 30).coerceAtMost(300)) { apagar = a } }
+            fixas.forEachIndexed { i, a -> CartaoAtividade(a, (i * 30).coerceAtMost(300), aoEditar = { editar = a }) { apagar = a } }
         }
         Text(
-            "Sem relógio, a Nutri soma um gasto estimado quando a atividade acontece: ela confere pela localização ou pergunta se teve.",
+            "Toque numa atividade para editar. Sem relógio, a Nutri soma um gasto estimado quando ela acontece: confere pela localização ou pergunta se teve.",
             style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4,
         )
     }
@@ -204,6 +275,13 @@ fun TelaAtividadesFixas(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
         nova = false
         recado = null
         vm.invalidar(perfil.id)
+    }
+    editar?.let { a ->
+        FolhaNovaAtividade(vm, perfil.id, editando = a, aoFechar = { editar = null }) {
+            editar = null
+            recado = "Atividade atualizada. A Nutri já usa o horário novo."
+            vm.invalidar(perfil.id)
+        }
     }
     apagar?.let { a ->
         DialogoApagarAtividade(vm, perfil.id, a, aoFechar = { apagar = null }) {
@@ -214,8 +292,8 @@ fun TelaAtividadesFixas(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
 }
 
 @Composable
-private fun CartaoAtividade(a: AtividadeFixa, atraso: Int, aoApagar: () -> Unit) {
-    Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = atraso) {
+private fun CartaoAtividade(a: AtividadeFixa, atraso: Int, aoEditar: () -> Unit, aoApagar: () -> Unit) {
+    Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = atraso, aoTocar = aoEditar, rotuloToque = "Editar ${a.nome}") {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(a.nome, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -238,17 +316,17 @@ private fun CartaoAtividade(a: AtividadeFixa, atraso: Int, aoApagar: () -> Unit)
     }
 }
 
-/** Folha "Nova atividade": nome, dias da semana, início e fim (HH:MM) e intensidade -> POST /perfis/:id/atividades. */
+/** Folha "Nova atividade" (ou editar, com `editando`): nome, dias, início e fim (HH:MM) e intensidade -> POST /perfis/:id/atividades ou PUT /perfis/:id/atividades/:aid. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun FolhaNovaAtividade(vm: AppVM, perfilId: String, aoFechar: () -> Unit, aoCriar: () -> Unit) {
+private fun FolhaNovaAtividade(vm: AppVM, perfilId: String, editando: AtividadeFixa? = null, aoFechar: () -> Unit, aoCriar: () -> Unit) {
     val escopo = rememberCoroutineScope()
     val escrita by vm.escrita.collectAsStateWithLifecycle()
-    var nome by rememberSaveable { mutableStateOf("") }
-    var dias by rememberSaveable { mutableStateOf(listOf<Int>()) }
-    var inicio by rememberSaveable { mutableStateOf("") }
-    var fim by rememberSaveable { mutableStateOf("") }
-    var met by rememberSaveable { mutableStateOf(intensidades[1].second) }
+    var nome by rememberSaveable { mutableStateOf(editando?.nome ?: "") }
+    var dias by rememberSaveable { mutableStateOf(editando?.dias ?: listOf<Int>()) }
+    var inicio by rememberSaveable { mutableStateOf(editando?.inicio ?: "") }
+    var fim by rememberSaveable { mutableStateOf(editando?.fim ?: "") }
+    var met by rememberSaveable { mutableStateOf(editando?.met ?: intensidades[1].second) }
     var enviando by remember { mutableStateOf(false) }
     var erro by remember { mutableStateOf<String?>(null) }
 
@@ -265,7 +343,7 @@ private fun FolhaNovaAtividade(vm: AppVM, perfilId: String, aoFechar: () -> Unit
             erro = null
             try {
                 val corpo = JSONObject().put("nome", n).put("dias", JSONArray(dias.sorted())).put("inicio", horaDigitada(inicio)).put("fim", horaDigitada(fim)).put("met", met)
-                vm.escrever("POST", AppVM.rotaAtividades(perfilId), corpo)
+                if (editando != null) vm.escrever("PUT", RotasDespensa.atividade(perfilId, editando.id), corpo) else vm.escrever("POST", AppVM.rotaAtividades(perfilId), corpo)
                 aoCriar()
             } catch (e: ErroApi) {
                 erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
@@ -282,9 +360,9 @@ private fun FolhaNovaAtividade(vm: AppVM, perfilId: String, aoFechar: () -> Unit
             Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding().navigationBarsPadding().padding(start = 18.dp, end = 18.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Nova atividade", style = MaterialTheme.typography.headlineMedium)
+            Text(if (editando != null) "Editar ${editando.nome}" else "Nova atividade", style = MaterialTheme.typography.headlineMedium)
             if (enviando) {
-                Esperando("Guardando a atividade…", escrita, Pose.DuplaCorrendo)
+                Esperando("Guardando a atividade…", escrita, Pose.DuplaVolei)
                 return@Column
             }
             OutlinedTextField(nome, { nome = it.take(40) }, label = { Text("Nome") }, placeholder = { Text("ex.: vôlei, pilates") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -319,7 +397,7 @@ private fun FolhaNovaAtividade(vm: AppVM, perfilId: String, aoFechar: () -> Unit
             erro?.let { AvisoErro(it) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Botao("Cancelar", Modifier.weight(1f), suave = true) { aoFechar() }
-                Botao("Criar", Modifier.weight(1f)) { criar() }
+                Botao(if (editando != null) "Salvar" else "Criar", Modifier.weight(1f)) { criar() }
             }
         }
     }

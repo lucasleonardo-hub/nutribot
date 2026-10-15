@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.nutribot.relogio.dados.CorposDespensa
 import br.nutribot.relogio.dados.FixaDoDia
+import br.nutribot.relogio.dados.FixaProxima
 import br.nutribot.relogio.dados.FixaPendente
 import br.nutribot.relogio.dados.HabitosHoje
 import br.nutribot.relogio.dados.Perfil
@@ -920,7 +921,7 @@ private fun CartaoAguaAlcool(vm: AppVM, perfilId: String, diaIso: String, doHoje
                 Text(textoAgua(h.aguaMl), style = MaterialTheme.typography.headlineMedium)
                 Text(if (copos == 1) "1 copo de 250 ml" else "$copos copos de 250 ml", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
             }
-            Mascote(Pose.LontraComendo, 52.dp)
+            Mascote(if (copos == 0) Pose.CorgiAgua else if (copos >= 8) Pose.LontraMaisUm else Pose.LontraAgua, 56.dp)
         }
         Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             BotaoHabito("+ 1 copo", "Somar um copo de água, 250 mililitros", !enviando, Modifier.weight(1f)) { somar(250, 0) }
@@ -1013,7 +1014,7 @@ private fun CartaoAtividadesFixas(vm: AppVM, perfilId: String, diaIso: String) {
     Cartao(pincel = Brush.linearGradient(listOf(Cores.BomFundo, Cores.Branco)), forma = Formas.Grande, padding = PaddingValues(18.dp), atraso = 90) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Atividades fixas", style = MaterialTheme.typography.titleMedium, color = Cores.Tinta3, modifier = Modifier.weight(1f))
-            Mascote(Pose.DuplaCorrendo, 44.dp)
+            Mascote(Pose.DuplaVolei, 48.dp)
         }
         pendentes.forEach { p ->
             val nome = p.nome.replaceFirstChar { it.lowercase() }
@@ -1024,6 +1025,11 @@ private fun CartaoAtividadesFixas(vm: AppVM, perfilId: String, diaIso: String) {
             }
         }
         doDia.forEach { f ->
+            // ainda não aconteceu (nem foi registrada): "vai ter hoje?" já avisa a Nutri e muda o gasto previsto do dia
+            if (f.passou != true && (f.feita == null || f.aviso == "nao")) {
+                AvisoAtividade(vm, perfilId, FixaProxima(diaIso, f.id, f.nome, f.inicio, f.fim, f.aviso, null, null), mostrarDia = false, modifier = Modifier.padding(top = 8.dp))
+                return@forEach
+            }
             val estado = when (f.feita) {
                 true -> "feito" + (f.kcal?.takeIf { it > 0 }?.let { " · cerca de ${Formato.kcal(it)} kcal" } ?: "")
                 false -> "não rolou"

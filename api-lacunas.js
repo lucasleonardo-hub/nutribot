@@ -55,6 +55,8 @@ export function lacunasPadrao() {
     criarAtividade: async (perfil, v) => (await import('./atividades.js')).criarAtividadeDeObjeto(perfil, v),
     removerAtividade: async (perfil, aid) => (await import('./atividades.js')).removerAtividadePorId(perfil, aid),
     responderAtividade: async (perfil, r) => (await import('./atividades.js')).responderAtividade(perfil, r),
+    editarAtividade: async (perfil, aid, v) => (await import('./atividades.js')).editarAtividadePorId(perfil, aid, v),
+    avisarAtividade: async (perfil, r) => (await import('./atividades.js')).avisarAtividade(perfil, r),
 
     // ---------- lugares (só do dono) ----------
     situacaoAtual: async (perfil) => (perfil.lugaresAtivo ? (await import('./lugares.js')).situacaoAtual(perfil) : null),
@@ -219,8 +221,30 @@ export function rotasDeLacunas(r, { lacunas = lacunasPadrao(), perfilDo, listarP
 
   // ============ atividades fixas (W17–W20) ============
   r.get('/perfis/:id/atividades', async (req, res) => {
-    const { perfil, perfis, hoje } = await perfilDo(req);
-    res.json(M.montarAtividades({ perfil, dia: hoje, termos: termos(perfis) }));
+    const { perfil, perfis, hoje, hora } = await perfilDo(req);
+    res.json(M.montarAtividades({ perfil, dia: hoje, hora, termos: termos(perfis) }));
+  });
+
+  // editar (mesmo id e histórico) e o aviso antes ("vai ter hoje?"): pedido do dono em 15/10
+  r.put('/perfis/:id/atividades/:aid', async (req, res) => {
+    const { perfil, perfis } = await perfilDo(req);
+    const v = M.validarAtividade(req.body);
+    const x = await lacunas.editarAtividade(perfil, req.params.aid, v);
+    if (!x) throw erroApi(404, 'atividade_nao_encontrada', 'atividade não encontrada');
+    if (x.erro) throw erroApi(400, 'pedido_invalido', x.erro);
+    res.json({ atividade: M.montarAtividade(x.atividade, { peso: perfil.peso, termos: termos(perfis) }) });
+  });
+
+  r.post('/perfis/:id/atividades/:aid/aviso', async (req, res) => {
+    const { perfil, hoje } = await perfilDo(req);
+    const v = M.validarAvisoAtividade(req.body, { hoje });
+    const a = (perfil.atividades || []).find((x) => String(x.id) === String(req.params.aid));
+    if (!a) throw erroApi(404, 'atividade_nao_encontrada', 'atividade não encontrada');
+    if (!(a.dias || []).includes(M.diaDaSemana(v.dia))) throw erroApi(400, 'dia_invalido', `${a.nome} não acontece nesse dia da semana`);
+    const x = await lacunas.avisarAtividade(perfil, { id: a.id, dia: v.dia, valor: v.valor });
+    if (!x) throw erroApi(404, 'atividade_nao_encontrada', 'atividade não encontrada');
+    if (x.conflito) throw erroApi(409, 'ja_registrada', `esse dia já está registrado como ${x.feita ? 'feito' : 'não feito'}; use "teve / não teve" para corrigir`);
+    res.json(x);
   });
 
   r.post('/perfis/:id/atividades', async (req, res) => {

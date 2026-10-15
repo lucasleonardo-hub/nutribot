@@ -152,7 +152,7 @@ fun poseDaNota(nota: Double?): Pose = when {
     nota == null -> Pose.DuplaDescansando
     nota >= 85 -> Pose.CorgiFesta
     nota >= 70 -> Pose.DuplaFeliz
-    nota >= 55 -> Pose.DuplaDescansando
+    nota >= 55 -> Pose.CorgiCansado
     else -> Pose.CorgiDormindo
 }
 

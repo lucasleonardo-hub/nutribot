@@ -138,6 +138,10 @@ export async function verificarAtividades({ lembrar } = {}) {
         await registrar(perfil, dia, a, { feita: true, kcal: kcalAtividade(a.met, perfil.peso, av.minutosNoLugar), minutos: av.minutosNoLugar, como: 'localizacao', detalhe: av.motivo });
       } else if (av.estado === 'ausente') {
         await registrar(perfil, dia, a, { feita: false, como: 'localizacao', detalhe: av.motivo });
+      } else if (avisoDe(perfil, dia, a.id) === 'vai') {
+        // avisou antes que ia ter e a localização não desmente: soma sem perguntar no grupo
+        const minutos = duracaoMin(a);
+        await registrar(perfil, dia, a, { feita: true, kcal: kcalAtividade(a.met, perfil.peso, minutos), minutos, como: 'confirmada', detalhe: `avisou que ia ter; ${av.motivo}` });
       } else {
         // pergunta uma vez; a resposta curta ("teve", "não rolou") resolve em responderPendente
         const pendentes = [...(perfil.atividadesPendentes || []), { id: a.id, dia, perguntadoEm: new Date().toISOString(), motivo: av.motivo }];
@@ -178,6 +182,13 @@ export async function registrarRelato(perfil, relato, diaHoje) {
   if (!a) return null;
   const dia = /^\d{4}-\d{2}-\d{2}$/.test(relato.dia || '') ? relato.dia : diaHoje;
   const feita = relato.feita !== false;
+  // dia que ainda não chegou ("quinta não vai ter vôlei", "amanhã tem sim"): é aviso, o mesmo do app, nunca gasto somado
+  if (dia > diaHoje) {
+    if (dia > somarDiasTxt(diaHoje, AVISO_DIAS_FRENTE)) return null;
+    const r = await avisarAtividade(perfil, { id: a.id, dia, valor: feita ? 'vai' : 'nao' });
+    if (!r || r.conflito) return null;
+    return `(${a.nome} em ${dia.slice(8, 10)}/${dia.slice(5, 7)}: ${feita ? 'confirmado' : 'não vai ter, anotei'})`;
+  }
   let minutos = duracaoMin(a);
   if (hMin(relato.inicio) != null && hMin(relato.fim) != null && hMin(relato.fim) > hMin(relato.inicio)) minutos = hMin(relato.fim) - hMin(relato.inicio);
   const kcal = kcalAtividade(a.met, perfil.peso, minutos);
@@ -216,13 +227,26 @@ export function blocoAtividades(perfil, { dia, dow } = {}) {
   const pend = (perfil.atividadesPendentes || []).filter((p) => p.dia === dia);
   const st = (a) => {
     const f = feitas.find((x) => x.id === a.id);
-    if (f) return f.feita ? `FEITA hoje (~${f.kcal} kcal da atividade; +${Math.round(kcalLiquida(f.kcal, f.minutos, perfil.relogio?.peso))} já somados no gasto, o que passa do repouso que o relógio já conta)` : `NÃO houve hoje (${f.como === 'sem_resposta' ? 'sem resposta' : f.como === 'resposta' ? 'ela(e) disse' : 'pela localização'})`;
+    if (f && f.como === 'aviso' && !f.feita) return 'NÃO vai ter hoje (ela(e) avisou antes; o gasto do dia é menor, adapte comida e lanche)';
+    if (f) return f.feita ? `FEITA hoje (~${f.kcal} kcal da atividade; +${Math.round(kcalLiquida(f.kcal, f.minutos, perfil.relogio?.peso))} já somados no gasto, o que passa do repouso que o relógio já conta)` : `NÃO houve hoje (${f.como === 'sem_resposta' ? 'sem resposta' : f.como === 'resposta' || f.como === 'app' ? 'ela(e) disse' : 'pela localização'})`;
     if (pend.some((p) => p.id === a.id)) return 'em dúvida, já perguntei; se ela(e) responder, o sistema anota';
+    if (avisoDe(perfil, dia, a.id) === 'vai') return `CONFIRMOU que vai ter hoje (${a.inicio}–${a.fim}; o gasto entra quando acontecer: planeje lanche antes e proteína depois)`;
     return 'ainda vai acontecer / ainda não conferi';
   };
+  // avisos dos próximos dias ("quinta não vai ter vôlei"): a Nutri planeja a semana com eles
+  const proximos = [];
+  for (let i = 1; i <= 7 && dia; i++) {
+    const d = somarDiasTxt(dia, i);
+    const dw = new Date(`${d}T12:00:00Z`).getUTCDay();
+    for (const a of lista) {
+      const v = a.dias?.includes(dw) ? avisoDe(perfil, d, a.id) : null;
+      if (v) proximos.push(`${NOME_DOW[dw]} ${d.slice(8, 10)}/${d.slice(5, 7)}: ${a.nome} ${v === 'vai' ? 'confirmado' : 'NÃO vai ter'}`);
+    }
+  }
   return (
     `ATIVIDADES FIXAS SEM RELÓGIO (o gasto é estimado por MET e só entra quando confirmado pela localização ou pela pessoa; não some por conta própria):\n` +
-    lista.map((a) => `- ${descreverAtividade(a, perfil.peso)}${hoje.includes(a) ? ` → HOJE: ${st(a)}` : ''}`).join('\n')
+    lista.map((a) => `- ${descreverAtividade(a, perfil.peso)}${hoje.includes(a) ? ` → HOJE: ${st(a)}` : ''}`).join('\n') +
+    (proximos.length ? `\nAVISOS DOS PRÓXIMOS DIAS (a pessoa marcou antes): ${proximos.join('; ')}.` : '')
   );
 }
 /** Itens de hoje pro roteiroDoDia (mesma forma dos eventos de agenda). */
@@ -231,7 +255,8 @@ export function atividadesComoAgenda(perfil, { dia, dow, fuso }) {
     .filter((a) => a.dias?.includes(dow))
     .map((a) => {
       const f = (perfil.atividadesFeitas?.[dia] || []).find((x) => x.id === a.id);
-      const marca = f ? (f.feita ? ' ✔ confirmado' : ' ✘ não houve') : '';
+      const aviso = avisoDe(perfil, dia, a.id);
+      const marca = f ? (f.feita ? ' ✔ confirmado' : f.como === 'aviso' ? ' ✘ não vai ter (avisou)' : ' ✘ não houve') : aviso === 'vai' ? ' (avisou que vai ter)' : '';
       return { titulo: `${a.nome}${marca}`, tipo: 'atividade fixa', inicio: instanteLocal(dia, a.inicio, fuso).toISOString(), fim: instanteLocal(dia, a.fim, fuso).toISOString() };
     });
 }
@@ -326,6 +351,79 @@ export async function responderAtividade(perfil, { id, dia, feita }) {
     perfil = { ...perfil, relogio };
   }
   return registrar(perfil, dia, a, { feita: Boolean(feita), kcal: kcalAtividade(a.met, perfil.peso, minutos), minutos, como: 'app' });
+}
+
+// ---------- aviso antes ("vai ter hoje?") e edição (15/10, pedido do dono: "clicar se vai ter hoje ou não e a Nutri já
+// sabe e adapta tudo") ----------
+/** Até quantos dias pra frente dá pra avisar (o app mostra as próximas duas semanas). */
+export const AVISO_DIAS_FRENTE = 13;
+const somarDiasTxt = (dia, n) => new Date(Date.parse(`${dia}T12:00:00Z`) + n * 86400_000).toISOString().slice(0, 10);
+
+/** Puro. O aviso de uma atividade num dia: 'vai' | 'nao' | null. */
+export const avisoDe = (perfil, dia, id) => perfil?.atividadesAvisos?.[dia]?.[String(id)] ?? null;
+
+/** Puro. O mapa de avisos com o do dia gravado (ou tirado, valor null); guarda só de `hoje` − 14 dias em diante. */
+export function avisosComMudanca(avisos, { id, dia, valor, hoje }) {
+  const corte = somarDiasTxt(hoje, -14);
+  const out = {};
+  for (const [d, m] of Object.entries(avisos || {})) if (d >= corte && m && typeof m === 'object') out[d] = { ...m };
+  const doDia = { ...(out[dia] || {}) };
+  if (valor) doDia[String(id)] = valor;
+  else delete doDia[String(id)];
+  if (Object.keys(doDia).length) out[dia] = doDia;
+  else delete out[dia];
+  return out;
+}
+
+/**
+ * Aviso antes da atividade, pelo app ou pela conversa: 'vai', 'nao' ou null (desfaz). "Não vai" vira não feita (como:
+ * 'aviso'): o cron não pergunta no grupo, o gasto não soma e a previsão do dia desconta. "Vai" deixa o cron somar sem
+ * perguntar quando a localização não desmente. Dia já registrado de outro jeito (localização, resposta, relato) não muda
+ * aqui: devolve { conflito, feita } e quem chamou usa o "teve / não teve". Devolve null se a atividade não existe.
+ */
+export async function avisarAtividade(perfil, { id, dia, valor }) {
+  const a = (perfil?.atividades || []).find((x) => String(x.id) === String(id));
+  if (!a) return null;
+  const anterior = (perfil.atividadesFeitas?.[dia] || []).find((f) => f.id === a.id);
+  if (anterior && anterior.como !== 'aviso') return { conflito: true, feita: Boolean(anterior.feita) };
+  const atividadesAvisos = avisosComMudanca(perfil.atividadesAvisos, { id: a.id, dia, valor, hoje: agora(fusoDe(perfil)).dia });
+  await salvarPerfil({ jids: perfil.jids, atividadesAvisos });
+  const atual = { ...perfil, atividadesAvisos };
+  if (valor === 'nao') {
+    await registrar(atual, dia, a, { feita: false, como: 'aviso', detalhe: 'avisou antes que não ia ter' });
+  } else if (anterior) {
+    // tinha avisado "não vai" e mudou de ideia: o registro do aviso sai e o dia volta a ser conferido normalmente
+    const feitas = { ...(perfil.atividadesFeitas || {}) };
+    feitas[dia] = (feitas[dia] || []).filter((f) => f.id !== a.id);
+    if (!feitas[dia].length) delete feitas[dia];
+    await salvarPerfil({ jids: perfil.jids, atividadesFeitas: feitas });
+  }
+  console.log(`[atividades] ${perfil.nome}: ${a.nome} ${dia} aviso ${valor || 'desfeito'}`);
+  return { dia, aviso: valor || null };
+}
+
+/**
+ * Puro. A atividade editada: os campos novos já validados ({ nome, dias, inicio, fim, met, lugarId, aqui, semLugar }), mesmo
+ * id, mesmo histórico. Sem lugarId, aqui nem semLugar, o lugar continua o que era. Devolve { atividade } ou { erro }.
+ */
+export function atividadeEditada(perfil, antiga, v, { ultimoPonto = null, dia = agora().dia } = {}) {
+  const lugarNovo = v.lugarId || v.aqui;
+  const r = lugarNovo ? atividadeDeObjeto(perfil, v, { ultimoPonto, id: antiga.id, dia }) : null;
+  if (r?.erro) return r;
+  const lugar = r ? r.atividade.lugar : v.semLugar ? null : antiga.lugar || null;
+  return { atividade: { ...antiga, nome: v.nome, dias: [...v.dias], inicio: v.inicio, fim: v.fim, met: v.met, lugar, editadaEm: dia } };
+}
+
+/** Edita a atividade pelo id (pelo app). Devolve { atividade } ou { erro }, ou null se não existe. */
+export async function editarAtividadePorId(perfil, aid, v) {
+  const lista = perfil?.atividades || [];
+  const antiga = lista.find((a) => String(a.id) === String(aid));
+  if (!antiga) return null;
+  const ultimoPonto = v.aqui ? await colecao('locais_brutos').find({ jid: jidDe(perfil) }).sort({ ts: -1 }).limit(1).next().catch(() => null) : null;
+  const r = atividadeEditada(perfil, antiga, v, { ultimoPonto, dia: agora(fusoDe(perfil)).dia });
+  if (r.erro) return r;
+  await salvarPerfil({ jids: perfil.jids, atividades: lista.map((a) => (a === antiga ? r.atividade : a)) });
+  return r;
 }
 
 export async function removerAtividade(perfil, n) {
