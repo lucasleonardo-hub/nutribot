@@ -12,6 +12,9 @@ import { colecao, registrarPesagem, salvarPerfil } from './mongo.js';
 import { semanaISO } from './util.js';
 import { preferirPesagem } from './progresso.js';
 import { temHevy } from './treino.js';
+// fase 7: a nota de sono e os fatores do sono e da energia são os MESMOS do app (fonte única em api-montadores.js). O ciclo de
+// import (api-montadores importa energiaDoDia daqui) é seguro: nenhum dos dois chama o outro no carregamento do módulo
+import { avaliarNoite, fatoresSono, fatoresEnergia } from './api-montadores.js';
 
 const DIAS_DETALHE = 14; // dias listados um a um (peso) / noites (sono)
 const DIAS_ATIVIDADE = 7;
@@ -290,6 +293,100 @@ export function energiaDoDia({ sonos = [], atividades = [], dia } = {}) {
   };
 }
 
+// ============================================================
+// Fase 7: o que a IA passa a saber do relógio (nota de sono, energia, atividade, oxigênio e temperatura)
+// ============================================================
+const ORDEM_NIVEL = { atencao: 0, razoavel: 1, bom: 2, excelente: 3 };
+const TXT_NIVEL = { atencao: 'pede atenção', razoavel: 'razoável', bom: 'bom', excelente: 'excelente' };
+const TXT_ROTULO_NOTA = { excelente: 'excelente', boa: 'boa', razoavel: 'razoável', atencao: 'pede atenção' };
+/** Puro. Os fatores fracos (atenção ou razoável), do pior pro melhor; os sem dado (nivel null) ficam de fora. */
+export function fatoresFracos(fatores = [], max = 2) {
+  return (fatores || [])
+    .filter((f) => f && (f.nivel === 'atencao' || f.nivel === 'razoavel'))
+    .sort((a, b) => ORDEM_NIVEL[a.nivel] - ORDEM_NIVEL[b.nivel])
+    .slice(0, max);
+}
+const fatorTxt = (f) => `${String(f.nome).toLowerCase()} ${f.valor} (${TXT_NIVEL[f.nivel] || f.nivel})`;
+
+/** Faixas do "normal" da noite (adulto saudável dormindo): fora delas a IA fica sabendo; dentro, não vira assunto. */
+export const LIMITES_NOITE = { spo2Media: 94, spo2Min: 88, minutosAbaixo90: 5, deltaTemperatura: 0.5 };
+const decimal = (n, casas = 1) => Number(n).toFixed(casas).replace('.', ',');
+/**
+ * Puro. Oxigênio no sangue e temperatura da pele da noite (campos opcionais do coletor, fase 6b: `spo2 { media, min,
+ * minutosAbaixo90 }` e `temperatura { media, delta }`; podem não existir). Devolve os textos e se cada um fugiu do normal
+ * (LIMITES_NOITE). Decisão D12: isto é só da própria pessoa (dossiê, pensamentos, reflexão), nunca da linha do grupo.
+ * @returns {{ spo2: { texto, fora } | null, temperatura: { texto, fora } | null, foraDoNormal: string }}
+ */
+export function sinaisDaNoite(noite) {
+  const s = noite?.spo2;
+  const media = Number(s?.media);
+  const min = Number(s?.min);
+  const abaixo = Number(s?.minutosAbaixo90);
+  let spo2 = null;
+  if (Number.isFinite(media) && media > 50 && media <= 100) {
+    const fora = media < LIMITES_NOITE.spo2Media || (Number.isFinite(min) && min > 0 && min < LIMITES_NOITE.spo2Min) || (Number.isFinite(abaixo) && abaixo >= LIMITES_NOITE.minutosAbaixo90);
+    const partes = [`média ${Math.round(media)} %`];
+    if (Number.isFinite(min) && min > 0) partes.push(`mínimo ${Math.round(min)} %`);
+    if (Number.isFinite(abaixo) && abaixo >= 0) partes.push(`${Math.round(abaixo)} min abaixo de 90 %`);
+    spo2 = { texto: `oxigênio no sono: ${partes.join(', ')}`, fora };
+  }
+  const t = noite?.temperatura;
+  const delta = Number(t?.delta);
+  let temperatura = null;
+  if (t && Number.isFinite(delta)) {
+    const fora = Math.abs(delta) >= LIMITES_NOITE.deltaTemperatura;
+    temperatura = { texto: `temperatura da pele na noite: ${delta >= 0 ? '+' : '−'}${decimal(Math.abs(delta))} °C ${delta >= 0 ? 'acima' : 'abaixo'} da sua base`, fora };
+  } else if (t && Number.isFinite(Number(t.media))) {
+    temperatura = { texto: `temperatura da pele na noite: média ${decimal(Number(t.media))} °C (sem base pra comparar)`, fora: false };
+  }
+  const foras = [spo2, temperatura].filter((x) => x?.fora).map((x) => x.texto);
+  return { spo2, temperatura, foraDoNormal: foras.length ? `${foras.join('; ')} (fora do normal)` : '' };
+}
+
+/** Puro. Nota da noite que terminou em `dia` e o fator mais fraco, na mesma conta do app. null sem sono. */
+export function notaDaNoite({ sonos = [], atividades = [], dia }) {
+  const a = avaliarNoite(sonos, dia);
+  if (!a || a.nota == null) return null;
+  const fraco = fatoresFracos(fatoresSono({ sonos, atividades, dia }), 1)[0] || null;
+  return { dia, nota: a.nota, rotulo: a.rotulo, fraco: fraco ? { id: fraco.id, nome: fraco.nome, valor: fraco.valor, nivel: fraco.nivel } : null, texto: `nota do sono ${a.nota} (${TXT_ROTULO_NOTA[a.rotulo] || a.rotulo})${fraco ? `, ponto fraco: ${fatorTxt(fraco)}` : ''}` };
+}
+
+/** Puro. Energia do dia (a mesma do app) e até 2 fatores fracos. null sem relógio. */
+export function energiaComFatores({ sonos = [], atividades = [], dia }) {
+  const e = energiaDoDia({ sonos, atividades, dia });
+  if (!e) return null;
+  const fracos = fatoresFracos(fatoresEnergia({ sonos, atividades, dia }), 2);
+  return { nota: e.nota, fracos: fracos.map((f) => ({ id: f.id, nome: f.nome, valor: f.valor, nivel: f.nivel })), texto: `energia ${e.nota}/100${fracos.length ? `, puxada pra baixo por ${fracos.map(fatorTxt).join(' e ')}` : ''}` };
+}
+
+/**
+ * Puro. Atividade de um dia em texto: minutos ativos, distância (`distanciaM`), calorias ativas oficiais (`kcalAtivas`, só
+ * quando o coletor manda: a estimativa precisa do perfil e fica no app) e a hora mais ativa (`porHora.passos`). null sem nada.
+ * As calorias ativas NÃO somam ao gasto total, que já entra no balanço.
+ */
+export function atividadeDoDia(at) {
+  if (!at) return null;
+  const partes = [];
+  const min = Number(at.minAtivos);
+  if (Number.isFinite(min) && min >= 0 && at.minAtivos != null) partes.push(`${Math.round(min)} min ativos`);
+  const dist = Number(at.distanciaM);
+  if (Number.isFinite(dist) && dist > 0) partes.push(`${decimal(dist / 1000)} km`);
+  const ka = Number(at.kcalAtivas);
+  if (Number.isFinite(ka) && ka > 0) partes.push(`${milhar(ka)} kcal ativas (já dentro do gasto total)`);
+  const ph = Array.isArray(at.porHora?.passos) ? at.porHora.passos.map(Number) : null;
+  let pico = null;
+  if (ph?.length === 24) {
+    const max = Math.max(...ph);
+    if (max > 0) {
+      const h = ph.indexOf(max);
+      pico = `das ${h}h às ${(h + 1) % 24}h`;
+      partes.push(`mais ativa(o) ${pico}`);
+    }
+  }
+  if (!partes.length) return null;
+  return { minAtivos: Number.isFinite(min) && at.minAtivos != null ? Math.round(min) : null, distanciaKm: dist > 0 ? Math.round(dist / 100) / 10 : null, kcalAtivas: ka > 0 ? Math.round(ka) : null, pico, texto: partes.join(', ') };
+}
+
 export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha = 'planilha de saúde', comHevy = false } = {}) {
   hoje ||= [...pesos, ...sonos, ...atividades].map((x) => x.dia).sort().pop() || new Date().toISOString().slice(0, 10);
   const linhas = [];
@@ -303,7 +400,10 @@ export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha =
       // pesagem fora da manhã sai marcada: depois de comer e beber o peso sobe 0,5 a 1,5 kg
       const foraDaManha = p.hora && !(p.hora >= '04:00' && p.hora < '11:00');
       let l = `- ${dm(p.dia)}: ${kg(p.peso)}${foraDaManha ? ` (às ${p.hora}, fora da manhã: tende a sair mais alto)` : ''}`;
-      if (p.gordura) l += ` · gordura ${pct(p.gordura)} (massa gorda ~${kg((p.peso * p.gordura) / 100)}, magra ~${kg(p.peso * (1 - p.gordura / 100))})`;
+      // fase 7 (A23): a massa magra MEDIDA pelo relógio vale mais que a calculada a partir da gordura
+      const magraMedida = Number(p.magra) > 10 && Number(p.magra) < p.peso ? Number(p.magra) : null;
+      if (p.gordura) l += ` · gordura ${pct(p.gordura)} (massa gorda ~${kg((p.peso * p.gordura) / 100)}, magra ${magraMedida ? `${kg(magraMedida)} medida` : `~${kg(p.peso * (1 - p.gordura / 100))}`})`;
+      else if (magraMedida) l += ` · massa magra ${kg(magraMedida)} medida`;
       linhas.push(l);
     }
     const ultimo = pesos[pesos.length - 1];
@@ -358,6 +458,13 @@ export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha =
       const hDeitar = md == null ? '' : ` · deita em média ${String(Math.floor(md / 60) % 24).padStart(2, '0')}:${String(Math.round(md % 60)).padStart(2, '0')}`;
       linhas.push(`- Média das noites completas nos últimos 7 dias: ${hm(mt)} dormindo (profundo ${hm(mProf)})${hDeitar}. Referência: 7 a 9 h; profundo 1 a 2 h.`);
     }
+    // fase 7: a nota da última noite (a mesma do app) e, quando vierem do coletor, oxigênio e temperatura da pele. Este
+    // resumo é o dossiê DA PRÓPRIA PESSOA (D12): oxigênio e temperatura nunca vão pra linha do grupo
+    const ultima = sonos[sonos.length - 1];
+    const nd = ultima ? notaDaNoite({ sonos, atividades, dia: ultima.dia }) : null;
+    const sn = ultima ? sinaisDaNoite(ultima) : null;
+    const extrasNoite = [nd?.texto, sn?.spo2 ? `${sn.spo2.texto}${sn.spo2.fora ? ' (fora do normal)' : ' (normal)'}` : null, sn?.temperatura ? `${sn.temperatura.texto}${sn.temperatura.fora ? ' (fora do normal)' : ''}` : null].filter(Boolean);
+    if (extrasNoite.length) linhas.push(`- Última noite (${dm(ultima.dia)}): ${extrasNoite.join('; ')}.${sn?.spo2 || sn?.temperatura ? ' Oxigênio e temperatura são dado sensível: comente só se a própria pessoa perguntar do sono, nunca com outra pessoa.' : ''}`);
   }
 
   // ---- recuperação (batimento de repouso e HRV, do app Relógio; a planilha antiga não traz)
@@ -396,6 +503,9 @@ export function resumoSaude({ pesos, sonos, atividades }, { hoje, nomePlanilha =
     const mc = media(sete.map((a) => a.calorias).filter(Boolean));
     const nTreinos = sete.reduce((n, a) => n + a.treinos.length, 0);
     linhas.push(`- Média 7 dias: ${mp ? `${milhar(mp)} passos/dia` : 'passos sem dado'}${mc ? ` · gasto total ~${milhar(mc)} kcal/dia (estimativa do relógio, inclui o basal)` : ''} · ${nTreinos} treino(s) registrado(s).`);
+    const maisRecente = atividades[atividades.length - 1];
+    const ad = atividadeDoDia(maisRecente);
+    if (ad) linhas.push(`- Em ${dm(maisRecente.dia)}: ${ad.texto}.`);
   }
 
   return linhas.join('\n').trim();
@@ -449,6 +559,29 @@ export function indicadoresRelogio({ pesos, sonos, atividades }, { hoje, comHevy
     Object.assign(r, { fcRepouso: rec.ultimo, fcMedia: rec.media14, recuperacao: rec.status, hrv: rec.hrvUltimo });
     partes.push(rec.curta);
   }
+  // fase 7: nota do sono e o ponto fraco, energia e os fatores fracos, atividade do dia (D2: saúde pode circular no grupo)
+  if (ultimaNoite) {
+    const nd = notaDaNoite({ sonos, atividades, dia: ultimaNoite.dia });
+    if (nd) {
+      r.sono = { dia: nd.dia, nota: nd.nota, rotulo: nd.rotulo, fraco: nd.fraco };
+      partes.push(nd.texto);
+    }
+  }
+  const en = energiaComFatores({ sonos, atividades, dia: hoje });
+  if (en) {
+    r.energia = { dia: hoje, nota: en.nota, fracos: en.fracos };
+    partes.push(`${en.texto} em ${dm(hoje)}`);
+  }
+  const atHoje = atividades.find((a) => a.dia === hoje);
+  const ad = atividadeDoDia(atHoje);
+  if (ad) {
+    r.atividade = { dia: hoje, minAtivos: ad.minAtivos, distanciaKm: ad.distanciaKm, kcalAtivas: ad.kcalAtivas, pico: ad.pico };
+    partes.push(`atividade em ${dm(hoje)} (até o último envio): ${ad.texto}`);
+  }
+  // D12: oxigênio e temperatura fora do normal ficam num campo À PARTE, que só entra no contexto da própria pessoa. A `linha`
+  // (bloco PERFIS DO GRUPO, resumos, fala programada) nunca leva esses dois
+  const sn = ultimaNoite ? sinaisDaNoite(ultimaNoite) : null;
+  r.linhaPropria = sn?.foraDoNormal ? `noite de ${dm(ultimaNoite.dia)}: ${sn.foraDoNormal}` : '';
   // gasto total por dia (últimos 30 dias) pro balanço energético em código (resumo.js visaoPeriodo)
   const gastos = {};
   for (const a of atividades.filter((x) => x.dia >= diasAtras(hoje, 29) && x.calorias)) gastos[a.dia] = a.calorias;

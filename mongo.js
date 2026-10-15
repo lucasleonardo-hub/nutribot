@@ -47,7 +47,44 @@ export async function garantirIndices() {
     colecao('humor').createIndex({ jid: 1, dia: 1 }, { unique: true }),
     colecao('eventos_app').createIndex({ jid: 1, dia: 1 }),
     colecao('planos').createIndex({ jid: 1, criadoEm: -1 }),
+    // fase 7: cupom repetido é procurado pela chave a cada nota (registrarNota). Não é único: nota antiga sem chave (null) e
+    // duas lidas ao mesmo tempo não podem impedir o índice de nascer; a repetição continua barrada pelo findOne
+    colecao('notas').createIndex({ chave: 1 }, { name: 'nota_por_chave', partialFilterExpression: { chave: { $type: 'string' } } }),
+    // fase 7: perguntas feitas pelo app (perguntas.js): histórico por pessoa e 180 dias no Mongo (D16; o Drive guarda pra sempre)
+    colecao('perguntas_app').createIndex({ jid: 1, em: -1 }),
+    colecao('perguntas_app').createIndex({ em: 1 }, { name: 'perguntas_ttl', expireAfterSeconds: 180 * 86400 }),
+    colecao('falas').createIndex({ dia: 1 }), // fase 7: texto das notas de voz (dia.js grava; /resumos e /falas leem)
   ]).catch((e) => console.warn('[mongo] índices:', e.message));
+  // despensa: um documento por {jid, k}. As duplicatas que já existirem são separadas ANTES (nada é apagado) e só então o
+  // índice único nasce; se ainda assim falhar, a despensa segue funcionando sem ele (só sem a garantia)
+  await garantirIndiceDespensa(colecao('despensa')).catch((e) => console.warn('[mongo] índice da despensa:', e.message));
+}
+
+/**
+ * Puro. Das duplicatas de {jid, k} da despensa (grupos do aggregate: { _id: { jid, k }, docs: [{ _id, atualizadoEm }] }),
+ * quais renomear: em cada grupo fica o atualizado por último com a chave original; os outros ganham `k` = "<k>#dup-<_id>".
+ * Nenhum dado é apagado: o item repetido continua na lista da pessoa (como hoje) e pode ser tirado pelo app ou pelo
+ * "!despensa tirar". Devolve [{ _id, k }].
+ */
+export function planoDuplicatasDespensa(grupos) {
+  const renomear = [];
+  for (const g of grupos || []) {
+    const docs = [...(g?.docs || [])].sort((a, b) => new Date(b.atualizadoEm || 0) - new Date(a.atualizadoEm || 0) || String(b._id).localeCompare(String(a._id)));
+    for (const d of docs.slice(1)) renomear.push({ _id: d._id, k: `${g._id.k}#dup-${String(d._id)}` });
+  }
+  return renomear;
+}
+
+/** Separa as duplicatas de {jid, k} (sem apagar) e cria o índice único da despensa. `col` = a coleção (injetável no teste). */
+export async function garantirIndiceDespensa(col) {
+  const grupos = await col
+    .aggregate([{ $group: { _id: { jid: '$jid', k: '$k' }, n: { $sum: 1 }, docs: { $push: { _id: '$_id', atualizadoEm: '$atualizadoEm' } } } }, { $match: { n: { $gt: 1 } } }])
+    .toArray();
+  const renomear = planoDuplicatasDespensa(grupos);
+  for (const r of renomear) await col.updateOne({ _id: r._id }, { $set: { k: r.k, duplicataDe: r.k.split('#dup-')[0] } });
+  if (renomear.length) console.warn(`[mongo] despensa: ${renomear.length} item(ns) repetido(s) separado(s) antes do índice único (nada apagado)`);
+  await col.createIndex({ jid: 1, k: 1 }, { name: 'despensa_item', unique: true });
+  return renomear.length;
 }
 
 export async function fecharMongo() {

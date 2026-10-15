@@ -723,7 +723,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
     (calibracao ? `${calibracao}\n\n` : '') +
     (perfil.anotacoes?.length ? `ANOTAÇÕES QUE VOCÊ GUARDOU SOBRE ${perfil.nome.split(' ')[0].toUpperCase()} (fatos de longo prazo que você mesma anotou em outros dias; use, não repita pra pessoa como novidade): ${perfil.anotacoes.slice(-10).map((x) => x.texto).join(' · ')}\n\n` : '') +
     (agenda ? `AGENDA DE ${perfil.nome} (Google Agenda DELA(E), só pra falar COM ELA(E)):\n${agenda}\n\n` : '') +
-    (app ? `PELO APP (o que ${perfil.nome} registrou no aplicativo do NutriBot: como está se sentindo hoje e compromissos que ela(e) mesma(o) marcou; é contexto DELA(E), pra encaixar a dica no dia real: jantar fora hoje muda o almoço, humor ou energia baixos pedem resposta mais leve e sem cobrança; use UMA vez, sem repetir, e NUNCA comente com outra pessoa):\n${app}\n\n` : '') +
+    (app ? `PELO APP (o que ${perfil.nome} registrou no aplicativo do NutriBot: como está se sentindo hoje e nos últimos dias, compromissos que ela(e) mesma(o) marcou e perguntas que te fez lá; é contexto DELA(E), pra encaixar a dica no dia real: jantar fora hoje muda o almoço, humor ou energia baixos pedem resposta mais leve e sem cobrança; use UMA vez, sem repetir, e NUNCA comente com outra pessoa. Esta resposta sai NO GRUPO: pergunta feita no app e texto do humor são CONFIDÊNCIA, então nunca copie, nunca resuma e nunca diga "você me perguntou/contou no app"; só retome o assunto se ela(e) mesma(o) puxar agora):\n${app}\n\n` : '') +
     (lugares ? `${lugares}\n\n` : '') +
     (roteiro ? `${roteiro}\n\n` : '') +
     (atividades ? `${atividades}\n\n` : '') +
@@ -1290,14 +1290,27 @@ export async function revisarRespostaReserva({ perfil, texto, imagem, mimeType, 
  * partindo do que ela costuma comer nesse horário, do que tem na despensa, de onde ela deve estar (rotina/agenda, nunca
  * endereço) e do humor de hoje. JSON estrito; `_gerar` injetável nos testes.
  */
-export async function sugerirRefeicao({ perfil, slot, nomeSlot, hora = null, horaAgora = null, restam = null, faixa = null, padraoSlot = '', registradasHoje = '', despensa = '', agenda = '', lugares = '', eventos = '', humor = '', persona = '', dia, _gerar = gerar }) {
+/**
+ * Fase 7 (P01, P02, P05): o que o app passa a levar da cabeça do WhatsApp sem depender de quem chama: as lições ativas (as
+ * mesmas do montarSystem) e os fatos que a Nutri anotou (aversões, combinados), quando o `contextoApp` não os trouxer.
+ */
+function cabecaDoApp(perfil, contextoApp = '') {
+  const licoes = blocoLicoes(licoesAtivas);
+  const temFatos = /FATOS QUE VOCÊ GUARDOU/.test(contextoApp);
+  const fatos = !temFatos && perfil?.anotacoes?.length ? `FATOS QUE VOCÊ GUARDOU SOBRE A PESSOA (aversões, combinados; respeite): ${perfil.anotacoes.slice(-10).map((x) => x.texto).join(' · ')}` : '';
+  return [licoes, fatos, String(contextoApp || '').trim()].filter(Boolean).join('\n\n');
+}
+
+export async function sugerirRefeicao({ perfil, slot, nomeSlot, hora = null, horaAgora = null, restam = null, faixa = null, padraoSlot = '', registradasHoje = '', despensa = '', agenda = '', lugares = '', eventos = '', humor = '', persona = '', contextoApp = '', dia, _gerar = gerar }) {
   const primeiro = String(perfil?.nome || 'a pessoa').split(' ')[0];
+  const cabeca = cabecaDoApp(perfil, contextoApp);
   const texto =
     (persona ? `${persona}\n\n` : '') +
     `Você vai sugerir a PRÓXIMA refeição de ${primeiro} (${nomeSlot || slot}${hora ? `, por volta das ${hora}` : ''}${horaAgora ? `; agora são ${horaAgora}` : ''}), ${dia ? `hoje ${dataExtenso(dia)}` : 'hoje'}.\n` +
     `PESSOA: ${perfil?.peso ? `${perfil.peso} kg · ` : ''}${perfil?.altura ? `${perfil.altura} cm · ` : ''}objetivo: ${perfil?.objetivo || '?'} · dieta: ${perfil?.dieta || 'onívora'}${perfil?.restricoes ? ` · restrições: ${perfil.restricoes}` : ''}\n` +
     (perfil?.produtos?.length ? `PRODUTOS FIXOS QUE ELA(E) TEM (rótulo lido): ${perfil.produtos.map((p) => `${p.nome} (${p.kcal} kcal/${p.porcao || 'porção'})`).join(', ')}\n` : '') +
     (perfil?.notas ? `SUAS NOTAS SOBRE A PESSOA (preferências, aversões): ${String(perfil.notas).slice(0, 900)}\n` : '') +
+    (cabeca ? `${cabeca}\n(é a mesma cabeça do WhatsApp: não sugira o que ela(e) rejeita, e encaixe no dia real)\n` : '') +
     (padraoSlot ? `O QUE ELA(E) COSTUMA COMER NESSE HORÁRIO: ${padraoSlot}\n` : '') +
     (registradasHoje ? `JÁ COMEU HOJE: ${registradasHoje}\n` : 'Ainda não registrou nada hoje.\n') +
     (faixa ? `FAIXA DO DIA: ${faixa.min} a ${faixa.max} kcal${restam != null ? `; restam cerca de ${Math.max(0, Math.round(restam))} kcal pro resto do dia` : ''}.\n` : '') +
@@ -1342,8 +1355,9 @@ export async function sugerirRefeicao({ perfil, slot, nomeSlot, hora = null, hor
  * Pergunta rápida pelo app (fase 5): a Nutri responde em texto puro (sem asterisco, sem emoji), até 120 palavras, no
  * personagem, com o contexto condensado da pessoa. Nada vai pro grupo nem pra memória. `_gerar` injetável nos testes.
  */
-export async function responderApp({ perfil, pergunta, anteriores = [], persona = '', dia, horaAgora = null, hoje = '', semana = '', despensa = '', plano = '', humor = '', treino = '', _gerar = gerar }) {
+export async function responderApp({ perfil, pergunta, anteriores = [], persona = '', dia, horaAgora = null, hoje = '', semana = '', despensa = '', plano = '', humor = '', treino = '', contextoApp = '', _gerar = gerar }) {
   const primeiro = String(perfil?.nome || 'a pessoa').split(' ')[0];
+  const cabeca = cabecaDoApp(perfil, contextoApp);
   const historico = (anteriores || [])
     .slice(-5)
     .map((t) => `${primeiro}: ${String(t?.pergunta || '').slice(0, 300)}\nVocê: ${String(t?.resposta || '').slice(0, 500)}`)
@@ -1354,6 +1368,7 @@ export async function responderApp({ perfil, pergunta, anteriores = [], persona 
     `PESSOA: ${perfil?.peso ? `${perfil.peso} kg · ` : ''}${perfil?.altura ? `${perfil.altura} cm · ` : ''}objetivo: ${perfil?.objetivo || '?'} · dieta: ${perfil?.dieta || 'onívora'}${perfil?.restricoes ? ` · restrições: ${perfil.restricoes}` : ''}\n` +
     (perfil?.produtos?.length ? `PRODUTOS FIXOS: ${perfil.produtos.map((p) => `${p.nome} (${p.kcal} kcal/${p.porcao || 'porção'})`).join(', ')}\n` : '') +
     (perfil?.notas ? `SUAS NOTAS SOBRE ELA(E): ${String(perfil.notas).slice(0, 900)}\n` : '') +
+    (cabeca ? `${cabeca}\n(é a mesma cabeça do WhatsApp: o que ela(e) disse hoje no grupo continua aqui; não cite o grupo como "lá no WhatsApp você disse" sem necessidade)\n` : '') +
     (hoje ? `HOJE${dia ? ` (${dataExtenso(dia)}${horaAgora ? `, ${horaAgora}` : ''})` : ''}: ${hoje}\n` : '') +
     (semana ? `ÚLTIMOS 7 DIAS: ${semana}\n` : '') +
     (treino ? `TREINO: ${treino}\n` : '') +
@@ -1416,13 +1431,14 @@ export async function extrairMomentos({ dia, perfis, historico, refeicoes, conte
 // ============================================================
 // 7) Cobrança de refeição que não apareceu no horário de costume
 // ============================================================
-export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, costume, persona, historico, conhecimento, dossie, dia }) {
+export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, costume, persona, historico, conhecimento, dossie, dia, contexto = '' }) {
   return gerar({
     contents:
       `Hoje é ${dataExtenso(dia)}, são ${horaAgora}. ${perfil.nome} costuma mandar o(a) ${slot} por volta das ${horaHabitual}${costume ? ` (normalmente: ${costume})` : ''} e HOJE ainda não mandou nada dessa refeição.\n` +
       `Conversa de hoje até agora:\n${blocoHistorico(historico, 40)}\n\n` +
       blocoConhecimento(conhecimento) +
       blocoDossie(perfil.nome, dossie) +
+      (contexto ? `${contexto}\n(Use pra acertar o tom; não leia números em voz alta. Oxigênio e temperatura, se aparecerem no dossiê, nunca entram numa cobrança.)\n\n` : '') +
       `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem (simpática, com humor leve): pergunte onde está a refeição (foto ou descrição), lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já falou algo hoje que explique o sumiço, acolha em vez de cobrar. Curta e direta, 1 ou 2 emojis. A pessoa NÃO apareceu: nada de bordão de chegada ("Apareceu a ..."); apelido no máximo uma vez. Só o texto da mensagem, NENHUMA linha técnica (REFEICAO, ATUALIZAR, HABITO, REGISTRO). Não use "SILENCIO".`,
     config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 400, leve: true },
   });
@@ -1838,7 +1854,8 @@ export async function pensarSobrePessoa({ perfil, retrato, anterior, hipoteses, 
       (hipoteses?.length ? `SUAS HIPÓTESES ABERTAS (diga se o dia de hoje traz sinal a favor, contra ou nenhum):\n${hipoteses.map((h) => `- id ${h.id}: ${h.texto}`).join('\n')}\n\n` : '') +
       (investigacao ? `O QUE VOCÊ FOI CONFERIR AGORA HÁ POUCO (suas consultas aos dados; cruze com o retrato):\n${investigacao}\n\n` : '') +
       `${retrato}\n` +
-      `Escreva o pensamento em até 110 palavras, primeira pessoa, no seu jeito: o que está notando HOJE cruzando as fontes (comida x padrão, lugar x horário, gasto x apetite, compra x prato, atividade x cansaço), o que te preocupa ou te agrada, e o que quer observar até a noite. Nada de repetir o pensamento anterior; se nada mudou de verdade, diga em uma frase o que confirma. Sem endereço. Sem conselho dirigido a ela(e): é pensamento, não mensagem.\n` +
+      `Escreva o pensamento em até 110 palavras, primeira pessoa, no seu jeito: o que está notando HOJE cruzando as fontes (comida x padrão, lugar x horário, gasto x apetite, compra x prato, atividade x cansaço, sono e energia x fome e treino), o que te preocupa ou te agrada, e o que quer observar até a noite. Nada de repetir o pensamento anterior; se nada mudou de verdade, diga em uma frase o que confirma. Sem endereço. Sem conselho dirigido a ela(e): é pensamento, não mensagem.\n` +
+      `CONFIDÊNCIA: o que ela(e) perguntou no app e o que escreveu no humor entram no seu raciocínio pelo SENTIDO ("anda preocupada com o sono"), nunca copiados: o pensamento pode ser lido de novo em outros lugares. Assunto que só existe por causa de uma pergunta do app ou do humor NÃO vale_falar (no grupo ela(e) não contou isso).\n` +
       `Também devolva: notar = até 3 fatos curtos que valem guardar (\"almoçou às 15h de novo\", \"passou no mercado e não mandou nota\"); sinais = para cada hipótese aberta que o dia tocou, { id, direcao: a_favor | contra | neutro, evidencia (até 20 palavras) }; vale_falar = true só se houver algo que mereceria uma mensagem espontânea (não vai ser enviada; é só o seu julgamento).` +
       ` Se vale_falar for true, devolva também assunto (3 a 6 palavras), vale_falar_por (uma frase: por que a mensagem ajudaria AGORA) e confianca (0 a 1: quanto você apostaria que a pessoa agradece a mensagem). Vale falar só quando ajudaria agora e nada parecido foi dito hoje; na dúvida, false.`,
     config: {
@@ -1918,7 +1935,7 @@ export async function extrairHipoteses({ perfil, texto, abertas = [], dia }) {
 const FERRAMENTAS_REFLEXAO =
   '\n\nFERRAMENTAS: antes de escrever, consulte o que faltar pra reflexão ficar honesta (refeições do período, tendência até a etapa, treino e força, relógio, lembranças, sua base de conhecimento). Até 4 consultas; depois escreva a reflexão completa de uma vez.';
 
-export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, hipoteses, despensa, pensamentos, persona, dia, ferramentas = null }) {
+export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugares, treino, relogio, documentos, anterior, hipoteses, despensa, pensamentos, app = '', persona, dia, ferramentas = null }) {
   const primeiro = perfil.nome.split(' ')[0];
   const contents =
       `Hoje é ${dataExtenso(dia)}. Este é o SEU caderno particular sobre ${perfil.nome} (${perfil.peso || '?'} kg, ${perfil.altura || '?'} cm, objetivo: ${perfil.objetivo || '?'}, ${perfil.cidade || 'cidade ?'}, dieta ${perfil.dieta || '?'}). Ninguém pede nada aqui: é você pensando, sem prompt, sem lista pra preencher.\n\n` +
@@ -1933,6 +1950,7 @@ export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugare
       (hipoteses ? `${hipoteses}\n\n` : '') +
       (despensa ? `${despensa}\n\n` : '') +
       (pensamentos ? `${pensamentos}\n\n` : '') +
+      (app ? `PELO APP NA SEMANA (o que ${primeiro} marcou e perguntou no aplicativo; é CONFIDÊNCIA: use como sinal pras suas suspeitas, pelo sentido, sem copiar pergunta nem texto do humor, porque a síntese e as suspeitas aparecem no grupo pelo !reflexao):\n${app}\n\n` : '') +
       `Escreva, em primeira pessoa e no seu jeito, O QUE VOCÊ PENSA sobre ${primeiro}: como essa pessoa funciona (rotina real, onde passa o dia, quanto gasta e quanto come, como dorme, quando treina, quando desanda), o que os dados dizem que ela talvez não perceba, o que você suspeita mas ainda não tem certeza e quer observar (escreva essas suspeitas de forma explícita, começando por "Suspeito que" ou "Quero observar se": elas serão conferidas nos dados da semana que vem), o que te preocupa e o que te impressiona, e como isso muda o jeito de você falar com ela. Ligue os pontos entre fontes diferentes (ex.: dia de faculdade à noite x jantar tarde; gasto do relógio x apetite; lugar x escolha de comida). Pode ser em parágrafos corridos, pode ter uma lista se ajudar, sem títulos obrigatórios e sem tom de relatório: é reflexão, não ficha. Sem endereço, rua ou coordenada (bairro pode). Nada sobre outras pessoas do grupo. Até 700 palavras.\n` +
       `Termine com um parágrafo separado começando exatamente com "Em uma frase:" resumindo como você entende ${primeiro} hoje, em no máximo 60 palavras, do jeito que você usaria na cabeça antes de responder uma mensagem dela(e). Sem linha ATUALIZAR. Sem [[links]].` +
     (ferramentas ? FERRAMENTAS_REFLEXAO : '');
@@ -2035,7 +2053,7 @@ export async function embutir(texto, taskType = 'RETRIEVAL_DOCUMENT') {
 }
 
 /** Plano da semana + lista de compras, a partir do que a pessoa já come, do objetivo e da meta calculada. Uma chamada Flash. */
-export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares, despensa, semanaTipica, soPrincipal = false, prazoMs = 540_000, ferramentas = null }) {
+export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, agenda, padrao, grupo, pedido, semana, metaSemana, mercados, lugares, despensa, semanaTipica, app = '', soPrincipal = false, prazoMs = 540_000, ferramentas = null }) {
   const primeiro = perfil.nome.split(' ')[0];
   const cidade = perfil.cidade || 'a cidade dela(e)';
   const slots = padrao?.slots ? Object.keys(padrao.slots) : [];
@@ -2058,6 +2076,7 @@ export async function planoSemanal({ perfil, visao, conhecimento, persona, dia, 
       (despensa ? `${despensa}\n(o plano começa pelo que JÁ TEM em casa, usando primeiro o que vence; a lista de compras NÃO repete o que está na despensa, salvo se estiver acabando)\n\n` : '') +
       (perfil.reflexao?.sintese ? `COMO VOCÊ ENTENDE ESSA PESSOA (sua reflexão): ${perfil.reflexao.sintese}\n\n` : '') +
       (agenda ? `AGENDA DELA(E) NOS PRÓXIMOS DIAS (encaixe as refeições nas janelas livres e respeite aula/trabalho/reunião):\n${agenda}\n\n` : '') +
+      (app ? `${app}\n(o plano sai no grupo: use isto pra encaixar os dias, sem citar humor nem nada pessoal que não seja comida e treino)\n\n` : '') +
       (pedido ? `PEDIDO DA PESSOA PRA ESTE PLANO (orçamento, o que tem no mercado perto, o que quer ou não quer; manda nisso): ${pedido}\n\n` : '') +
       `Hoje é ${dataExtenso(dia)}. Monte o *PLANO DA SEMANA* de ${primeiro}, no seu personagem, até 650 palavras.${semana ? ` O plano cobre de ${semana.dias[0].rotulo} a ${semana.dias[6].rotulo}${semana.proximaSemana ? ' (a semana que vem: a lista de compras é pra comprar neste fim de semana)' : ''}; use exatamente esses dias, nessa ordem, como títulos.` : ''}\n` +
       `REGRAS DE ADAPTAÇÃO (as mais importantes):\n` +

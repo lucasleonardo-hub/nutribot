@@ -145,6 +145,32 @@ data class DiaSerie(
     }
 }
 
+/**
+ * Fase 7: oxigênio no sangue durante o sono, `sono.spo2 = { media, min|null, minutosAbaixo90|null }` (só existe quando o
+ * relógio mandou, com a permissão dada). null quando a chave não veio ou não tem média.
+ */
+data class OxigenioSono(val media: Double, val min: Double? = null, val minutosAbaixo90: Double? = null) {
+    companion object {
+        fun de(j: JSONObject?): OxigenioSono? {
+            val media = j.num("media")?.takeIf { it > 0 } ?: return null
+            return OxigenioSono(media, j.num("min"), j.num("minutosAbaixo90"))
+        }
+    }
+}
+
+/**
+ * Fase 7: temperatura da pele na noite, `sono.temperatura = { media|null, delta }` (°C; `delta` = diferença da linha de base
+ * da pessoa). null quando a chave não veio ou não tem `delta`.
+ */
+data class TemperaturaSono(val delta: Double, val media: Double? = null) {
+    companion object {
+        fun de(j: JSONObject?): TemperaturaSono? {
+            val delta = j.num("delta") ?: return null
+            return TemperaturaSono(delta, j.num("media"))
+        }
+    }
+}
+
 /** Evento = { id, dia, hora|null, titulo, tipo, nota|null, criadoEm }; tipo em comer_fora|festa|viagem|treino|consulta|outro. */
 data class Evento(val id: String, val dia: String, val hora: String?, val titulo: String, val tipo: String, val nota: String?) {
     companion object {

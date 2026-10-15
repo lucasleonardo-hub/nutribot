@@ -11,6 +11,25 @@ import { lembrar, garantirDiaAtual } from './dia.js';
 import { vocabularioErrado, removerFrasesCom, prepararCobranca } from './consciencia.js';
 import { enriquecerPerfis } from './perfis.js';
 import { ocupadoAgora } from './agenda.js';
+import { slotsSuspensos, blocoEventosApp, semCorpoSensivel } from './contexto-app.js';
+import { humorDe } from './mongo.js';
+
+/**
+ * Puro. O que a cobrança passa a saber (fase 7), em texto pro prompt que já existe (sem chamada nova): eventos do app de hoje
+ * (os que suspenderam outra refeição explicam o dia: "almoçou fora"), sono e energia da linha do relógio, e o humor de hoje só como tom (sem número nem texto:
+ * a cobrança sai no grupo). '' sem nada.
+ */
+export function contextoDaCobranca({ perfil, dia, eventos = [], humor = null } = {}) {
+  const partes = [];
+  // a cobrança sai no grupo: só refeição fora, festa e viagem, sem a nota (consulta, treino e compromisso pessoal não)
+  const ev = blocoEventosApp(eventos, { hoje: dia, dias: 0, titulo: 'MARCADO NO APP PRA HOJE (só pra entender o dia; não cite no grupo)', publico: true });
+  if (ev) partes.push(ev);
+  const r = perfil?.relogio || {};
+  const corpo = [r.sono?.nota != null ? `nota do sono ${r.sono.nota}${r.sono.fraco ? ` (ponto fraco: ${String(r.sono.fraco.nome).toLowerCase()})` : ''}` : null, r.energia?.nota != null && r.energia.dia === dia ? `energia ${r.energia.nota}/100` : null].filter(Boolean);
+  if (corpo.length) partes.push(`CORPO HOJE (relógio): ${corpo.join(', ')}. Sono ruim ou energia baixa pedem cobrança mais leve.`);
+  if (humor?.humor && Number(humor.humor) <= 2) partes.push('TOM: pelo app, a pessoa marcou que o dia não está bom. Cobre com carinho, sem pressão, e NÃO cite humor, app ou o que ela marcou.');
+  return partes.join('\n');
+}
 
 export const ATRASO_COBRANCA_MIN = Number(process.env.ATRASO_COBRANCA_MIN) || 75; // minutos depois do horário habitual
 export const JANELA_COBRANCA_MIN = Number(process.env.JANELA_COBRANCA_MIN) || 120; // depois disso não cobra mais (fica pro resumo do dia)
@@ -31,8 +50,19 @@ export async function verificarCobrancas() {
     const { dia: diaP, horaLocal: hora } = marcaDeTempo(p);
     const agoraMin = minutosDe(hora);
     if (agoraMin < 7 * 60 || agoraMin > 23 * 60) continue; // ninguém merece cobrança de madrugada
+    // fase 7: refeição que um evento do app tirou de casa (comer fora, festa, viagem) não é cobrada
+    const suspensos = slotsSuspensos(p._eventosApp || [], diaP);
     // pega só a refeição atrasada mais recente (se o bot ficou fora, não dispara 3 cobranças de uma vez)
     const pendentes = SLOTS.filter((s) => s.cobrar).filter((s) => {
+      if (suspensos.has(s.id)) {
+        const chave = `${p.nome}:${s.id}`;
+        if (!estado.memoria.cobrancas[chave]) {
+          const e = suspensos.get(s.id);
+          console.log(`[cobranca] ${p.nome}: ${s.nome} suspenso pelo evento do app "${e.titulo}" (${e.tipo}); não cobro`);
+          estado.memoria.cobrancas[chave] = true;
+        }
+        return false;
+      }
       const h = p._hab[s.id];
       if (!h.aprendido) return false; // só cobra horário que ela JÁ aprendeu (3+ refeições registradas nesse slot)
       const limite = h.minutos + ATRASO_COBRANCA_MIN;
@@ -74,7 +104,9 @@ export async function verificarCobrancas() {
         persona: estado.persona,
         historico: estado.memoria.mensagens,
         conhecimento: docsPara(p, { soBase: true }), // só o documento base: cobrança não precisa da base inteira
-        dossie: await comTempo(dossieDe(p), 20_000, 'dossiê').catch(() => ''),
+        // a cobrança sai no grupo: a linha de oxigênio e temperatura do dossiê não entra no prompt (D12)
+        dossie: semCorpoSensivel(await comTempo(dossieDe(p), 20_000, 'dossiê').catch(() => '')).texto,
+        contexto: contextoDaCobranca({ perfil: p, dia: diaP, eventos: p._eventosApp || [], humor: (await humorDe(p.jids || [], diaP, diaP).catch(() => []))[0] || null }),
       });
       if (msg && !/^silencio\W*$/i.test(msg)) {
         // objetivo trocado não passa nem na cobrança ("seu déficit (ops, superávit)" pra quem faz hipertrofia, 28/09 22:30)

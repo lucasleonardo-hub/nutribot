@@ -42,6 +42,7 @@ const C = await import('../consciencia.js');
 const { ferramentasPara } = await import('../ferramentas.js');
 const { parecePedidoOuPlano, agora } = await import('../util.js');
 const { rotaPerguntaProgresso, conferirTextoProgresso, problemaDeProgresso, tirarFrases } = await import('../progresso.js');
+const { semConfidencias } = await import('../contexto-app.js');
 
 const modelo = flag('modelo') || (chaveDedicada ? 'flash' : 'lite');
 const leve = modelo !== 'flash';
@@ -196,6 +197,15 @@ async function aplicarGuardas({ r, base, cen, perfil, perfis, texto, historico, 
     resposta = C.concordarVocativos(C.corrigirGirias(resposta), { genero: perfil.genero, outrosNomes: perfis.filter((p) => p !== perfil).map((p) => p.nome.split(' ')[0]) });
     if (resposta !== antes) guardas.push('gíria/vocativo corrigido');
   }
+  // (6) confidência do app (D10), como no mensagens.js: frase que copia pergunta do app ou texto do humor, ou que diz
+  // "você me perguntou/contou no app", sai da resposta que vai pro grupo
+  if (cen.extras?.confidencias?.length) {
+    const c = semConfidencias(resposta, cen.extras.confidencias);
+    if (c.removidas.length) {
+      resposta = c.texto;
+      guardas.push(`confidência do app retirada (${c.removidas.length})`);
+    }
+  }
   return { final: resposta, refeicao, guardas };
 }
 
@@ -262,6 +272,7 @@ for (const [i, cen] of lista.entries()) {
     agenda: '',
     lugares: extras.lugares || '',
     roteiro: extras.roteiro || '',
+    app: extras.app || '', // bloco PELO APP (fase 7), na posição e com o cabeçalho de produção
     atividades: '',
     treinoHoje: '',
     forca: '',

@@ -72,7 +72,54 @@ export function etapasDoSono(lista, fuso = 'America/Sao_Paulo') {
   return juntas.slice(0, MAX_ETAPAS).map((e) => ({ ini: localDe(e.i, fuso).hora, fim: localDe(e.f, fuso).hora, t: e.t }));
 }
 /** Teto por hora: acima disso é leitura duplicada ou corrompida do Health Connect. */
-export const MAX_POR_HORA = { passos: 20000, kcal: 3000 };
+export const MAX_POR_HORA = { passos: 20000, kcal: 3000, kcalAtivas: 2000 };
+
+// ---------- campos novos da fase 7 (as 4 permissões opcionais; só o coletor do app 2.7+ manda, e só o que a pessoa liberou) ----------
+/** Faixas plausíveis: fora delas é leitura errada do sensor ou do agregado, e o campo não entra. */
+export const FAIXAS_F7 = {
+  distanciaM: [0, 300000], // até 300 km no dia
+  kcalAtivas: [0, 8000],
+  spo2Media: [70, 100],
+  spo2Min: [50, 100],
+  temperatura: [25, 42], // °C da pele
+  deltaTemperatura: [-5, 5], // °C contra a linha de base do próprio registro
+};
+// os campos opcionais (fase 6 e, desde a 7, oxigênio, temperatura, distância e calorias ativas): o envio que não os traz
+// não apaga o que estava guardado (veja `herdar` no fundir)
+const CAMPOS_SONO_F6 = ['etapas', 'fcMedia', 'fcMin', 'hrv', 'spo2', 'temperatura'];
+const CAMPOS_ATIVIDADE_F6 = ['porHora', 'minAtivos', 'distanciaM', 'kcalAtivas'];
+/** Número (não booleano) dentro de [min, max] com `casas` decimais; senão null. */
+const naFaixaDec = (v, min, max, casas = 1) => {
+  if (typeof v === 'boolean') return null;
+  const x = n(v);
+  return x != null && x >= min && x <= max ? Math.round(x * 10 ** casas) / 10 ** casas : null;
+};
+/**
+ * Puro. Oxigênio no sangue durante a sessão de sono, como o coletor manda ({ media, min, minutosAbaixo90 }): média 70–100 %
+ * (obrigatória), mínimo 50–100 % e não acima da média, minutos abaixo de 90 % entre 0 e 1440. Sem média válida = null;
+ * mínimo ou minutos fora da faixa viram null (o resto fica).
+ * @returns {{ media: number, min: number|null, minutosAbaixo90: number|null } | null}
+ */
+export function oxigenioDoSono(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const media = naFaixaDec(v.media, ...FAIXAS_F7.spo2Media, 1);
+  if (media == null) return null;
+  let min = naFaixaDec(v.min, ...FAIXAS_F7.spo2Min, 1);
+  if (min != null && min > media) min = null;
+  const minutosAbaixo90 = typeof v.minutosAbaixo90 === 'boolean' ? null : naFaixa(v.minutosAbaixo90, 0, 1440);
+  return { media, min, minutosAbaixo90 };
+}
+/**
+ * Puro. Temperatura da pele na sessão de sono ({ media, delta }): `delta` (°C contra a linha de base do registro, −5 a +5) é
+ * obrigatório, porque sem ele não há "diferença do normal"; `media` (25–42 °C) só existe quando o registro trouxe a base.
+ * @returns {{ media: number|null, delta: number } | null}
+ */
+export function temperaturaDoSono(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const delta = naFaixaDec(v.delta, ...FAIXAS_F7.deltaTemperatura, 2);
+  if (delta == null) return null;
+  return { media: naFaixaDec(v.media, ...FAIXAS_F7.temperatura, 2), delta };
+}
 /** Puro. Vetor de 24 números entre 0 e `max` (um por hora do dia), arredondados; qualquer outra coisa = null. */
 export function vetor24(v, max = Infinity) {
   if (!Array.isArray(v) || v.length !== 24) return null;
@@ -86,6 +133,9 @@ export function vetor24(v, max = Infinity) {
  * somam e a mais longa define deitou/levantou. atividades: por dia, passos, calorias totais e treinos (nome, min, hora).
  * Fase 6 (opcionais; sem eles a saída é a de antes): no sono principal `etapas` ([{ ini, fim, t }]), `fcMedia`, `fcMin`
  * (30–150 bpm) e `hrv` (1–300 ms); no dia `porHora` ({ passos, kcal }: 24 números ≥ 0 cada, ou null) e `minAtivos` (0–1440).
+ * Fase 7 (opcionais, cada um só com a permissão dada): no sono principal `spo2` ({ media, min, minutosAbaixo90 }) e
+ * `temperatura` ({ media|null, delta }); no dia `distanciaM`, `kcalAtivas` e `porHora.kcalAtivas` (24 números). Faixas em
+ * FAIXAS_F7; valor fora delas não entra.
  */
 export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
   const pesos = new Map();
@@ -116,8 +166,9 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
       x.principal = duracao;
       x.inicio = `${ini.dia} ${ini.hora}`;
       x.fim = `${fim.dia} ${fim.hora}`;
-      // fase 6: estágios, batimento e VFC são do sono principal (o mais longo), como inicio/fim; envio antigo não traz
-      for (const k of ['etapas', 'fcMedia', 'fcMin', 'hrv']) delete x[k];
+      // fase 6: estágios, batimento e VFC são do sono principal (o mais longo), como inicio/fim; envio antigo não traz.
+      // fase 7: oxigênio e temperatura da pele também (só vêm quando a pessoa liberou a permissão)
+      for (const k of CAMPOS_SONO_F6) delete x[k];
       const etapas = etapasDoSono(s.etapas, fuso);
       if (etapas.length) x.etapas = etapas;
       const fcMedia = naFaixa(s.fcMedia, 30, 150);
@@ -126,6 +177,10 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
       if (fcMedia != null) x.fcMedia = fcMedia;
       if (fcMin != null) x.fcMin = fcMin;
       if (hrv != null) x.hrv = hrv;
+      const spo2 = oxigenioDoSono(s.spo2);
+      if (spo2) x.spo2 = spo2;
+      const temperatura = temperaturaDoSono(s.temperatura);
+      if (temperatura) x.temperatura = temperatura;
     }
     x.leve += semFases ? duracao : leve; // sem fases, tudo conta como "leve" pra manter o total
     x.profundo += profundo;
@@ -154,9 +209,18 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
     if (n(d.hrv) && n(d.hrv) > 0) a.hrv = Math.round(n(d.hrv));
     // fase 6: passos e calorias por hora (só os últimos 14 dias vêm com isso) e minutos ativos
     const porHora = { passos: vetor24(d.porHora?.passos, MAX_POR_HORA.passos), kcal: vetor24(d.porHora?.kcal, MAX_POR_HORA.kcal) };
-    if (porHora.passos || porHora.kcal) a.porHora = porHora;
+    // fase 7: calorias ativas por hora (ActiveCaloriesBurnedRecord); a chave só existe quando veio válida
+    const ativasHora = vetor24(d.porHora?.kcalAtivas, MAX_POR_HORA.kcalAtivas);
+    if (ativasHora) porHora.kcalAtivas = ativasHora;
+    if (porHora.passos || porHora.kcal || porHora.kcalAtivas) a.porHora = porHora;
     const minAtivos = naFaixa(d.minAtivos, 0, 1440);
     if (minAtivos != null) a.minAtivos = minAtivos;
+    // fase 7: distância (DistanceRecord) e calorias ativas oficiais (ActiveCaloriesBurnedRecord), agregados do dia. As
+    // ativas não podem passar do gasto total do mesmo dia (que já as inclui): passou, é leitura duplicada e sai
+    const distanciaM = typeof d.distanciaM === 'boolean' ? null : naFaixa(d.distanciaM, ...FAIXAS_F7.distanciaM);
+    if (distanciaM != null) a.distanciaM = distanciaM;
+    const kcalAtivas = typeof d.kcalAtivas === 'boolean' ? null : naFaixa(d.kcalAtivas, ...FAIXAS_F7.kcalAtivas);
+    if (kcalAtivas != null && !(a.calorias && kcalAtivas > a.calorias)) a.kcalAtivas = kcalAtivas;
   }
   for (const t of corpo?.treinos || []) {
     const ini = localDe(t.inicio, fuso);
@@ -205,8 +269,6 @@ export function fundir(guardado, novo, hoje) {
   const atividade = herdar(CAMPOS_ATIVIDADE_F6, () => true);
   return { pesos: juntar(guardado?.pesos, novo.pesos, pesagem), sonos: juntar(guardado?.sonos, novo.sonos, sono), atividades: juntar(guardado?.atividades, novo.atividades, atividade) };
 }
-const CAMPOS_SONO_F6 = ['etapas', 'fcMedia', 'fcMin', 'hrv'];
-const CAMPOS_ATIVIDADE_F6 = ['porHora', 'minAtivos'];
 
 // ============================================================
 // Recebimento (POST /relogio)

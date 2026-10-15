@@ -41,13 +41,29 @@ import { notaDeAtraso, atrasoEmMinutos, ATRASO_DESCULPAS_MIN, RESGATE_IDADE_MAX_
 import { comandoApp } from './api-auth.js';
 import { blocoApp, somarDias } from './api-escrita.js';
 import { humorDe, eventosDe } from './mongo.js';
+import { blocoAppConversa, perguntasRecentes, moduloDePerguntas, confidenciasDe, semConfidencias, protegerFerramentas } from './contexto-app.js';
 
-/** Bloco "PELO APP" do prompt (fase 2): humor de hoje e eventos de hoje a 3 dias à frente, criados pela pessoa no app. '' sem nada. */
-async function blocoAppDe(perfil, dia) {
+/**
+ * Bloco "PELO APP" do prompt (fase 2; fase 7): humor de hoje (o texto, como confidência, só se `textoAtual` puxa o
+ * assunto), o humor dos dias anteriores só em números, eventos de hoje a 3 dias à frente (com a refeição que cada um tira de
+ * casa), as perguntas feitas no app nas últimas 48 h que `textoAtual` puxa (confidência, D10) e, só da própria pessoa
+ * (D12), oxigênio e temperatura da noite fora do normal.
+ * Devolve { texto, confidencias }: as confidências servem à guarda da resposta (semConfidencias), que sai no grupo.
+ */
+async function blocoAppDe(perfil, dia, textoAtual = '') {
   const jids = perfil?.jids || [];
-  if (!jids.length) return '';
-  const [humor, eventos] = await Promise.all([humorDe(jids, dia, dia), eventosDe(jids, dia, somarDias(dia, 3))]);
-  return blocoApp({ humor: humor[0] || null, eventos, hoje: dia });
+  if (!jids.length) return { texto: '', confidencias: [] };
+  const agoraMs = Date.now();
+  const [humores, eventos, perguntas, modulo] = await Promise.all([
+    humorDe(jids, diasAnteriores(dia, 7)[0], dia).catch(() => []),
+    eventosDe(jids, dia, somarDias(dia, 3)).catch(() => []),
+    perguntasRecentes(perfil, { desde: new Date(agoraMs - 48 * 3600_000) }).catch(() => []),
+    moduloDePerguntas().catch(() => null),
+  ]);
+  // o mesmo bloco que a avaliação (avaliacao/cenarios.mjs) monta: contexto-app.blocoAppConversa. Texto do humor e perguntas
+  // do app só entram quando a mensagem de agora puxa o assunto (D10); a guarda da resposta usa todas as confidências
+  const texto = blocoAppConversa({ formatarHoje: (humor) => blocoApp({ humor, eventos: [], hoje: dia }), humores, eventos, perguntas, dia, fuso: fusoDe(perfil), agoraMs, modulo, linhaPropria: perfil.relogio?.linhaPropria || '', textoAtual: String(textoAtual || '') });
+  return { texto, confidencias: confidenciasDe({ perguntas, humores }) };
 }
 
 const IDADE_MAX_MSG_S = 6 * 60 * 60; // ignora mensagens com mais de 6h (flood após o bot voltar do sleep)
@@ -561,7 +577,7 @@ async function tratarPrivado(msg) {
     // Só aqui no privado do administrador: o código nunca passa pelo grupo nem pelo log.
     if (cmd === '!app') {
       console.log(`[privado] !app${/\bsair\b/i.test(texto) ? ' sair' : ''} do administrador`);
-      const resposta = await comandoApp(texto).catch((e) => `Não consegui agora (${String(e.message).slice(0, 80)}). Tenta de novo em instantes.`);
+      const resposta = await comandoApp(texto, undefined, { dono: ADMIN_PRIVADO }).catch((e) => `Não consegui agora (${String(e.message).slice(0, 80)}). Tenta de novo em instantes.`);
       await enviar(jidPrivado, resposta, msg, { rapido: true });
       return;
     }
@@ -938,7 +954,9 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // pergunta de progresso (responde com o bloco PROGRESSO DE PESO, sem registrar nada): a regra está em progresso.js, a mesma
   // que a avaliação importa (nunca quando a mensagem também conta refeição, corrige registro, contesta ou continua a refeição)
   const perguntaProgresso = rotaPerguntaProgresso({ texto, temImagem, temAudio, metaConversa, contestacao, emAndamento });
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', app: motivo ? await blocoAppDe(eu, diaPessoa).catch(() => '') : '', lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  // fase 7: o bloco PELO APP e as confidências (pergunta do app, texto do humor) que a guarda tira da resposta do grupo
+  const doApp = motivo ? await blocoAppDe(eu, diaPessoa, texto).catch(() => ({ texto: '', confidencias: [] })) : { texto: '', confidencias: [] };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', app: doApp.texto, lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -956,7 +974,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     // papo aleatório (sem foto, pergunta, menção ou assunto dela) vai pelos modelos leves; o resto pelos Flash
     // ferramentas na conversa (fase 2): pergunta ou pedido em texto, sem foto, pelo modelo principal, teto de 2 rodadas; falhou, caminho normal
     let r1 = null;
-    const ferramentasConversa = FERRAMENTAS_CONVERSA_ON && !temImagem && !temAudio && motivo && !contestacao && !metaConversa && (parecePergunta(texto) || parecePedidoOuPlano(textoDecisao)) ? ferramentasPara(eu, { dia: diaPessoa, escrita: true }) : null;
+    // confidência do app não vira anotação nem memória vetorial (D10): anotar_memoria com texto copiado dela não grava
+    const ferramentasConversa = FERRAMENTAS_CONVERSA_ON && !temImagem && !temAudio && motivo && !contestacao && !metaConversa && (parecePergunta(texto) || parecePedidoOuPlano(textoDecisao)) ? protegerFerramentas(ferramentasPara(eu, { dia: diaPessoa, escrita: true }), doApp.confidencias) : null;
     if (ferramentasConversa) {
       try {
         r1 = await ia.responder({ ...base, despensa: '', lugares: '', forca: '', conhecimento, leve: false, ferramentas: ferramentasConversa, maxRodadas: 2 });
@@ -1142,6 +1161,16 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     const antes = resposta;
     resposta = concordarVocativos(corrigirGirias(resposta), { genero: eu.genero || perfil.genero, outrosNomes: perfis.filter((p) => p !== eu).map((p) => p.nome.split(' ')[0]) });
     if (resposta !== antes) console.log(`[consciencia] gíria/concordância corrigida na resposta pra ${perfil.nome}`);
+  }
+
+  // Confidência do app (D10), em código: a resposta sai no GRUPO, então frase que copia a pergunta feita no app ou o texto do
+  // humor, ou que diz "você me perguntou/contou no app", sai antes do envio (e antes de entrar no histórico e na memória)
+  {
+    const c = semConfidencias(resposta, doApp.confidencias);
+    if (c.removidas.length) {
+      console.warn(`[privacidade] ${c.removidas.length} frase(s) com confidência do app retirada(s) da resposta pra ${perfil.nome}`);
+      resposta = c.texto;
+    }
   }
 
   // Foi refeição? Quando a análise traz "🕐 Refeição:" ou "O que eu vi" (comida consumida). "Estimativa" sozinha não basta:

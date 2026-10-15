@@ -849,6 +849,39 @@ export async function marcarLugarAtual(perfil, { tipo, nome, casa = false }) {
   return casa ? `Anotado: aqui é a tua casa${l.bairro ? ` (${l.bairro})` : ''}. 🏠` : `Anotado: aqui é ${rotuloLugar(l)}. 📍`;
 }
 
+/**
+ * Puro. Marca um lugar pelo id (app, fase 7): tipo e nome, e papel 'casa' | 'trabalho' | null. Casa e trabalho são um lugar
+ * só (marcar outro tira o papel do anterior). Devolve { lugares, lugar } (cópias) ou null se o id não existe.
+ */
+export function aplicarMarcacao(lugares, lid, { tipo, nome, papel } = {}) {
+  const lista = (lugares || []).map((l) => ({ ...l }));
+  const l = lista.find((x) => String(x.id) === String(lid));
+  if (!l) return null;
+  l.manual = true;
+  if (tipo !== undefined) l.tipo = tipo ? String(tipo).toLowerCase() : null;
+  if (nome !== undefined) l.nome = nome || null;
+  if (papel !== undefined) {
+    if (papel === 'casa' || papel === 'trabalho') for (const x of lista) if (x !== l && x.papel === papel) x.papel = null;
+    l.papel = papel || null;
+    if (papel === 'casa') {
+      l.tipo = 'residência';
+      l.nome = null;
+    }
+  } else if (l.tipo === 'trabalho') {
+    for (const x of lista) if (x !== l && x.papel === 'trabalho') x.papel = null;
+    l.papel = 'trabalho';
+  }
+  return { lugares: lista, lugar: l };
+}
+
+/** Marca um lugar pelo id (app). Devolve o lugar atualizado ou null. */
+export async function marcarLugarPorId(perfil, lid, marcacao) {
+  const r = aplicarMarcacao(perfil?.lugares, lid, marcacao);
+  if (!r) return null;
+  await salvarPerfil({ jids: perfil.jids, lugares: r.lugares });
+  return r.lugar;
+}
+
 /** "!lugares esquecer": apaga pontos, visitas e lugares da pessoa. */
 export async function esquecerLugares(perfil) {
   const jid = jidDe(perfil);

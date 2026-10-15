@@ -288,8 +288,67 @@ export function validarPerfil(corpo) {
     if (!/^(maximo|medio|minimo)$/.test(String(c.ritmo))) throw invalido('ritmo: maximo, medio ou minimo');
     a.ritmo = String(c.ritmo);
   }
+  // fase 7 (W10, W11, W28): o resto do !perfil e o !apelido. cidade, dieta, restrições, gênero e fuso vão pro
+  // aplicarAtualizacao como na linha ATUALIZAR; apelido, idade e o pedido fixo do plano são gravados direto (aplicarExtrasPerfil)
+  for (const [campo, max] of [['cidade', 80], ['dieta', 120], ['restricoes', 120]]) {
+    if (c[campo] == null) continue;
+    const t = texto(c[campo], max + 1);
+    if (!t) throw invalido(`${campo} vazio (para apagar dieta ou restrições, use a tela da Nutri)`);
+    if (t.length > max) throw invalido(`${campo} com mais de ${max} caracteres`);
+    a[campo] = t;
+  }
+  if (c.genero != null && c.genero !== '') {
+    if (!/^(masculino|feminino|outro)$/.test(String(c.genero))) throw invalido('genero: masculino, feminino ou outro');
+    a.genero = String(c.genero);
+  }
+  if (c.fuso != null && c.fuso !== '') {
+    if (!fusoValido(String(c.fuso))) throw invalido('fuso inválido (ex.: America/Sao_Paulo)');
+    a.fuso = String(c.fuso);
+  }
+  if ('apelido' in c || c.semApelido === true) {
+    const ap = c.semApelido === true ? null : texto(c.apelido, 31);
+    if (ap && ap.length > 30) throw invalido('apelido com mais de 30 letras');
+    if (ap) a.apelido = ap;
+    else a.sem_apelido = true;
+  }
+  if (c.idade != null && c.idade !== '') {
+    const i = numero(c.idade);
+    if (!Number.isInteger(i) || i < 10 || i > 110) throw invalido('idade entre 10 e 110 anos');
+    a.idade = i;
+  }
+  if ('planoPedido' in c) {
+    if (c.planoPedido != null && typeof c.planoPedido !== 'string') throw invalido('planoPedido em texto');
+    a.plano_pedido = texto(c.planoPedido, 300) || '';
+  }
   if (!Object.keys(a).length) throw invalido('nada para alterar');
   return a;
+}
+
+/**
+ * Puro. O que o aplicarAtualizacao não conhece (apelido, idade, pedido fixo do plano) entra no patch dele. `patch` = o que o
+ * aplicarAtualizacao devolveu (ou null). Devolve o patch final ou null quando nada muda. Apelido e pedido do plano são como
+ * no !apelido e no "!plano <pedido>"; idade vai pro basal (kcalBasal) e ganha a data em atualizacoes.
+ */
+export function aplicarExtrasPerfil(perfil, a, hoje, patch = null) {
+  const out = patch ? { ...patch, atualizacoes: { ...(patch.atualizacoes || {}) } } : { jids: perfil.jids, atualizacoes: { ...(perfil.atualizacoes || {}) } };
+  let mudou = Boolean(patch);
+  if (a.apelido && (a.apelido !== perfil.apelido || perfil.semApelido)) {
+    Object.assign(out, { apelido: a.apelido, semApelido: false });
+    mudou = true;
+  } else if (a.sem_apelido && (perfil.apelido || !perfil.semApelido)) {
+    Object.assign(out, { apelido: '', semApelido: true });
+    mudou = true;
+  }
+  if (a.idade != null && a.idade !== perfil.idade) {
+    out.idade = a.idade;
+    out.atualizacoes.idade = hoje;
+    mudou = true;
+  }
+  if ('plano_pedido' in a && a.plano_pedido !== (perfil.planoPedido || '')) {
+    out.planoPedido = a.plano_pedido;
+    mudou = true;
+  }
+  return mudou ? out : null;
 }
 
 // ============================================================
@@ -626,11 +685,12 @@ export function rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, nutriDe = asy
     res.status(201).json({ pesagem: { dia: p.dia, peso: p.peso, gordura: p.gordura, fonte: 'app', hora: p.hora } });
   });
 
-  // ---------- perfil (objetivo, meta, prazo, altura, ritmo) ----------
+  // ---------- perfil (objetivo, meta, prazo, altura, ritmo; fase 7: cidade, dieta, restrições, gênero, fuso, apelido,
+  // idade e o pedido fixo do plano) ----------
   r.put('/perfis/:id', async (req, res) => {
     const { perfil, hoje } = await perfilDo(req);
     const a = validarPerfil(req.body);
-    const patch = escrita.aplicarAtualizacao(perfil, a, hoje);
+    const patch = aplicarExtrasPerfil(perfil, a, hoje, escrita.aplicarAtualizacao(perfil, a, hoje));
     let novo = perfil;
     if (patch) {
       await escrita.salvarPerfil(patch);

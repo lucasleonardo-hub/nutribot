@@ -140,19 +140,23 @@ export function criarAuth({ colecao = colecaoMongo, agora = () => new Date() } =
   };
   async function aparelhosAtivos() {
     if (agoraMs() < cache.ate) return cache.ativos;
-    const ativos = await dispositivos().find({ revogadoEm: null }, { projection: { hash: 1, aparelho: 1, ultimoUso: 1 } }).toArray();
+    const ativos = await dispositivos().find({ revogadoEm: null }, { projection: { hash: 1, aparelho: 1, ultimoUso: 1, dono: 1 } }).toArray();
     cache = { ate: agoraMs() + CACHE_APARELHOS_MS, ativos };
     return ativos;
   }
 
   return {
-    /** Gera um código novo (apaga os ainda não usados) e destrava o freio global. Devolve o código em claro (só pro privado). */
-    async novoCodigo() {
+    /**
+     * Gera um código novo (apaga os ainda não usados) e destrava o freio global. Devolve o código em claro (só pro privado).
+     * `dono` é o jid de quem pediu o código; o aparelho pareado com ele herda esse jid, e é isso (não o que o pedido diz)
+     * que as rotas "só do dono" conferem.
+     */
+    async novoCodigo({ dono = null } = {}) {
       const codigo = gerarCodigo();
       const criadoEm = agora();
       const expiraEm = new Date(criadoEm.getTime() + CODIGO_VALIDADE_MIN * 60_000);
       await codigos().deleteMany({ usadoEm: null });
-      await codigos().insertOne({ hash: sha256(codigo), criadoEm, expiraEm, usadoEm: null });
+      await codigos().insertOne({ hash: sha256(codigo), criadoEm, expiraEm, usadoEm: null, dono: dono || null });
       global.limpar('*');
       return { codigo, expiraEm };
     },
@@ -185,7 +189,7 @@ export function criarAuth({ colecao = colecaoMongo, agora = () => new Date() } =
       global.desfazer('*');
       const token = gerarToken();
       const nome = String(aparelho ?? '').replace(/\s+/g, ' ').trim().slice(0, 60) || 'aparelho';
-      await dispositivos().insertOne({ hash: sha256(token), aparelho: nome, criadoEm: agoraD, ultimoUso: agoraD, revogadoEm: null });
+      await dispositivos().insertOne({ hash: sha256(token), aparelho: nome, criadoEm: agoraD, ultimoUso: agoraD, revogadoEm: null, dono: doc.dono || null });
       invalidarCache();
       console.log(`[api] aparelho pareado: ${nome}`);
       return { token };
@@ -210,7 +214,7 @@ export function criarAuth({ colecao = colecaoMongo, agora = () => new Date() } =
           .updateOne({ _id: d._id }, { $set: { ultimoUso: agoraD } })
           .catch(() => {});
       }
-      return { id: String(d._id), aparelho: d.aparelho };
+      return { id: String(d._id), aparelho: d.aparelho, dono: d.dono || null };
     },
 
     /** Revoga todos os aparelhos e apaga código aberto. Devolve quantos aparelhos foram revogados. */
@@ -243,9 +247,9 @@ export async function garantirIndicesApp(colecao = colecaoMongo) {
 
 /**
  * "!app" (gera código) e "!app sair" (revoga todos os aparelhos). Só o privado do ADMIN_JID chama isto (mensagens.js).
- * Devolve o texto da resposta.
+ * Devolve o texto da resposta. `dono` (o jid de quem mandou; por padrão o ADMIN_JID) fica gravado no aparelho pareado.
  */
-export async function comandoApp(texto, auth = authPadrao()) {
+export async function comandoApp(texto, auth = authPadrao(), { dono = (process.env.ADMIN_JID || '').trim() } = {}) {
   const resto = String(texto || '')
     .trim()
     .replace(/^!app\b/i, '')
@@ -256,7 +260,7 @@ export async function comandoApp(texto, auth = authPadrao()) {
     return `🔒 ${n} aparelho(s) desconectado(s) do app. Pra conectar de novo, mande !app.`;
   }
   if (resto) return 'Assim: "!app" gera o código pra conectar o app; "!app sair" desconecta todos os aparelhos.';
-  const { codigo } = await auth.novoCodigo();
+  const { codigo } = await auth.novoCodigo({ dono });
   // "123 456": com o espaço o envio não mexe no número (util.protegerNumeros só pega 4+ dígitos seguidos) e fica fácil de ler
   return `📱 Código do app: *${codigo.slice(0, 3)} ${codigo.slice(3)}*\nVale por ${CODIGO_VALIDADE_MIN} minutos e uma vez só. Digite no app NutriBot. (Mandar !app de novo troca o código.)`;
 }

@@ -3,14 +3,20 @@ import br.nutribot.relogio.BuildConfig
 
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.HealthConnectFeatures
+import androidx.health.connect.client.aggregate.AggregateMetric
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.BodyFatRecord
+import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.LeanBodyMassRecord
+import androidx.health.connect.client.records.OxygenSaturationRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RestingHeartRateRecord
+import androidx.health.connect.client.records.SkinTemperatureRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
@@ -50,6 +56,36 @@ object Leitor {
         HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND,
     )
 
+    // Fase 7 (seção 7 do plano da fase 6, autorizadas pelo dono em 15/10): as quatro permissões novas são OPCIONAIS e ficam
+    // fora de `permissoes` de propósito. O SyncWorker e a MainActivity tratam `permissoes` como obrigatórias (faltou uma, o
+    // envio nem sai); quem não der estas continua mandando todo o resto. A tela Integrações pede todas juntas.
+    private val PERM_DISTANCIA = HealthPermission.getReadPermission(DistanceRecord::class)
+    private val PERM_KCAL_ATIVAS = HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class)
+    private val PERM_OXIGENIO = HealthPermission.getReadPermission(OxygenSaturationRecord::class)
+    private val PERM_TEMPERATURA = HealthPermission.getReadPermission(SkinTemperatureRecord::class)
+
+    /** Distância, calorias ativas e oxigênio no sangue: existem em todo Health Connect com o connect-client 1.1.0. */
+    val permissoesNovas: Set<String> = setOf(PERM_DISTANCIA, PERM_KCAL_ATIVAS, PERM_OXIGENIO)
+
+    /** A temperatura da pele depende de o Health Connect do aparelho ter o recurso (versões antigas não têm). */
+    fun temTemperatura(context: Context): Boolean = opcional {
+        HealthConnectClient.getOrCreate(context).features
+            .getFeatureStatus(HealthConnectFeatures.FEATURE_SKIN_TEMPERATURE) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+    } ?: false
+
+    /** As opcionais que este aparelho pode dar (a temperatura só com o recurso). */
+    fun permissoesOpcionais(context: Context): Set<String> =
+        if (temTemperatura(context)) permissoesNovas + PERM_TEMPERATURA else permissoesNovas
+
+    /** Tudo o que a tela Integrações pede de uma vez: as obrigatórias e as opcionais deste aparelho. */
+    fun todasAsPermissoes(context: Context): Set<String> = permissoes + permissoesOpcionais(context)
+
+    /** As opcionais que ainda faltam (vazio sem Health Connect ou se a consulta falhar: aí não há o que pedir). */
+    suspend fun opcionaisFaltando(context: Context): Set<String> {
+        if (!disponivel(context)) return emptySet()
+        return opcional { permissoesOpcionais(context) - concedidas(context) } ?: emptySet()
+    }
+
     /** Máximo de etapas por sessão de sono no envio (o contrato da fase 6 fixa 200). */
     private const val MAX_ETAPAS = 200
 
@@ -73,6 +109,10 @@ object Leitor {
         val inicio = agora.minus(Duration.ofDays(dias))
         val faixa = TimeRangeFilter.between(inicio, agora)
         val iso = DateTimeFormatter.ISO_INSTANT
+        // fase 7: o que a pessoa liberou das permissões opcionais. Cada leitura nova só roda com a sua permissão e dentro de
+        // `opcional`: negada, revogada no meio ou com erro, o campo não vai e o resto do envio sai igual
+        val dadas = opcional { client.permissionController.getGrantedPermissions() } ?: emptySet()
+        val podeTemperatura = PERM_TEMPERATURA in dadas && temTemperatura(context)
 
         val pesos = JSONArray()
         val gorduraPorHora = HashMap<Long, Double>()
@@ -110,6 +150,13 @@ object Leitor {
             LongArray(registrosHrv.size) { registrosHrv[it].time.toEpochMilli() },
             DoubleArray(registrosHrv.size) { registrosHrv[it].heartRateVariabilityMillis },
         )
+        // fase 7 (opcionais): oxigênio no sangue (amostras pontuais) e temperatura da pele (registros com desvios da base)
+        val serieSpo2: Serie? = if (PERM_OXIGENIO !in dadas) null else opcional {
+            val regs = lerTodos(client, OxygenSaturationRecord::class, faixa)
+            Serie(LongArray(regs.size) { regs[it].time.toEpochMilli() }, DoubleArray(regs.size) { regs[it].percentage.value })
+        }
+        val registrosTemperatura: List<SkinTemperatureRecord> =
+            if (!podeTemperatura) emptyList() else (opcional { lerTodos(client, SkinTemperatureRecord::class, faixa) } ?: emptyList())
 
         val sonos = JSONArray()
         for (r in sessoesSono) {
@@ -149,6 +196,11 @@ object Leitor {
                     }
                     serieHrv.entre(r.startTime, r.endTime).filter { it in 1.0..300.0 }.takeIf { it.isNotEmpty() }?.let {
                         put("hrv", Math.round(it.average()))
+                    }
+                    // fase 7 (opcionais): pela mesma razão, só nas sessões inteiras dentro da faixa
+                    serieSpo2?.let { s -> opcional { oxigenioNoSono(s, r.startTime, r.endTime) } }?.let { put("spo2", it) }
+                    if (registrosTemperatura.isNotEmpty()) {
+                        opcional { temperaturaNoSono(registrosTemperatura, r.startTime, r.endTime) }?.let { put("temperatura", it) }
                     }
                 }
             })
@@ -192,9 +244,21 @@ object Leitor {
         // fase 6 (opcionais): passos e gasto por hora e minutos ativos, só nos dias mais recentes.
         // Uma falha aqui não derruba o envio: os campos antigos saem do mesmo jeito.
         val primeiroDetalhe = hoje.minusDays(minOf(dias, DIAS_DETALHE - 1))
-        val porHora: Map<LocalDate, JSONObject> = opcional {
-            lerPorHora(client, zona, primeiroDetalhe.atStartOfDay(zona).toInstant(), hoje.plusDays(1).atStartOfDay(zona).toInstant())
-        } ?: emptyMap()
+        val iniDetalhe = primeiroDetalhe.atStartOfDay(zona).toInstant()
+        val fimDetalhe = hoje.plusDays(1).atStartOfDay(zona).toInstant()
+        val porHora: MutableMap<LocalDate, JSONObject> = (opcional { lerPorHora(client, zona, iniDetalhe, fimDetalhe) } ?: emptyMap()).toMutableMap()
+        // fase 7 (opcional): calorias ativas por hora, numa leitura à parte (sem a permissão, a de cima não pode falhar junto)
+        if (PERM_KCAL_ATIVAS in dadas) {
+            opcional { lerAtivasPorHora(client, zona, iniDetalhe, fimDetalhe) }?.forEach { (dia, v) ->
+                porHora.getOrPut(dia) { JSONObject() }.put("kcalAtivas", JSONArray().apply { for (x in v) put(maxOf(0L, Math.round(x))) })
+            }
+        }
+        // fase 7 (opcionais): distância e calorias ativas do dia, agregados pelo próprio Health Connect (sem duplicar fontes),
+        // cada um na sua leitura: uma permissão negada não derruba a outra
+        val distanciaPorDia: Map<LocalDate, Double> = if (PERM_DISTANCIA !in dadas) emptyMap() else
+            opcional { porDiaDe(client, DistanceRecord.DISTANCE_TOTAL, inicioDia, fimDia) { it.inMeters } } ?: emptyMap()
+        val ativasPorDia: Map<LocalDate, Double> = if (PERM_KCAL_ATIVAS !in dadas) emptyMap() else
+            opcional { porDiaDe(client, ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL, inicioDia, fimDia) { it.inKilocalories } } ?: emptyMap()
         // minutos ativos só nos dias inteiros dentro da faixa lida (os exercícios vêm de `faixa`); um dia cortado
         // mandaria um número menor e o servidor, que funde por dia, trocaria o valor certo pelo errado
         var primeiroMinutos = primeiroDetalhe
@@ -210,7 +274,9 @@ object Leitor {
             val passos = g.result[StepsRecord.COUNT_TOTAL]
             val kcal = g.result[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories
             val hrv = hrvPorDia[dia]?.takeIf { it.isNotEmpty() }?.average()
-            if (passos == null && kcal == null && fcPorDia[dia] == null && hrv == null) continue
+            val distancia = distanciaPorDia[dia]?.takeIf { it.isFinite() && it >= 0 }
+            val ativas = ativasPorDia[dia]?.takeIf { it.isFinite() && it >= 0 }
+            if (passos == null && kcal == null && fcPorDia[dia] == null && hrv == null && distancia == null && ativas == null) continue
             diasJson.put(JSONObject().apply {
                 put("dia", dia.toString())
                 passos?.let { put("passos", it) }
@@ -219,6 +285,9 @@ object Leitor {
                 hrv?.let { put("hrv", arred(it, 0)) }
                 porHora[dia]?.let { put("porHora", it) }
                 minAtivos[dia]?.let { put("minAtivos", it) }
+                // fase 7 (opcionais): metros e kcal ativas do dia
+                distancia?.let { put("distanciaM", Math.round(it)) }
+                ativas?.let { put("kcalAtivas", Math.round(it)) }
             })
         }
 
@@ -298,6 +367,92 @@ object Leitor {
             }
         }
         return saida
+    }
+
+    /** Uma métrica agregada por dia (no fuso do celular), convertida para número: { dia: valor }. */
+    private suspend fun <T : Any> porDiaDe(
+        client: HealthConnectClient,
+        metrica: AggregateMetric<T>,
+        ini: LocalDateTime,
+        fim: LocalDateTime,
+        valor: (T) -> Double,
+    ): Map<LocalDate, Double> {
+        val grupos = client.aggregateGroupByPeriod(
+            AggregateGroupByPeriodRequest(metrics = setOf(metrica), timeRangeFilter = TimeRangeFilter.between(ini, fim), timeRangeSlicer = Period.ofDays(1))
+        )
+        val saida = HashMap<LocalDate, Double>()
+        for (g in grupos) g.result[metrica]?.let { saida[g.startTime.toLocalDate()] = valor(it) }
+        return saida
+    }
+
+    /** Calorias ativas (ActiveCaloriesBurnedRecord) em fatias de 1 hora, no fuso do celular: { dia: [24] }. */
+    private suspend fun lerAtivasPorHora(client: HealthConnectClient, zona: ZoneId, ini: Instant, fim: Instant): Map<LocalDate, DoubleArray> {
+        val grupos = client.aggregateGroupByDuration(
+            AggregateGroupByDurationRequest(
+                metrics = setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL),
+                timeRangeFilter = TimeRangeFilter.between(ini, fim),
+                timeRangeSlicer = Duration.ofHours(1),
+            )
+        )
+        val saida = HashMap<LocalDate, DoubleArray>()
+        for (g in grupos) {
+            val local = g.startTime.atZone(zona)
+            g.result[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories?.let { saida.getOrPut(local.toLocalDate()) { DoubleArray(24) }[local.hour] += it }
+        }
+        return saida
+    }
+
+    /** Amostras mínimas de oxigênio numa sessão para valer a média. */
+    private const val MIN_AMOSTRAS_SPO2 = 3
+
+    /** Cada amostra de oxigênio vale até a próxima, no máximo por este tempo (sem amostra, não se sabe). */
+    private const val MAX_INTERVALO_SPO2_MS = 5 * 60_000L
+
+    /**
+     * Oxigênio no sangue dentro da sessão: { media, min, minutosAbaixo90 }. Leituras fora de 50–100 % saem. Os minutos abaixo
+     * de 90 % somam o tempo de cada amostra abaixo disso até a seguinte (no máximo 5 min por amostra). null com menos de 3.
+     */
+    private fun oxigenioNoSono(serie: Serie, ini: Instant, fim: Instant): JSONObject? {
+        val pts = serie.pontos(ini, fim).filter { it.second in 50.0..100.0 }
+        if (pts.size < MIN_AMOSTRAS_SPO2) return null
+        val fimMs = fim.toEpochMilli()
+        var abaixoMs = 0L
+        for (k in pts.indices) {
+            if (pts[k].second >= 90.0) continue
+            val ate = if (k + 1 < pts.size) pts[k + 1].first else fimMs
+            abaixoMs += (ate - pts[k].first).coerceIn(0L, MAX_INTERVALO_SPO2_MS)
+        }
+        val valores = pts.map { it.second }
+        return JSONObject().apply {
+            put("media", arred(valores.average(), 1))
+            put("min", arred(valores.min(), 1))
+            put("minutosAbaixo90", Math.round(abaixoMs / 60_000.0))
+        }
+    }
+
+    /**
+     * Temperatura da pele dentro da sessão: { delta, media? }. `delta` = média dos desvios (°C) que os registros trazem contra
+     * a própria linha de base; `media` = base + delta, só quando algum registro trouxe a base. null sem desvio na sessão.
+     */
+    private fun temperaturaNoSono(registros: List<SkinTemperatureRecord>, ini: Instant, fim: Instant): JSONObject? {
+        val deltas = ArrayList<Double>()
+        var base: Double? = null
+        for (r in registros) {
+            if (!r.endTime.isAfter(ini) || !r.startTime.isBefore(fim)) continue
+            for (d in r.deltas) {
+                if (d.time.isBefore(ini) || d.time.isAfter(fim)) continue
+                val c = d.delta.inCelsius
+                if (c.isFinite() && c in -5.0..5.0) deltas.add(c)
+            }
+            if (base == null) base = r.baseline?.inCelsius?.takeIf { it.isFinite() && it in 25.0..42.0 }
+        }
+        if (deltas.isEmpty()) return null
+        val delta = deltas.average()
+        val b = base
+        return JSONObject().apply {
+            put("delta", arred(delta, 2))
+            if (b != null) put("media", arred(b + delta, 2))
+        }
     }
 
     /**
@@ -419,6 +574,13 @@ object Leitor {
             val a = primeiroMaiorOuIgual(ini.toEpochMilli())
             val b = primeiroMaiorOuIgual(fim.toEpochMilli() + 1)
             return if (b > a) v.copyOfRange(a, b).asList() else emptyList()
+        }
+
+        /** O mesmo recorte de `entre`, com o instante (epoch ms) de cada valor. */
+        fun pontos(ini: Instant, fim: Instant): List<Pair<Long, Double>> {
+            val a = primeiroMaiorOuIgual(ini.toEpochMilli())
+            val b = primeiroMaiorOuIgual(fim.toEpochMilli() + 1)
+            return if (b > a) (a until b).map { t[it] to v[it] } else emptyList()
         }
 
         private fun primeiroMaiorOuIgual(x: Long): Int {

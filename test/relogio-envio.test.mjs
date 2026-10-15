@@ -3,7 +3,7 @@
 // normalizarEnvio e fundir. Dados fictícios.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizarEnvio, fundir, etapasDoSono, vetor24, MAX_ETAPAS } from '../relogio.js';
+import { normalizarEnvio, fundir, etapasDoSono, vetor24, MAX_ETAPAS, oxigenioDoSono, temperaturaDoSono } from '../relogio.js';
 
 const FUSO = 'America/Sao_Paulo';
 const vinteQuatro = (f) => Array.from({ length: 24 }, (_, h) => f(h));
@@ -147,4 +147,102 @@ test('fase 6 por hora: valor absurdo (leitura duplicada) descarta o vetor', () =
   const e = envioAntigo();
   e.dias[0] = { ...e.dias[0], porHora: { passos: vinteQuatro((h) => (h === 3 ? 1e12 : 100)), kcal: vinteQuatro(() => 1e9) } };
   assert.equal('porHora' in normalizarEnvio(e, FUSO).atividades[0], false);
+});
+
+// ---------- fase 7: as 4 permissões opcionais (distância, calorias ativas, oxigênio no sono, temperatura da pele) ----------
+/** O envio do coletor 2.7 com as quatro permissões dadas. */
+function envioF7() {
+  const e = envioNovo();
+  e.sonos[0] = { ...e.sonos[0], spo2: { media: 95.44, min: 88, minutosAbaixo90: 3.4 }, temperatura: { media: 34.123, delta: 0.456 } };
+  e.sonos[1] = { ...e.sonos[1], spo2: { media: 90, min: 85, minutosAbaixo90: 10 } }; // cochilo: não manda
+  e.dias[0] = { ...e.dias[0], distanciaM: 4812.6, kcalAtivas: 612.4, porHora: { ...e.dias[0].porHora, kcalAtivas: vinteQuatro((h) => (h === 18 ? 300 : 10)) } };
+  return e;
+}
+
+test('fase 7 envio novo: oxigênio e temperatura do sono principal; distância, kcal ativas e ativas por hora no dia', () => {
+  const d = normalizarEnvio(envioF7(), FUSO);
+  const s = d.sonos[0];
+  assert.deepEqual(s.spo2, { media: 95.4, min: 88, minutosAbaixo90: 3 });
+  assert.deepEqual(s.temperatura, { media: 34.12, delta: 0.46 });
+  assert.equal(s.total, 480); // as somas de sempre não mudam
+  const hoje = d.atividades.find((a) => a.dia === '2030-03-29');
+  assert.equal(hoje.distanciaM, 4813);
+  assert.equal(hoje.kcalAtivas, 612);
+  assert.equal(hoje.porHora.kcalAtivas[18], 300);
+  assert.equal(hoje.porHora.passos[18], 2500); // os vetores da fase 6 continuam
+  const antigo = d.atividades.find((a) => a.dia === '2030-03-10');
+  for (const k of ['distanciaM', 'kcalAtivas', 'porHora']) assert.equal(k in antigo, false, k);
+});
+
+test('fase 7 envio antigo (Relógio 1.6) e envio da fase 6: nenhum campo da fase 7 aparece', () => {
+  for (const e of [envioAntigo(), envioNovo()]) {
+    const d = normalizarEnvio(e, FUSO);
+    for (const k of ['spo2', 'temperatura']) assert.equal(k in d.sonos[0], false, k);
+    for (const a of d.atividades) for (const k of ['distanciaM', 'kcalAtivas']) assert.equal(k in a, false, k);
+    for (const a of d.atividades) if (a.porHora) assert.equal('kcalAtivas' in a.porHora, false);
+  }
+  // só a permissão de oxigênio: os outros três não aparecem e o resto do envio sai igual
+  const so = envioNovo();
+  so.sonos[0] = { ...so.sonos[0], spo2: { media: 96, min: 92, minutosAbaixo90: 0 } };
+  const d = normalizarEnvio(so, FUSO);
+  assert.deepEqual(d.sonos[0].spo2, { media: 96, min: 92, minutosAbaixo90: 0 });
+  assert.equal('temperatura' in d.sonos[0], false);
+  assert.deepEqual(d.atividades, normalizarEnvio(envioNovo(), FUSO).atividades);
+});
+
+test('fase 7 validações: faixas plausíveis do oxigênio, da temperatura, da distância e das kcal ativas', () => {
+  // oxigênio: média obrigatória 70–100; mínimo 50–100 e não acima da média; minutos 0–1440
+  assert.equal(oxigenioDoSono({ media: 60, min: 55, minutosAbaixo90: 5 }), null);
+  assert.equal(oxigenioDoSono({ media: 101 }), null);
+  assert.equal(oxigenioDoSono({ media: true }), null);
+  assert.equal(oxigenioDoSono([95]), null);
+  assert.equal(oxigenioDoSono(null), null);
+  assert.deepEqual(oxigenioDoSono({ media: 94, min: 97, minutosAbaixo90: 2000 }), { media: 94, min: null, minutosAbaixo90: null });
+  assert.deepEqual(oxigenioDoSono({ media: '93.5', min: 49 }), { media: 93.5, min: null, minutosAbaixo90: null }); // número em texto vale
+  // temperatura: delta obrigatório (−5 a +5); média 25–42 °C ou null
+  assert.equal(temperaturaDoSono({ media: 34 }), null);
+  assert.equal(temperaturaDoSono({ delta: 7 }), null);
+  assert.equal(temperaturaDoSono({ delta: false }), null);
+  assert.deepEqual(temperaturaDoSono({ delta: -0.3 }), { media: null, delta: -0.3 });
+  assert.deepEqual(temperaturaDoSono({ media: 50, delta: 0.2 }), { media: null, delta: 0.2 });
+  // no envio: fora da faixa, o campo não entra e o resto fica
+  const e = envioNovo();
+  e.sonos[0] = { ...e.sonos[0], spo2: { media: 40 }, temperatura: { delta: 'x' } };
+  e.dias[0] = { ...e.dias[0], distanciaM: 400000, kcalAtivas: 9000, porHora: { ...e.dias[0].porHora, kcalAtivas: vinteQuatro(() => 5000) } };
+  const d = normalizarEnvio(e, FUSO);
+  for (const k of ['spo2', 'temperatura']) assert.equal(k in d.sonos[0], false, k);
+  const a = d.atividades.find((x) => x.dia === '2030-03-29');
+  for (const k of ['distanciaM', 'kcalAtivas']) assert.equal(k in a, false, k);
+  assert.equal('kcalAtivas' in a.porHora, false);
+  assert.equal(a.porHora.passos[18], 2500);
+  assert.equal(a.fcRepouso, 57);
+  assert.equal(d.sonos[0].fcMedia, 54);
+  // kcal ativas acima do gasto total do mesmo dia (que já as inclui): leitura duplicada, sai
+  const f = envioAntigo();
+  f.dias[0] = { ...f.dias[0], kcalAtivas: 2600, distanciaM: 0 };
+  const b = normalizarEnvio(f, FUSO).atividades[0];
+  assert.equal('kcalAtivas' in b, false);
+  assert.equal(b.distanciaM, 0); // zero é um dia parado de verdade
+});
+
+test('fase 7 fundir: o envio sem os campos novos (permissão tirada, outro aparelho) não apaga o que estava guardado', () => {
+  const guardado = normalizarEnvio(envioF7(), FUSO);
+  const f = fundir(guardado, normalizarEnvio(envioNovo(), FUSO), '2030-03-29');
+  const s = f.sonos.find((x) => x.dia === '2030-03-29');
+  assert.deepEqual(s.spo2, { media: 95.4, min: 88, minutosAbaixo90: 3 });
+  assert.deepEqual(s.temperatura, { media: 34.12, delta: 0.46 });
+  const a = f.atividades.find((x) => x.dia === '2030-03-29');
+  assert.deepEqual([a.distanciaM, a.kcalAtivas], [4813, 612]);
+  // noite diferente (outro início): não herda oxigênio nem temperatura de outra sessão
+  const outra = envioAntigo();
+  outra.sonos = [{ inicio: '2030-03-29T03:00:00Z', fim: '2030-03-29T10:00:00Z', leve: 300, profundo: 60, rem: 60, acordado: 0 }];
+  const g = fundir(guardado, normalizarEnvio(outra, FUSO), '2030-03-29').sonos.find((x) => x.dia === '2030-03-29');
+  for (const k of ['spo2', 'temperatura']) assert.equal(k in g, false, k);
+  // o novo com os campos vence o guardado
+  const novo = envioF7();
+  novo.dias[0].kcalAtivas = 700;
+  novo.sonos[0].spo2 = { media: 97, min: 93, minutosAbaixo90: 0 };
+  const h = fundir(guardado, normalizarEnvio(novo, FUSO), '2030-03-29');
+  assert.equal(h.atividades.find((x) => x.dia === '2030-03-29').kcalAtivas, 700);
+  assert.equal(h.sonos.find((x) => x.dia === '2030-03-29').spo2.media, 97);
 });

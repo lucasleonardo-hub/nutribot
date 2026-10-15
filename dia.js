@@ -2,13 +2,15 @@
 // persona), fechamento da semana e a revisão mensal da base de conhecimento.
 
 import { listarPerfis, salvarPerfil, persistirMemoria, salvarPersona, refeicoesDesde, registrarMomentos, momentosRecentes, registrarDiarioNutri, diarioNutriRecente, pesagensDesde, ultimaPesagem, salvarPrevisao, previsaoAberta, marcarPrevisaoConferida } from './mongo.js';
-import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil } from './drive.js';
-import { correcoesDoDia, carregarAprendizados, salvarAprendizados, refeicoesDoDia as refeicoesDoDiaBanco } from './mongo.js';
+import { salvarMarkdown, lerMarkdown, registrarLog, frontmatter, mdDiario, mdMomento, mdPerfil, salvarNaPasta, comRepeticao, erroPermanenteDrive } from './drive.js';
+import { correcoesDoDia, carregarAprendizados, salvarAprendizados, refeicoesDoDia as refeicoesDoDiaBanco, colecao, humorDe, eventosDe } from './mongo.js';
+import { caminhoDrive, chavePendente, dadosDoDia, mdDiaPessoa, dadosDaSemana, mdSemanaPessoa, mdDespensa, mdPensamentos, mdConversasApp, mdPlanoSemana } from './drive-pessoa.js';
+import { contextoDoTreino } from './api-montadores.js';
 import { contestacoesDoDia } from './consciencia.js';
 import { compilarRefeicoesDoBanco } from './resumo.js';
 import * as ia from './gemini.js';
 import { atualizarConhecimento, docsPara } from './conhecimento.js';
-import { dossieDe, notasDe, salvarNotas, salvarFicha } from './pessoas.js';
+import { dossieDe, notasDe, salvarNotas, salvarFicha, pastaDe } from './pessoas.js';
 import { compilarRefeicoes, compilarSemana, compilarMes, gastoAdaptativo, placarSemana } from './resumo.js';
 import { visaoDe, progressoDe } from './acompanhamento.js';
 import { linhaSemanaLugares, ondeMora } from './lugares.js';
@@ -23,7 +25,7 @@ import { validarPesagens } from './progresso.js';
 import { indexarDia } from './memoria_semantica.js';
 import { sintetizar } from './voz.js';
 import { configGrafico, renderizar } from './graficos.js';
-import { agora, semanaISO, diaSeguinte, diasAnteriores, ehDomingo, minutosDe } from './util.js';
+import { agora, semanaISO, diaSeguinte, diasAnteriores, ehDomingo, minutosDe, fusoDe } from './util.js';
 import { estado } from './estado.js';
 import { enviar, enviarImagem, enviarAudio } from './whatsapp.js';
 import { enriquecerPerfis } from './perfis.js';
@@ -323,6 +325,9 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
       await persistirMemoria(estado.memoria).catch(() => {});
     }
     estado.fechandoDia = false;
+    // espelho de cada pessoa no Drive (fase 7): em segundo plano, depois de tudo (o semanal já gravou sugestões e apostas).
+    // Não espera nem lança: o fechamento do dia não depende do Drive. !resumo no meio do dia não grava (o dia não acabou).
+    if (!forcado) espelharPessoasNoDrive({ dia }).catch((e) => console.error('[drive-pessoa] espelho do dia:', e.message));
   }
 }
 
@@ -461,6 +466,243 @@ export async function fecharSemana({ dia, perfis, grupo }) {
 }
 
 // ============================================================
+// Drive por pessoa (fase 7, seção 4C do mapa): o dia inteiro de cada um (Dias/AAAA-MM/AAAA-MM-DD.md), a despensa, os
+// pensamentos e as conversas do app do mês, os planos da semana e, no domingo, a semana. O Mongo é a fonte e o Drive é o
+// espelho (o dono lê; backup); a IA não lê nada disso de volta (pessoas.js ignora). Nenhuma chamada de IA aqui.
+// Resistente a falha: cada arquivo é uma tarefa; erro numa tarefa ou numa pessoa não para as outras nem o fechamento, e o
+// que falhou vira marca em `drive_pendentes` ({ _id: jid|tipo|ref, jid, nome, tipo, ref, dia, tentativas, ultimoErro }),
+// refeita do Mongo no próximo espelho (o conteúdo é sempre remontado, nunca guardado). Desiste depois de 10 tentativas ou
+// 30 dias, com aviso no log.
+// ============================================================
+const DRIVE_PENDENTES = 'drive_pendentes';
+const MAX_TENTATIVAS_PENDENTE = 10;
+const PRAZO_PENDENTE_MS = 30 * 86400_000;
+const isoMenos = (dia, dias) => new Date(Date.parse(`${dia}T12:00:00Z`) - dias * 86400_000).toISOString();
+let espelhando = false;
+
+/**
+ * As perguntas feitas no app pela pessoa desde `desde` (AAAA-MM-DD, comparado com o dia local da troca), pelo contrato de
+ * perguntas.js da frente A (`perguntasDe(jids, { desde, n })`, da mais antiga pra mais nova). perguntasDe devolve no máximo
+ * as 200 mais recentes: se veio cheio (um mês movimentado), lê a coleção `perguntas_app` direto, sem teto, pro arquivo do
+ * mês não perder as primeiras. Sem o módulo, também lê direto.
+ */
+const TETO_PERGUNTAS_DE = 200;
+async function perguntasDoApp(perfil, desde) {
+  const jids = perfil.jids || [];
+  if (!jids.length) return [];
+  try {
+    const m = await import('./perguntas.js');
+    if (typeof m.perguntasDe === 'function') {
+      const lista = await m.perguntasDe(jids, { desde, n: TETO_PERGUNTAS_DE });
+      if (Array.isArray(lista) && lista.length < TETO_PERGUNTAS_DE) return lista;
+    }
+  } catch (e) {
+    if (e?.code !== 'ERR_MODULE_NOT_FOUND') console.warn('[drive-pessoa] perguntas do app:', e.message);
+  }
+  return colecao('perguntas_app').find({ jid: { $in: jids }, dia: { $gte: desde } }).sort({ em: 1 }).toArray();
+}
+
+/** Tudo do dia de uma pessoa, das coleções que já existem, no formato de drive-pessoa.dadosDoDia. Lança se o Mongo falhar. */
+async function dadosDoDiaDe(perfil, dia) {
+  const jids = perfil.jids || [];
+  const doJid = { $in: jids };
+  const [refeicoes, pesagens35, pesagens, humor, eventos, correcoes, perguntas, saude, treinos, catalogo, pensamentos, despensa, habitos, falas] = await Promise.all([
+    refeicoesDesde(jids, diasAnteriores(dia, 35)[0], dia),
+    pesagensDesde(jids, diasAnteriores(dia, 35)[0], dia),
+    colecao('pesagens').find({ jid: doJid, dia }).toArray(), // todas as do dia, com a fonte (inclusive as descartadas)
+    humorDe(jids, dia, dia),
+    eventosDe(jids, dia, dia),
+    correcoesDoDia(dia),
+    perguntasDoApp(perfil, dia),
+    colecao('saude_relogio').findOne({ _id: jids[0] }),
+    // 8 semanas de treinos: a carga sugerida do dia sai do histórico do exercício (o start_time do Hevy é UTC: 1 dia a mais)
+    colecao('treinos').find({ jid: doJid, inicio: { $gte: isoMenos(dia, 57), $lte: `${diaSeguinte(dia)}T23:59:59.999Z` } }).toArray(),
+    colecao('hevy_exercicios').findOne({ _id: 'catalogo' }).then((d) => d?.mapa || {}).catch(() => ({})),
+    colecao('pensamentos').find({ jid: doJid, dia }).project({ investigacao: 0, sinais: 0, assinatura: 0 }).toArray(),
+    colecao('despensa').find({ jid: doJid, $or: [{ compradoEm: dia }, { acabouEm: dia }] }).toArray(),
+    colecao('habitos').findOne({ jid: doJid, dia }),
+    colecao('falas').find({ dia }).sort({ em: 1 }).toArray(),
+  ]);
+  let meta = null;
+  let contextoTreino = {};
+  try {
+    meta = gastoAdaptativo({ refeicoes, pesagens: pesagens35, perfil, dia, gastos: perfil.relogio?.gastos }).alvo || null;
+  } catch (e) {
+    console.warn(`[drive-pessoa] meta de ${perfil.nome}:`, e.message);
+  }
+  try {
+    contextoTreino = contextoDoTreino({ perfil, dia, refeicoes, pesagens: pesagens35, saude });
+  } catch {
+    contextoTreino = {};
+  }
+  return dadosDoDia({ perfil, dia, refeicoes, pesagens, humor: humor[0] || null, eventos, correcoes, perguntas, saude, treinos: treinos.filter((t) => t?.inicio), catalogo, contextoTreino, pensamentos, despensa, habitos, falas, meta });
+}
+
+/** A semana que termina no domingo `dia`, no formato de drive-pessoa.dadosDaSemana. */
+async function dadosDaSemanaDe(perfil, dia) {
+  const jids = perfil.jids || [];
+  const doJid = { $in: jids };
+  const dias = diasAnteriores(dia, 7);
+  const domingoAnterior = diasAnteriores(dia, 8)[0];
+  const [refeicoes, pesagens, saude, humor, perguntas, previsaoNova, previsaoConferida] = await Promise.all([
+    refeicoesDesde(jids, dias[0], dia),
+    pesagensDesde(jids, dias[0], dia),
+    colecao('saude_relogio').findOne({ _id: jids[0] }),
+    humorDe(jids, dias[0], dia),
+    perguntasDoApp(perfil, dias[0]),
+    colecao('previsoes').findOne({ jid: doJid, feitaEm: dia }),
+    colecao('previsoes').findOne({ jid: doJid, conferida: true, $or: [{ feitaEm: domingoAnterior }, { alvoDia: { $gte: dias[0], $lte: dia } }] }),
+  ]);
+  return dadosDaSemana({ perfil, dia, refeicoes, pesagens, saude, humor, perguntas, previsaoNova, previsaoConferida, sugestoes: perfil.sugestoesCarga || [] });
+}
+
+/** Monta o conteúdo de uma tarefa do espelho a partir do Mongo. tarefa = { tipo, ref, dia }. */
+async function conteudoDaTarefa(perfil, tarefa) {
+  const jids = perfil.jids || [];
+  const doJid = { $in: jids };
+  const { tipo, ref, dia } = tarefa;
+  if (tipo === 'dia') return mdDiaPessoa(await dadosDoDiaDe(perfil, ref));
+  if (tipo === 'semana') return mdSemanaPessoa(await dadosDaSemanaDe(perfil, dia));
+  if (tipo === 'despensa') {
+    // é o estado ATUAL (sobrescreve): mesmo uma pendência antiga grava o de agora
+    const hoje = agora(fusoDe(perfil)).dia;
+    const [itens, compras] = await Promise.all([colecao('despensa').find({ jid: doJid }).toArray(), colecao('notas').find({ jid: doJid, dia: { $gte: diasAnteriores(hoje, 28)[0] } }).toArray()]);
+    return mdDespensa({ nome: perfil.nome, dia: hoje, itens, compras });
+  }
+  if (tipo === 'pensamentos') {
+    const pensamentos = await colecao('pensamentos').find({ jid: doJid, dia: { $gte: `${ref}-01`, $lte: `${ref}-31` } }).project({ investigacao: 0, sinais: 0, assinatura: 0 }).toArray();
+    return mdPensamentos({ nome: perfil.nome, mes: ref, pensamentos });
+  }
+  if (tipo === 'conversas') return mdConversasApp({ nome: perfil.nome, mes: ref, perguntas: await perguntasDoApp(perfil, `${ref}-01`), fuso: fusoDe(perfil) });
+  if (tipo === 'plano') {
+    const planos = await colecao('planos').find({ jid: doJid, semana: ref }).sort({ criadoEm: 1 }).toArray();
+    return mdPlanoSemana({ nome: perfil.nome, semana: ref, planos });
+  }
+  throw new Error(`tarefa desconhecida: ${tipo}`);
+}
+
+/** As tarefas da noite de uma pessoa: o dia, o anterior se o relógio mandou dado depois que ele acabou, despensa, mês, planos novos, semana no domingo. */
+async function tarefasDaNoite(perfil, dia) {
+  const jids = perfil.jids || [];
+  const mes = dia.slice(0, 7);
+  const tarefas = [{ tipo: 'dia', ref: dia, dia }];
+  // dado atrasado do relógio (passos e gasto do dia anterior chegam na sincronização da manhã seguinte): regrava ontem
+  const ontem = diasAnteriores(dia, 2)[0];
+  const saude = await colecao('saude_relogio').findOne({ _id: jids[0] }, { projection: { ultimoEnvio: 1 } }).catch(() => null);
+  if (saude?.ultimoEnvio && new Date(saude.ultimoEnvio).toLocaleString('sv-SE', { timeZone: fusoDe(perfil) }).slice(0, 10) > ontem) tarefas.push({ tipo: 'dia', ref: ontem, dia: ontem });
+  // pensamentos e conversas do app: o mês inteiro é remontado do Mongo e sobrescrito (repetir não duplica nada). O
+  // fechamento das 23:59 é do dia que acabou, então o último dia do mês fecha o arquivo daquele mês.
+  tarefas.push({ tipo: 'despensa', ref: 'atual', dia }, { tipo: 'pensamentos', ref: mes, dia }, { tipo: 'conversas', ref: mes, dia });
+  // planos gerados nas últimas 48 h (pelo WhatsApp ou pelo app, D13): cada semana vira Planos/AAAA-Www.md
+  const planos = await colecao('planos').find({ jid: { $in: jids }, criadoEm: { $gte: new Date(Date.now() - 48 * 3600_000) } }).project({ semana: 1, criadoEm: 1 }).toArray().catch(() => []);
+  for (const s of new Set(planos.map((p) => p.semana || semanaISO(new Date(p.criadoEm).toISOString().slice(0, 10))))) tarefas.push({ tipo: 'plano', ref: s, dia });
+  if (ehDomingo(dia)) tarefas.push({ tipo: 'semana', ref: semanaISO(dia), dia });
+  return tarefas;
+}
+
+async function marcarPendente(perfil, tarefa, erro) {
+  const jid = perfil.jids?.[0];
+  if (!jid) return;
+  const _id = chavePendente({ jid, tipo: tarefa.tipo, ref: tarefa.ref });
+  await colecao(DRIVE_PENDENTES)
+    .updateOne(
+      { _id },
+      { $set: { jid, nome: perfil.nome, tipo: tarefa.tipo, ref: tarefa.ref, dia: tarefa.dia || null, ultimoErro: String(erro?.message || erro || '').slice(0, 200), atualizadoEm: new Date() }, $inc: { tentativas: 1 }, $setOnInsert: { criadoEm: new Date() } },
+      { upsert: true }
+    )
+    .catch((e) => console.error('[drive-pessoa] não consegui marcar a pendência:', e.message));
+}
+const limparPendente = (perfil, tarefa) => colecao(DRIVE_PENDENTES).deleteOne({ _id: chavePendente({ jid: perfil.jids?.[0], tipo: tarefa.tipo, ref: tarefa.ref }) }).catch(() => {});
+
+/**
+ * Espelho de cada pessoa no Drive. Com `dia`: as tarefas da noite (tarefasDaNoite) mais as pendentes; sem `dia`: só as
+ * pendentes (pra quem quiser chamar no boot). Uma pessoa por vez, um arquivo por vez; nunca lança.
+ * @returns {Promise<{ gravados: number, pendentes: number }>}
+ */
+export async function espelharPessoasNoDrive({ dia = null } = {}) {
+  const vazio = { gravados: 0, pendentes: 0 };
+  if (!(process.env.DRIVE_FOLDER_ID || '').trim()) return vazio;
+  if (espelhando) return vazio;
+  espelhando = true;
+  let gravados = 0;
+  let pendentes = 0;
+  try {
+    // perfis de novo do banco: o semanal acabou de gravar sugestões de carga e a atividade fixa pendente foi fechada
+    const perfis = (await listarPerfis()).filter((p) => p.jids?.length);
+    const porPessoa = new Map(perfis.map((p) => [p.jids[0], { perfil: p, tarefas: new Map() }]));
+    const juntar = (jid, t) => {
+      const alvo = porPessoa.get(jid);
+      if (alvo) alvo.tarefas.set(chavePendente({ jid, tipo: t.tipo, ref: t.ref }), t);
+    };
+    // o que ficou de noites anteriores vem primeiro (tarefa repetida hoje vira uma só)
+    const antigas = await colecao(DRIVE_PENDENTES).find({}).sort({ criadoEm: 1 }).limit(100).toArray().catch(() => []);
+    for (const p of antigas) {
+      const velha = Date.now() - new Date(p.criadoEm || 0).getTime() > PRAZO_PENDENTE_MS;
+      if ((p.tentativas || 0) >= MAX_TENTATIVAS_PENDENTE || velha || !porPessoa.has(p.jid)) {
+        console.warn(`[drive-pessoa] desisti de ${p.tipo} ${p.ref} de ${p.nome || p.jid} (${p.tentativas || 0} tentativa(s); último erro: ${p.ultimoErro || '?'})`);
+        await colecao(DRIVE_PENDENTES).deleteOne({ _id: p._id }).catch(() => {});
+        continue;
+      }
+      juntar(p.jid, { tipo: p.tipo, ref: p.ref, dia: p.dia || p.ref });
+    }
+    if (dia) {
+      for (const { perfil } of porPessoa.values()) {
+        for (const t of await tarefasDaNoite(perfil, dia).catch((e) => (console.warn(`[drive-pessoa] tarefas de ${perfil.nome}:`, e.message), [{ tipo: 'dia', ref: dia, dia }]))) juntar(perfil.jids[0], t);
+      }
+    }
+    let travado = null; // erro permanente (credencial, cota): não adianta tentar o resto agora
+    for (const { perfil, tarefas } of porPessoa.values()) {
+      if (!tarefas.size) continue;
+      // o dia primeiro (é o arquivo que mais importa), depois o resto na ordem
+      const lista = [...tarefas.values()].sort((a, b) => Number(b.tipo === 'dia') - Number(a.tipo === 'dia'));
+      let pastaId = null;
+      if (!travado) {
+        try {
+          pastaId = await comRepeticao(() => pastaDe(perfil));
+        } catch (e) {
+          console.error(`[drive-pessoa] pasta de ${perfil.nome}:`, e.message);
+          if (erroPermanenteDrive(e)) travado = e;
+          for (const t of lista) await marcarPendente(perfil, t, e);
+          pendentes += lista.length;
+          continue;
+        }
+      }
+      for (const t of lista) {
+        if (travado) {
+          await marcarPendente(perfil, t, travado);
+          pendentes++;
+          continue;
+        }
+        try {
+          const conteudo = await conteudoDaTarefa(perfil, t);
+          const { pasta, arquivo } = caminhoDrive(t.tipo, t.ref);
+          await salvarNaPasta(pastaId, pasta, arquivo, conteudo);
+          await limparPendente(perfil, t);
+          gravados++;
+        } catch (e) {
+          console.error(`[drive-pessoa] ${t.tipo} ${t.ref} de ${perfil.nome}:`, e.message);
+          if (erroPermanenteDrive(e)) travado = e;
+          await marcarPendente(perfil, t, e);
+          pendentes++;
+        }
+      }
+    }
+    if (gravados || pendentes) {
+      console.log(`[drive-pessoa] ${gravados} arquivo(s) gravado(s)${pendentes ? `, ${pendentes} pendente(s) pra próxima noite` : ''}`);
+      await registrarLog(dia || agora().dia, `${agora().hora} espelho das pessoas no Drive: ${gravados} arquivo(s)${pendentes ? `, ${pendentes} pendente(s)` : ''}`).catch(() => {});
+    }
+  } catch (e) {
+    console.error('[drive-pessoa] espelho falhou:', e.message);
+  } finally {
+    espelhando = false;
+  }
+  return { gravados, pendentes };
+}
+
+/** Só as pendências do espelho (boot ou um cron de repescagem). Nunca lança. */
+export const repetirPendentesDrive = () => espelharPessoasNoDrive({ dia: null });
+
+// ============================================================
 // Notas de voz programadas: segunda de manhã (abrir a semana) e sexta à tarde (fechar a semana), no personagem.
 // Se a síntese falhar, vai em texto. Desligáveis com !voz off.
 // ============================================================
@@ -483,14 +725,30 @@ export async function falaProgramada(tipo) {
   const dados = `${compilarSemana(registros, perfis, dias)}\n\nCOMIDAS QUE APARECERAM:\n${comidas}\n\nPLACAR:\n${placarSemana(registros, perfis, dias)}`;
   const texto = ia.separarAtualizacao(await ia.falaProgramada({ tipo, perfis, dados, persona: estado.persona, dia })).texto;
   if (!texto) return;
+  let audio = true;
   try {
     await enviarAudio(grupo, await sintetizar(texto));
     console.log(`[voz] nota de voz de ${tipo} enviada (${texto.length} chars)`);
   } catch (e) {
     console.warn(`[voz] ${tipo} sem áudio, indo em texto:`, e.message);
+    audio = false;
     await enviar(grupo, texto);
   }
+  // D20: o texto da nota de voz fica guardado (coleção `falas`) pro app (/resumos) e pro arquivo do dia no Drive.
+  // Foi dito no grupo, então não é confidência de ninguém.
+  await guardarFala({ dia, tipo, texto, audio });
   await lembrar({ hora: agora().hora, jid: null, nome: ia.nomeDaBot(), texto: `(nota de voz) ${texto}`, tipo: 'bot' });
+}
+
+/**
+ * Grava o texto de uma fala programada em `falas`: { dia, tipo ('segunda' | 'sexta' | ...), texto, audio (foi como áudio
+ * ou caiu pra texto), em }. Melhor esforço: falha aqui não impede a fala.
+ */
+export async function guardarFala({ dia, tipo, texto, audio = true }) {
+  if (!texto || !dia) return;
+  await colecao('falas')
+    .insertOne({ dia, tipo: String(tipo || 'fala'), texto: String(texto).slice(0, 4000), audio: Boolean(audio), em: new Date() })
+    .catch((e) => console.warn('[voz] não guardei o texto da fala:', e.message));
 }
 
 // ============================================================

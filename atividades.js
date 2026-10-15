@@ -271,6 +271,63 @@ export async function criarAtividade(perfil, texto) {
   await salvarPerfil({ jids: perfil.jids, atividades: [...(perfil.atividades || []), a] });
   return { ok: `Cadastrado: ${descreverAtividade(a, perfil.peso)}${lugar ? '' : ' (sem lugar: vou sempre perguntar)'}` };
 }
+// ---------- pelo app (fase 7): por objeto e por id, não por texto e posição ----------
+/**
+ * Puro. A atividade nova a partir do pedido do app já validado ({ nome, dias, inicio, fim, met, lugarId, aqui }), com o
+ * lugar resolvido: `lugarId` = um lugar da pessoa (perfil.lugares); `aqui` = o último ponto da localização (`ultimoPonto`).
+ * Devolve { atividade } ou { erro } (texto curto pra tela).
+ */
+export function atividadeDeObjeto(perfil, v, { ultimoPonto = null, id = `a${Date.now().toString(36)}`, dia = agora().dia } = {}) {
+  let lugar = null;
+  if (v.lugarId) {
+    const l = (perfil?.lugares || []).find((x) => String(x.id) === String(v.lugarId));
+    if (!l) return { erro: 'Lugar não encontrado.' };
+    lugar = { lat: l.lat, lon: l.lon, nome: l.nome || l.tipo || 'lugar marcado', raioM: RAIO_PADRAO_M };
+  } else if (v.aqui) {
+    if (!ultimoPonto) return { erro: 'Ainda não tenho sua localização. Abra o app e sincronize.' };
+    lugar = { lat: ultimoPonto.lat, lon: ultimoPonto.lon, nome: 'onde você estava ao cadastrar', raioM: RAIO_PADRAO_M };
+  }
+  return { atividade: { id, nome: v.nome, dias: [...v.dias], inicio: v.inicio, fim: v.fim, met: v.met, lugar, criadoEm: dia, origem: 'app' } };
+}
+
+/** Cadastra uma atividade fixa pedida pelo app (já validada). Devolve { atividade } ou { erro }. */
+export async function criarAtividadeDeObjeto(perfil, v) {
+  const ultimoPonto = v.aqui ? await colecao('locais_brutos').find({ jid: jidDe(perfil) }).sort({ ts: -1 }).limit(1).next().catch(() => null) : null;
+  const r = atividadeDeObjeto(perfil, v, { ultimoPonto, dia: agora(fusoDe(perfil)).dia });
+  if (r.erro) return r;
+  await salvarPerfil({ jids: perfil.jids, atividades: [...(perfil.atividades || []), r.atividade] });
+  return r;
+}
+
+/** Remove a atividade pelo id (o app não usa a posição da lista). Devolve a removida ou null. */
+export async function removerAtividadePorId(perfil, aid) {
+  const lista = perfil?.atividades || [];
+  const rem = lista.find((a) => String(a.id) === String(aid));
+  if (!rem) return null;
+  const pendentes = (perfil.atividadesPendentes || []).filter((p) => p.id !== rem.id);
+  await salvarPerfil({ jids: perfil.jids, atividades: lista.filter((a) => a !== rem), atividadesPendentes: pendentes });
+  return rem;
+}
+
+/**
+ * Resposta pelo app ao "teve vôlei?" (ou o registro de um dia sem pergunta): registra feita/não feita no dia e tira a
+ * pendência, então a pergunta do grupo deixa de valer. Devolve { feita, kcal, somadas } ou null (atividade não existe).
+ */
+export async function responderAtividade(perfil, { id, dia, feita }) {
+  const a = (perfil?.atividades || []).find((x) => String(x.id) === String(id));
+  if (!a) return null;
+  const minutos = duracaoMin(a);
+  // já estava somada (pela localização ou resposta anterior)? a resposta nova manda: desfaz o que tinha entrado no gasto
+  const anterior = (perfil.atividadesFeitas?.[dia] || []).find((f) => f.id === a.id);
+  if (anterior?.kcal && perfil.relogio?.gastos?.[dia] != null) {
+    const relogio = { ...perfil.relogio, gastos: { ...perfil.relogio.gastos } };
+    relogio.gastos[dia] = Math.round(relogio.gastos[dia] - kcalLiquida(anterior.kcal, anterior.minutos, perfil.relogio.peso));
+    await salvarPerfil({ jids: perfil.jids, relogio });
+    perfil = { ...perfil, relogio };
+  }
+  return registrar(perfil, dia, a, { feita: Boolean(feita), kcal: kcalAtividade(a.met, perfil.peso, minutos), minutos, como: 'app' });
+}
+
 export async function removerAtividade(perfil, n) {
   const lista = [...(perfil.atividades || [])];
   const i = Number(n) - 1;

@@ -2,6 +2,8 @@
 // Na raiz do Drive existe uma pasta com o nome de cada usuário (ex.: "Ana Paula Souza", "João Almeida").
 // - O que a PESSOA coloca lá (PDF, Google Docs, .md, .txt) a Nutri lê e usa como memória sobre ela.
 // - O que a NUTRI aprende vai pra arquivos "Nutri-*.md" na mesma pasta (Nutri-Notas.md, Nutri-Ficha.md).
+// - O espelho da fase 7 (Dias/, Semanas/, Planos/, Nutri-Pensamentos/, Nutri-Conversas-App/, Nutri-Despensa.md) e as fotos
+//   do app (Fotos/) ficam na mesma pasta e NUNCA entram no dossiê (drive-pessoa.entraNoDossie): só Nutri-Notas.md é relido.
 // Textos extraídos ficam em cache no Mongo (collection arquivos_pessoa) por id+modifiedTime, então o PDF só é transcrito uma vez.
 
 import { colecao, salvarPerfil } from './mongo.js';
@@ -13,6 +15,7 @@ import { importarTimeline } from './lugares.js';
 import { colecao as colecaoDocs, salvarPerfil as salvarPerfilDocs, registrarPesagem as registrarPesagemDocs } from './mongo.js';
 import { mdPerfil as mdPerfilDocs } from './drive.js';
 import { agora } from './util.js';
+import { entraNoDossie } from './drive-pessoa.js';
 
 const PASTAS_SISTEMA = new Set(['conhecimento', 'logs', 'diario', 'resumos', 'perfis']);
 const CACHE_LISTA_MS = 10 * 60_000; // relista a pasta no máximo a cada 10 min
@@ -149,7 +152,9 @@ async function sincronizar(perfil, { forcar = false } = {}) {
       if (t != null) st.notas = t.replace(/^---[\s\S]*?---\n/, '').trim();
       continue;
     }
-    if (arq.name.startsWith('Nutri-')) continue; // coisas dela mesma (ficha, saúde), não entram no dossiê
+    // coisas dela mesma (ficha, saúde, despensa) e o espelho do Drive (Dias/, Semanas/, Planos/, Nutri-*/, Fotos/ e .md com
+    // nome de dia/mês/semana) não entram no dossiê: a IA não relê o próprio espelho (humor e perguntas do app são confidência)
+    if (!entraNoDossie(arq)) continue;
     const chave = `${arq.id}:${arq.modifiedTime}`;
     if (!st.textos.has(chave)) {
       if (ehPlanilhaSaude(arq)) {

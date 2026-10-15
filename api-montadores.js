@@ -74,6 +74,12 @@ export function montarPerfil(perfil, { temHevy = false, adminJid = '' } = {}) {
     // fase 3: a tela Perfil edita altura e ritmo (o PUT já aceitava; faltava devolver)
     altura: Number(perfil?.altura) > 0 ? int(perfil.altura) : null,
     ritmo: /^(maximo|medio|minimo)$/.test(String(perfil?.ritmo || '')) ? String(perfil.ritmo) : null,
+    // fase 7 (W10, W11): o "Sobre" do menu do nome (o PUT /perfis/:id já aceita; o app precisa ler o que ficou)
+    idade: Number.isInteger(Number(perfil?.idade)) && Number(perfil.idade) >= 10 && Number(perfil.idade) <= 110 ? Number(perfil.idade) : null,
+    cidade: typeof perfil?.cidade === 'string' && perfil.cidade.trim() ? perfil.cidade.trim() : null,
+    dieta: typeof perfil?.dieta === 'string' && perfil.dieta.trim() ? perfil.dieta.trim() : null,
+    restricoes: typeof perfil?.restricoes === 'string' && perfil.restricoes.trim() ? perfil.restricoes.trim() : null,
+    genero: /^(masculino|feminino|outro)$/.test(String(perfil?.genero || '')) ? String(perfil.genero) : null,
   });
 }
 
@@ -995,12 +1001,51 @@ export function fatoresSono({ sonos = [], atividades = [], dia }) {
   ];
 }
 
+// ---------- fase 7: oxigênio no sangue e temperatura da pele no sono (permissões opcionais do coletor) ----------
+const numOuNull = (v) => (v == null || v === '' || typeof v === 'boolean' || !Number.isFinite(Number(v)) ? null : Number(v));
+const decTxt = (v, casas = 1) => String(arred(v, casas)).replace('.', ',');
+/** Puro. O oxigênio da noite como o relogio.js guardou ({ media, min, minutosAbaixo90 }); null sem média. */
+export function spo2DaNoite(s) {
+  const media = numOuNull(s?.media);
+  if (!(media > 0)) return null;
+  const min = numOuNull(s.min);
+  const abaixo = numOuNull(s.minutosAbaixo90);
+  return { media: r1(media), min: min > 0 ? r1(min) : null, minutosAbaixo90: abaixo != null && abaixo >= 0 ? int(abaixo) : null };
+}
+/** Puro. A temperatura da pele da noite ({ media|null, delta }); null sem `delta` (sem ele não há "diferença do normal"). */
+export function temperaturaDaNoite(t) {
+  const delta = numOuNull(t?.delta);
+  if (delta == null) return null;
+  const media = numOuNull(t.media);
+  return { media: media > 0 ? r1(media) : null, delta: r2(delta) };
+}
+/**
+ * Puro. Fator "Oxigênio no sangue": média ≥ 95 % e até 1 min abaixo de 90 % = excelente; ≥ 94 % e até 5 min = bom; ≥ 92 % e
+ * até 15 min = razoável; senão atenção. null sem dado (o fator só aparece quando o relógio mandou).
+ */
+export function fatorOxigenio(spo2) {
+  if (!spo2 || spo2.media == null) return null;
+  const m = spo2.media;
+  const abaixo = spo2.minutosAbaixo90 ?? 0;
+  const nivel = m >= 95 && abaixo <= 1 ? 'excelente' : m >= 94 && abaixo <= 5 ? 'bom' : m >= 92 && abaixo <= 15 ? 'razoavel' : 'atencao';
+  return { id: 'spo2', nome: 'Oxigênio no sangue', valor: `${decTxt(m)} %`, nivel, explicacao: 'No sono o normal é 95 % ou mais, sem quedas longas.' };
+}
+/** Puro. Fator "Temperatura da pele": diferença do normal até 0,5 °C = excelente; até 1 = bom; até 1,5 = razoável; senão atenção. */
+export function fatorTemperatura(t) {
+  if (!t || t.delta == null) return null;
+  const d = Math.abs(t.delta);
+  const nivel = d <= 0.5 ? 'excelente' : d <= 1 ? 'bom' : d <= 1.5 ? 'razoavel' : 'atencao';
+  const sinal = t.delta < 0 && arred(d, 1) > 0 ? '−' : '+';
+  return { id: 'temperatura', nome: 'Temperatura da pele', valor: `${sinal}${decTxt(d)} °C`, nivel, explicacao: 'Diferença do seu normal. Subida grande pode ser sinal de doença.' };
+}
+
 const TXT_ROTULO = { excelente: 'excelente', boa: 'bom', razoavel: 'razoável', atencao: 'pede atenção' };
 
 /**
  * GET /perfis/:id/sono?dia=. A noite que terminou em `dia` (doc de saude_relogio): nota e rótulo (notaSono), variação contra
  * a média das notas dos 7 dias anteriores, horários, fases (null sem fases), faixas típicas, estágios ao longo da noite
- * (vazio no envio antigo), FC/VFC, fatores e a semana.
+ * (vazio no envio antigo), FC/VFC, fatores e a semana. Fase 7: `spo2` { media, min, minutosAbaixo90 } e `temperatura`
+ * { media, delta } só quando vieram, cada um com o seu fator no fim da lista.
  */
 export function montarSono({ saude = null, dia }) {
   const sonos = saude?.sonos || [];
@@ -1012,6 +1057,9 @@ export function montarSono({ saude = null, dia }) {
     return m == null ? null : hhmmDe(m);
   };
   const noite = a?.noite;
+  // fase 7: as chaves `spo2` e `temperatura` só existem quando o relógio mandou (permissão opcional); o app esconde a linha
+  const spo2 = spo2DaNoite(noite?.spo2);
+  const temperatura = temperaturaDaNoite(noite?.temperatura);
   return completar({
     dia,
     nota: a?.nota ?? null,
@@ -1028,7 +1076,9 @@ export function montarSono({ saude = null, dia }) {
     fcMedia: Number(noite?.fcMedia) > 0 ? int(noite.fcMedia) : null,
     fcMin: Number(noite?.fcMin) > 0 ? int(noite.fcMin) : null,
     hrv: Number(noite?.hrv) > 0 ? int(noite.hrv) : null,
-    fatores: a ? fatoresSono({ sonos, atividades, dia }) : [],
+    ...(spo2 ? { spo2 } : {}),
+    ...(temperatura ? { temperatura } : {}),
+    fatores: a ? [...fatoresSono({ sonos, atividades, dia }), fatorOxigenio(spo2), fatorTemperatura(temperatura)].filter(Boolean) : [],
     semana: diasAnteriores(dia, 7).map((d) => {
       const x = avaliarNoite(sonos, d);
       return { dia: d, nota: x?.nota ?? null, dormidoMin: x ? x.dormidoMin : null };
@@ -1126,14 +1176,22 @@ export function kcalAtivasDoDia({ kcalTotal = null, basal = null, fracaoDia = 1 
   return Math.max(0, Math.round(Number(kcalTotal) - Number(basal) * Math.max(0, Math.min(1, fracaoDia))));
 }
 
-/** Os números de atividade de um dia (anéis do Hoje e da tela Atividade). `fracaoDia` só < 1 no dia em andamento. */
+/**
+ * Os números de atividade de um dia (anéis do Hoje e da tela Atividade). `fracaoDia` só < 1 no dia em andamento. Fase 7: as
+ * calorias ativas oficiais do Health Connect (`at.kcalAtivas`, permissão opcional) vencem a estimativa por Mifflin; a
+ * distância (`at.distanciaM`) só existe com a permissão.
+ */
 function numerosAtividade({ at = null, basal = null, fracaoDia = 1 }) {
   const minTreinos = (at?.treinos || []).reduce((s, t) => s + (Number(t.min) || 0), 0);
+  const oficial = numOuNull(at?.kcalAtivas);
+  const distancia = numOuNull(at?.distanciaM);
   return {
     passos: at?.passos != null ? int(at.passos) : null,
     minAtivos: at ? (at.minAtivos != null ? int(at.minAtivos) : int(minTreinos)) : null,
     kcalTotal: Number(at?.calorias) > 0 ? int(at.calorias) : null,
-    kcalAtivas: kcalAtivasDoDia({ kcalTotal: at?.calorias, basal: basal?.kcal, fracaoDia }),
+    kcalAtivas: oficial != null && oficial >= 0 ? int(oficial) : kcalAtivasDoDia({ kcalTotal: at?.calorias, basal: basal?.kcal, fracaoDia }),
+    kcalAtivasOficial: oficial != null && oficial >= 0,
+    distanciaM: distancia != null && distancia >= 0 ? int(distancia) : null,
   };
 }
 /** A basal da pessoa (peso do perfil; sem ele, a última pesagem do relógio). */
@@ -1166,7 +1224,8 @@ export function anelAtividade({ perfil = {}, saude = null, dia, hoje = dia, hora
 /**
  * GET /perfis/:id/atividade?dia=. Passos, minutos ativos (do coletor; sem ele, os minutos de exercício) e calorias ativas
  * (gasto total − basal Mifflin–St Jeor) contra as metas, por hora (só os 14 dias mais recentes têm), a hora de pico de
- * passos, os exercícios do dia e a semana em frações da meta.
+ * passos, os exercícios do dia e a semana em frações da meta. Fase 7: com as kcal ativas oficiais do Health Connect elas
+ * substituem a estimativa (`kcalAtivasEstimada: false`); `distanciaKm` e `porHora.kcalAtivas` só quando vieram.
  */
 export function montarAtividade({ perfil = {}, saude = null, dia, hoje = dia, horaAgora = '23:59' }) {
   const metas = metasAtividadeDe(perfil);
@@ -1175,6 +1234,8 @@ export function montarAtividade({ perfil = {}, saude = null, dia, hoje = dia, ho
   const at = ativ(dia);
   const x = numerosAtividade({ at, basal, fracaoDia: fracaoDoDia({ perfil, saude, dia, hoje, horaAgora }) });
   const porHora = { passos: Array.isArray(at?.porHora?.passos) ? at.porHora.passos.map(int) : null, kcal: Array.isArray(at?.porHora?.kcal) ? at.porHora.kcal.map(int) : null };
+  // fase 7: calorias ativas por hora oficiais (a chave só existe quando o relógio mandou)
+  if (Array.isArray(at?.porHora?.kcalAtivas) && at.porHora.kcalAtivas.length === 24) porHora.kcalAtivas = at.porHora.kcalAtivas.map(int);
   let picoHora = null;
   if (porHora.passos) {
     const max = Math.max(...porHora.passos);
@@ -1191,7 +1252,10 @@ export function montarAtividade({ perfil = {}, saude = null, dia, hoje = dia, ho
     kcalAtivas: x.kcalAtivas,
     metaKcal: metas.kcal,
     kcalTotal: x.kcalTotal,
-    kcalAtivasEstimada: Boolean(basal?.estimada ?? true),
+    // fase 7: a chave `distanciaKm` só existe com a permissão de distância (o app esconde a linha sem ela)
+    ...(x.distanciaM != null ? { distanciaKm: r2(x.distanciaM / 1000) } : {}),
+    // com as kcal ativas oficiais do Health Connect não há estimativa
+    kcalAtivasEstimada: x.kcalAtivasOficial ? false : Boolean(basal?.estimada ?? true),
     porHora,
     picoHora,
     exercicios: (at?.treinos || []).map((t) => ({ nome: semZap(String(t.nome || 'Exercício')), hora: t.hora ?? null, min: t.min ?? null, kcal: Number(t.kcal) > 0 ? int(t.kcal) : null, fcMedia: Number(t.fcMedia) > 0 ? int(t.fcMedia) : null })),

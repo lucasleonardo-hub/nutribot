@@ -77,6 +77,7 @@ private fun horas(a: JSONArray?): List<Double>? {
  * Tela da Atividade (fase 6), dia navegável ‹ ›: GET /perfis/:id/atividade?dia= →
  * { dia, passos, metaPassos, minAtivos, metaMin, kcalAtivas, metaKcal, kcalTotal, kcalAtivasEstimada,
  *   porHora{passos[24]|null, kcal[24]|null}, picoHora, exercicios[{nome,hora,min,kcal,fcMedia}], semana[{dia,passosPct,minPct,kcalPct}] }.
+ * Fase 7 (só quando vieram): distanciaKm e porHora.kcalAtivas[24]; com as kcal ativas oficiais, kcalAtivasEstimada = false.
  */
 @Composable
 fun TelaAtividade(vm: AppVM, perfil: Perfil?, diaArg: String?, voltar: () -> Unit) {
@@ -133,7 +134,9 @@ private fun ConteudoAtividade(j: JSONObject, dia: LocalDate, horaAtual: Int?, ao
                 NumeroMeta("Tempo ativo", minAtivos, metaM, "min", CoresAtividade.MinutosTinta, Modifier.weight(1f))
                 NumeroMeta("Kcal ativas", kcalAtivas, metaK, null, CoresAtividade.KcalTinta, Modifier.weight(1f))
             }
-            j.num("kcalTotal")?.let { LinhaValor("Gasto total do dia", "${Formato.kcal(it)} kcal", Modifier.padding(top = 10.dp)) }
+            // fase 7: distância só com a permissão (a chave não vem sem ela)
+            j.num("distanciaKm")?.let { LinhaValor("Distância", "${Formato.decimal(it, 1)} km", Modifier.padding(top = 10.dp)) }
+            j.num("kcalTotal")?.let { LinhaValor("Gasto total do dia", "${Formato.kcal(it)} kcal", Modifier.padding(top = if (j.num("distanciaKm") != null) 4.dp else 10.dp)) }
             if (j.bool("kcalAtivasEstimada") == true) Pilula("kcal ativas estimadas", Cores.Trilho, Cores.LilasTexto, Modifier.padding(top = 4.dp))
         }
     }
@@ -141,9 +144,11 @@ private fun ConteudoAtividade(j: JSONObject, dia: LocalDate, horaAtual: Int?, ao
     // por hora: passos e calorias da atividade (o gasto acima da hora mais parada do dia)
     // No dia em andamento, o piso só olha as horas já fechadas: a hora atual está pela metade e não é o repouso de uma
     // hora inteira. Sem nenhuma hora fechada ainda, as calorias por hora não aparecem.
+    // Fase 7: com as calorias ativas por hora do Health Connect (permissão opcional), elas entram no lugar da estimativa.
     val ph = j.obj("porHora")
     val passosHora = horas(ph.arr("passos"))
-    val kcalHora = horas(ph.arr("kcal"))?.let { v ->
+    val ativasHora = horas(ph.arr("kcalAtivas"))
+    val kcalHora = if (ativasHora != null) null else horas(ph.arr("kcal"))?.let { v ->
         val fechadas = v.filterIndexed { h, x -> x > 0 && (horaAtual == null || h < horaAtual) }
         val piso = fechadas.minOrNull()
         if (piso == null && horaAtual != null) null
@@ -151,12 +156,13 @@ private fun ConteudoAtividade(j: JSONObject, dia: LocalDate, horaAtual: Int?, ao
     }
     if (!semDado) {
         Cartao(forma = Formas.Cartao, atraso = 40) {
-            if (passosHora == null && kcalHora == null) {
+            if (passosHora == null && kcalHora == null && ativasHora == null) {
                 Text("Por hora", style = MaterialTheme.typography.titleMedium)
                 Text("sem dados por hora neste dia", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     passosHora?.let { BarrasHora("Passos", it, CoresAtividade.Passos, "passos", j.str("picoHora")) }
+                    ativasHora?.let { BarrasHora("Calorias ativas", it, CoresAtividade.Kcal, "kcal", null) }
                     kcalHora?.let { BarrasHora("Calorias da atividade (estimativa)", it, CoresAtividade.Kcal, "kcal", null) }
                 }
             }

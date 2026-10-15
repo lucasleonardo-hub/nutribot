@@ -28,7 +28,7 @@ import { TZ, agora, comTempo, diasAnteriores, diaSeguinte, registroDaConversa } 
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca, vigiarConexao, meusJids } from './whatsapp.js';
 import { criarRetomada } from './retomada.js';
-import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes, falaProgramada } from './dia.js';
+import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes, falaProgramada, repetirPendentesDrive } from './dia.js';
 import { avisarAdmin } from './avisos.js';
 import { paginaInicial, paginaPrivacidade } from './paginas.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
@@ -342,7 +342,10 @@ async function checarDrive() {
     // Saúde da credencial do Google: se o Drive parar (bloqueio do cliente do gcloud, autorização revogada), eu quero
     // saber no mesmo dia, não quando faltar uma semana de anotações.
     cron.schedule('20 7 * * *', () => checarDrive(), { timezone: TZ });
-    console.log('[cron] revisão mensal da base de conhecimento (dia 1, 04:00)');
+    // Fase 7: repescagem dos arquivos das pessoas no Drive que falharam no fechamento (sem pendência, não faz nada).
+    // Fora da fila: só lê o Mongo e grava no Drive, tem a própria guarda (espelhando) e nunca lança.
+    cron.schedule('40 7 * * *', () => repetirPendentesDrive(), { timezone: TZ });
+    console.log('[cron] revisão mensal da base de conhecimento (dia 1, 04:00); repescagem do Drive das pessoas às 07:40');
   } catch (e) {
     console.error('[boot] falha fatal:', e);
     process.exit(1);

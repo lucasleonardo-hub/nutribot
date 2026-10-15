@@ -9,6 +9,13 @@ import { enviar } from './whatsapp.js';
 import * as ia from './gemini.js';
 import { agora, fusoDe, minutosDe } from './util.js';
 import { concordarVocativos, corrigirGirias } from './consciencia.js';
+import { semConfidencias, mencionaCorpoSensivel } from './contexto-app.js';
+
+/**
+ * Puro. A mensagem espontânea (sai no GRUPO) copia uma confidência do app, diz que a pessoa perguntou/contou no app ou fala
+ * de oxigênio ou temperatura da pele (D10, D12)? Aí ela não sai: cortar frase de uma mensagem de 2 frases a deixa sem sentido.
+ */
+export const intervencaoVaza = (texto, confidencias = []) => semConfidencias(texto, confidencias).removidas.length > 0 || mencionaCorpoSensivel(texto);
 
 export const LIMITE_POR_DIA = 1;
 const CONFIANCA_MINIMA = 0.6;
@@ -68,7 +75,7 @@ export function podeIntervir({ hora, dia, hojeNoGrupo = 0, ultimas = [], mensage
  * Avalia e, se valer, manda a intervenção no grupo. `pensamento` = { texto, valeFalar, assunto, confianca, valeFalarPor }.
  * Nunca lança; devolve o documento gravado ou null.
  */
-export async function considerarIntervencao({ perfil, pensamento, dia, persona, lembrar }) {
+export async function considerarIntervencao({ perfil, pensamento, dia, persona, lembrar, confidencias = [] }) {
   try {
     if (/^(off|false|0|n[ãa]o)$/i.test(process.env.PROATIVIDADE || 'on')) return null;
     if (!pensamento?.valeFalar || !estado.memoria?.grupo || estado.statusConexao !== 'conectado') return null;
@@ -89,6 +96,10 @@ export async function considerarIntervencao({ perfil, pensamento, dia, persona, 
     const limpo = concordarVocativos(corrigirGirias(String(texto || '').trim()), { genero: perfil.genero });
     if (!limpo || limpo.length > 420 || /^silencio\W*$/i.test(limpo)) {
       console.log(`[proatividade] ${perfil.nome.split(' ')[0]}: a redação desistiu (${limpo ? `${limpo.length} chars` : 'vazio'})`);
+      return null;
+    }
+    if (intervencaoVaza(limpo, confidencias)) {
+      console.log(`[proatividade] ${perfil.nome.split(' ')[0]}: a mensagem tocava em confidência do app ou em oxigênio/temperatura; não falo`);
       return null;
     }
     await enviar(estado.memoria.grupo, limpo);

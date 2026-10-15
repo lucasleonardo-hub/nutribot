@@ -1,5 +1,6 @@
 package br.nutribot.relogio.ui.telas
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -38,15 +39,19 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.health.connect.client.PermissionController
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.nutribot.relogio.BuildConfig
 import br.nutribot.relogio.R
+import br.nutribot.relogio.SyncWorker
 import br.nutribot.relogio.dados.arr
 import br.nutribot.relogio.dados.bool
 import br.nutribot.relogio.dados.num
 import br.nutribot.relogio.dados.obj
 import br.nutribot.relogio.dados.objs
 import br.nutribot.relogio.dados.str
+import br.nutribot.relogio.legado.Leitor
 import br.nutribot.relogio.legado.Prefs
 import br.nutribot.relogio.ui.AppVM
 import br.nutribot.relogio.ui.Carga
@@ -147,6 +152,15 @@ private fun gruposDe(j: JSONObject): List<GrupoFontes> {
     return out
 }
 
+/** Nome curto de uma permissão opcional da fase 7 para a tela; null para as outras. */
+private fun nomeDaPermissaoNova(p: String): String? = when {
+    p.endsWith("READ_DISTANCE") -> "distância"
+    p.endsWith("READ_ACTIVE_CALORIES_BURNED") -> "calorias ativas"
+    p.endsWith("READ_OXYGEN_SATURATION") -> "oxigênio no sono"
+    p.endsWith("READ_SKIN_TEMPERATURE") -> "temperatura da pele"
+    else -> null
+}
+
 private fun corDoEstado(estado: String): Triple<String, Color, Color> = when {
     estado in setOf("ok", "conectado", "ligado", "ativo", "open") -> Triple("ok", Color(0xFFDDF5E8), Cores.BomTinta)
     estado.contains("atras") || estado.contains("aviso") || estado.contains("lento") -> Triple("atrasado", Cores.AtencaoFundo, Cores.AtencaoTinta)
@@ -174,6 +188,27 @@ fun TelaIntegracoes(vm: AppVM, legado: Legado, voltar: () -> Unit) {
         if (!tokenLido) return@LaunchedEffect
         delay(600)
         withContext(Dispatchers.IO) { if (prefs.token != token.trim()) prefs.token = token }
+    }
+
+    // Fase 7: as permissões opcionais (distância, calorias ativas, oxigênio e, se o aparelho tiver, temperatura da pele).
+    // O botão só aparece quando falta alguma; confere de novo ao voltar para a tela (a pessoa pode mudar no Health Connect).
+    var faltamNovas by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var conferir by remember { mutableStateOf(0) }
+    LifecycleResumeEffect(Unit) {
+        conferir++
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(conferir) { faltamNovas = Leitor.opcionaisFaltando(ctx) }
+    val pedirNovas = rememberLauncherForActivityResult(PermissionController.createRequestPermissionResultContract()) { dadas ->
+        val pedidas = faltamNovas
+        conferir++
+        val ganhou = pedidas.any { it in dadas }
+        legado.status = when {
+            pedidas.isNotEmpty() && dadas.containsAll(pedidas) -> "Pronto. Os dados novos vão no próximo envio."
+            ganhou -> "Pronto. O que você liberou vai no próximo envio."
+            else -> "Tudo bem. O resto continua sendo enviado."
+        }
+        if (ganhou && prefs.configurado) SyncWorker.agora(ctx)
     }
 
     Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding().verticalScroll(rememberScrollState())) {
@@ -220,6 +255,17 @@ fun TelaIntegracoes(vm: AppVM, legado: Legado, voltar: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Botao(stringResource(R.string.botao_permissoes), Modifier.fillMaxWidth()) { legado.aoPermissoes() }
+                    if (faltamNovas.isNotEmpty()) {
+                        Botao("Liberar dados novos do relógio", Modifier.fillMaxWidth()) {
+                            runCatching { pedirNovas.launch(Leitor.todasAsPermissoes(ctx)) }
+                                .onFailure { legado.status = "Não deu pra abrir o Health Connect agora." }
+                        }
+                        Text(
+                            "Falta: " + faltamNovas.mapNotNull { nomeDaPermissaoNova(it) }.sorted().joinToString(", ").ifBlank { "dados novos" } +
+                                ". Sem isso, o resto continua indo.",
+                            style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3,
+                        )
+                    }
                     Botao(stringResource(R.string.botao_sincronizar), Modifier.fillMaxWidth()) { legado.aoSincronizar() }
                     Botao(stringResource(R.string.botao_bateria), Modifier.fillMaxWidth(), suave = true) { legado.aoBateria() }
                     Botao(stringResource(R.string.botao_localizacao) + if (legado.localizacaoLigada) " · ligada" else " · desligada", Modifier.fillMaxWidth(), suave = true) { legado.aoLocalizacao() }

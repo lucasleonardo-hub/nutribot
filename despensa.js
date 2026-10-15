@@ -17,7 +17,30 @@ import * as ia from './gemini.js';
 const MAX_ITENS_BLOCO = 18;
 const OFF_POR_NOTA = 10; // consultas por nome ao Open Food Facts por nota (as por código de barras não contam)
 const UF_POR_CODIGO = { 11: 'RO', 12: 'AC', 13: 'AM', 14: 'RR', 15: 'PA', 16: 'AP', 17: 'TO', 21: 'MA', 22: 'PI', 23: 'CE', 24: 'RN', 25: 'PB', 26: 'PE', 27: 'AL', 28: 'SE', 29: 'BA', 31: 'MG', 32: 'ES', 33: 'RJ', 35: 'SP', 41: 'PR', 42: 'SC', 43: 'RS', 50: 'MS', 51: 'MT', 52: 'GO', 53: 'DF' };
-const VALIDADE_PADRAO = { carne: 3, peixe: 2, frango: 3, laticínio: 10, 'fruta': 6, verdura: 5, legume: 8, pão: 4, ovo: 21, congelado: 90, mercearia: 180, bebida: 120, limpeza: 365, higiene: 365, outro: 60 };
+export const VALIDADE_PADRAO = { carne: 3, peixe: 2, frango: 3, laticínio: 10, 'fruta': 6, verdura: 5, legume: 8, pão: 4, ovo: 21, congelado: 90, mercearia: 180, bebida: 120, limpeza: 365, higiene: 365, outro: 60 };
+/** Categorias de comida que estragam (um item criado à mão nessas categorias entra como perecível). */
+export const CATEGORIAS_PERECIVEIS = ['carne', 'peixe', 'frango', 'laticínio', 'fruta', 'verdura', 'legume', 'pão', 'ovo'];
+
+// ---------- unidades (fase 7: adicionar com unidade, "usei" a granel) ----------
+const UNIDADES = { un: 'un', und: 'un', unid: 'un', unidade: 'un', unidades: 'un', kg: 'kg', quilo: 'kg', quilos: 'kg', g: 'g', gr: 'g', grama: 'g', gramas: 'g', l: 'l', litro: 'l', litros: 'l', ml: 'ml', pct: 'pct', pacote: 'pct', pacotes: 'pct', cx: 'cx', caixa: 'cx', caixas: 'cx', dz: 'dz', duzia: 'dz', dúzia: 'dz', lata: 'lata', latas: 'lata' };
+/** Puro. Unidade normalizada ('kg', 'g', 'l', 'ml', 'un', 'pct', 'cx', 'dz', 'lata'), ou null se não reconhece. */
+export const unidadeNormal = (u) => (u == null || u === '' ? null : UNIDADES[String(u).toLowerCase().trim().replace(/\.$/, '')] || null);
+const BASE_UNIDADE = { kg: ['g', 1000], g: ['g', 1], l: ['ml', 1000], ml: ['ml', 1], dz: ['un', 12], un: ['un', 1] };
+/**
+ * Puro. Converte `qtd` da unidade `de` pra unidade `para` (g e kg, ml e l, un e dúzia); mesma unidade = o próprio valor;
+ * sem conversão possível (kg -> un) = null.
+ */
+export function converterQtd(qtd, de, para) {
+  const n = Number(qtd);
+  if (!Number.isFinite(n)) return null;
+  const a = unidadeNormal(de) || de;
+  const b = unidadeNormal(para) || para;
+  if (!a || !b || a === b) return n;
+  const [baseA, fa] = BASE_UNIDADE[a] || [];
+  const [baseB, fb] = BASE_UNIDADE[b] || [];
+  if (!baseA || baseA !== baseB) return null;
+  return Math.round(((n * fa) / fb) * 1000) / 1000;
+}
 
 // ---------- puros: chave, QR, texto ----------
 /** Chave de acesso NFC-e: 44 dígitos (aceita com espaços). */
@@ -261,17 +284,23 @@ export async function entrarNaDespensa(perfil, itens, { dia, loja = null } = {})
     if (!it.item) continue;
     const k = chaveItem(it.item);
     const existente = await col.findOne({ jid, k });
-    const validadeEm = somaDias(dia, it.validadeDias || VALIDADE_PADRAO.outro);
+    const categoria = it.categoria || existente?.categoria || 'outro';
+    // validadeDias fica gravado (achado da fase 7): o "tem" e o "comprei" seguintes partem dele, não do padrão genérico
+    const validadeDias = Number(it.validadeDias) || Number(existente?.validadeDias) || VALIDADE_PADRAO[categoria] || VALIDADE_PADRAO.outro;
+    const validadeEm = somaDias(dia, validadeDias);
     const doc = {
       jid,
       k,
       item: it.item,
-      categoria: it.categoria || existente?.categoria || 'outro',
+      categoria,
+      validadeDias,
+      qtdCompra: Number(it.quantidade) || 1, // quanto entrou na última compra (o "usei" a granel mede o "acabando" por ela)
       unidade: it.unidade || existente?.unidade || 'un',
       granel: it.granel ?? existente?.granel ?? false,
       perecivel: it.perecivel ?? existente?.perecivel ?? false,
       alimento: it.alimento ?? existente?.alimento ?? true,
-      quantidade: (existente && existente.estado !== 'acabou' ? Number(existente.quantidade) || 0 : 0) + (Number(it.quantidade) || 1),
+      // o que sobrou soma na unidade nova (500 g + 1 kg = 1,5 kg); unidades sem conversão (kg e un): vale a compra nova
+      quantidade: (existente && existente.estado !== 'acabou' ? converterQtd(Number(existente.quantidade) || 0, existente.unidade || 'un', it.unidade || existente.unidade || 'un') ?? 0 : 0) + (Number(it.quantidade) || 1),
       estado: 'tem',
       compradoEm: dia,
       validadeEm,
@@ -292,41 +321,93 @@ export async function listarDespensa(perfil, { incluirAcabou = false } = {}) {
   return colecao('despensa').find(q).sort({ validadeEm: 1 }).toArray();
 }
 /**
- * Baixa/ajuste: acao = 'acabou' | 'acabando' | 'usei' (qtd opcional) | 'comprei' (qtd) | 'tem' (confirmou que ainda tem).
- * Devolve o item afetado ou null.
+ * Puro. O $set de uma baixa/ajuste num item que existe. acao = 'acabou' | 'tirar' (= acabou) | 'acabando' | 'usei' (qtd
+ * opcional) | 'comprei' (qtd) | 'tem' (confirmou que ainda tem). `unidade` (opcional) é a da quantidade dita: 200 g num item
+ * guardado em kg viram 0,2 kg. Fase 7: o "usei" a granel (arroz, feijão, café em kg) passa a descontar quando vem com
+ * quantidade (sem unidade, num item em kg ou l, 20 ou mais é lido como g ou ml: ninguém usa 20 kg de arroz); sem quantidade
+ * só marca usadoEm. "comprei" com unidade sem conversão (1 pacote num item em kg) troca a unidade e vale a compra nova.
  */
-export async function ajustarItem(perfil, { item, acao, qtd, unidade }, { dia } = {}) {
-  const jid = jidDe(perfil);
-  if (!jid || !item) return null;
-  const col = colecao('despensa');
-  const lista = await col.find({ jid }).toArray();
-  let alvo = acharItem(lista, item);
-  const hoje = dia || agora(fusoDe(perfil)).dia;
-  if (!alvo && acao !== 'comprei') return null;
-  if (!alvo) {
-    await entrarNaDespensa(perfil, [{ item: String(item).toLowerCase(), quantidade: Number(qtd) || 1, unidade: unidade || 'un', categoria: 'outro', validadeDias: VALIDADE_PADRAO.outro }], { dia: hoje });
-    return (await col.findOne({ jid, k: chaveItem(item) })) || null;
-  }
-  const set = { atualizadoEm: new Date() };
-  if (acao === 'acabou') Object.assign(set, { estado: 'acabou', quantidade: 0, acabouEm: hoje });
+export function calcularAjuste(alvo, { acao, qtd, unidade, estrito = false } = {}, hoje, agoraD = new Date()) {
+  const set = { atualizadoEm: agoraD };
+  const n = Number(qtd) > 0 ? Number(qtd) : null;
+  const unAlvo = unidadeNormal(alvo.unidade) || alvo.unidade || 'un';
+  const unDita = unidadeNormal(unidade);
+  const naUnidade = (valor) => {
+    if (valor == null) return null;
+    if (unDita) return converterQtd(valor, unDita, unAlvo);
+    if ((unAlvo === 'kg' || unAlvo === 'l') && valor >= 20) return converterQtd(valor, unAlvo === 'kg' ? 'g' : 'ml', unAlvo);
+    return valor;
+  };
+  const acabou = () => Object.assign(set, { estado: 'acabou', quantidade: 0, acabouEm: hoje });
+  if (acao === 'acabou' || acao === 'tirar') acabou();
   else if (acao === 'acabando') Object.assign(set, { estado: 'acabando' });
   else if (acao === 'tem') Object.assign(set, { estado: alvo.estado === 'acabou' ? 'tem' : alvo.estado, perguntadoEm: null, validadeEm: somaDias(hoje, Math.max(2, Math.round((alvo.validadeDias || 7) / 2))) });
-  else if (acao === 'comprei') Object.assign(set, { estado: 'tem', quantidade: (alvo.estado === 'acabou' ? 0 : Number(alvo.quantidade) || 0) + (Number(qtd) || 1), compradoEm: hoje, validadeEm: somaDias(hoje, alvo.validadeDias || VALIDADE_PADRAO[alvo.categoria] || 30), compras: (alvo.compras || 0) + 1 });
-  else if (acao === 'usei') {
-    if (alvo.granel) set.estado = alvo.estado === 'tem' ? 'tem' : alvo.estado; // granel não se controla por grama
-    else {
-      const q = Math.max(0, (Number(alvo.quantidade) || 0) - (Number(qtd) || 1));
+  else if (acao === 'comprei') {
+    const conv = naUnidade(n ?? 1);
+    const resto = alvo.estado === 'acabou' ? 0 : Number(alvo.quantidade) || 0;
+    const base = { estado: 'tem', compradoEm: hoje, validadeEm: somaDias(hoje, alvo.validadeDias || VALIDADE_PADRAO[alvo.categoria] || 30), compras: (alvo.compras || 0) + 1, perguntadoEm: null };
+    if (conv == null) Object.assign(set, base, { unidade: unDita, quantidade: n ?? 1, qtdCompra: n ?? 1 });
+    else Object.assign(set, base, { quantidade: Math.round((resto + conv) * 1000) / 1000, qtdCompra: conv });
+  } else if (acao === 'usei') {
+    // granel só desconta com unidade que se converte (200 g, 0,5 kg). Unidade desconhecida ("xícara", "colher") nunca
+    // desconta; e `estrito` (a linha DESPENSA da IA, que no WhatsApp manda "qtd" de prato: "fiz arroz" -> 1) também não
+    // desconta sem unidade. Pelo app, a quantidade sem unidade é a do próprio item (o diálogo mostra a unidade dele).
+    const unidadeDesconhecida = unidade != null && String(unidade).trim() !== '' && !unDita;
+    const granelSemConta = alvo.granel && (unidadeDesconhecida || (estrito && (!unDita || converterQtd(1, unDita, unAlvo) == null)));
+    const conv = granelSemConta ? null : naUnidade(n);
+    if (alvo.granel) {
+      set.usadoEm = hoje;
+      const atual = Number(alvo.quantidade) || 0;
+      if (conv != null && atual > 0) {
+        const q = Math.max(0, Math.round((atual - conv) * 1000) / 1000);
+        const ref = Number(alvo.qtdCompra) > 0 ? Number(alvo.qtdCompra) : atual;
+        if (q <= 0) acabou();
+        else Object.assign(set, { quantidade: q, estado: q <= ref * 0.2 ? 'acabando' : alvo.estado === 'acabando' ? 'acabando' : 'tem' });
+      }
+    } else {
+      const q = Math.max(0, Math.round(((Number(alvo.quantidade) || 0) - (conv ?? n ?? 1)) * 1000) / 1000);
       Object.assign(set, { quantidade: q, estado: q <= 0 ? 'acabou' : q <= 1 ? 'acabando' : 'tem', ...(q <= 0 ? { acabouEm: hoje } : {}) });
     }
+  } else return null;
+  return set;
+}
+
+/**
+ * Baixa/ajuste: acao = 'acabou' | 'tirar' | 'acabando' | 'usei' (qtd opcional) | 'comprei' (qtd) | 'tem'.
+ * O item é achado pelo nome (parecido serve: "acabou o iogurte") ou, pelo app, pela chave exata `k`. "comprei" de um item
+ * que não existe cria (com `categoria` e `unidade` quando vierem; pela chave, não cria). Devolve o item afetado ou null.
+ */
+export async function ajustarItem(perfil, { item, k = null, acao, qtd, unidade, categoria = null, estrito = false }, { dia } = {}) {
+  const jid = jidDe(perfil);
+  if (!jid || (!item && !k)) return null;
+  const col = colecao('despensa');
+  const alvo = k ? await col.findOne({ jid, k: String(k) }) : acharItem(await col.find({ jid }).toArray(), item);
+  const hoje = dia || agora(fusoDe(perfil)).dia;
+  if (!alvo && (acao !== 'comprei' || k)) return null;
+  if (!alvo) {
+    const cat = categoria && VALIDADE_PADRAO[categoria] ? categoria : 'outro';
+    await entrarNaDespensa(perfil, [{ item: String(item).toLowerCase().trim(), quantidade: Number(qtd) || 1, unidade: unidadeNormal(unidade) || 'un', categoria: cat, perecivel: CATEGORIAS_PERECIVEIS.includes(cat), validadeDias: VALIDADE_PADRAO[cat] }], { dia: hoje });
+    return (await col.findOne({ jid, k: chaveItem(item) })) || null;
   }
+  const set = calcularAjuste(alvo, { acao, qtd, unidade, estrito }, hoje);
+  if (!set) return null;
   await col.updateOne({ _id: alvo._id }, { $set: set });
   return { ...alvo, ...set };
+}
+
+/** Tira um item da despensa de vez (pela chave exata; o app usa quando o item nem devia estar lá). Devolve quantos apagou. */
+export async function removerItem(perfil, k) {
+  const jid = jidDe(perfil);
+  if (!jid || !k) return 0;
+  const r = await colecao('despensa').deleteOne({ jid, k: String(k) });
+  return r.deletedCount || 0;
 }
 /** Linha oculta DESPENSA da IA: [{ item, acao, qtd, unidade }]. Devolve resumo curto do que mudou (pro log). */
 export async function aplicarLinhaDespensa(perfil, lista, { dia } = {}) {
   const feitos = [];
   for (const l of (Array.isArray(lista) ? lista : []).slice(0, 12)) {
-    const r = await ajustarItem(perfil, { item: l.item, acao: String(l.acao || 'usei').toLowerCase(), qtd: l.qtd, unidade: l.unidade }, { dia }).catch(() => null);
+    // estrito: o "usei" a granel da IA só desconta com unidade conversível (o prompt diz que granel só muda de estado)
+    const r = await ajustarItem(perfil, { item: l.item, acao: String(l.acao || 'usei').toLowerCase(), qtd: l.qtd, unidade: l.unidade, estrito: true }, { dia }).catch(() => null);
     if (r) feitos.push(`${r.item}: ${l.acao}${l.qtd ? ` ${l.qtd}` : ''} → ${r.estado}${r.quantidade != null ? ` (${fmtQtd(r.quantidade, r.unidade)})` : ''}`);
   }
   return feitos;

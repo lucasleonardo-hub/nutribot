@@ -95,8 +95,9 @@ const ida = (x) => JSON.parse(JSON.stringify(x));
 // ---------- perfil ----------
 test('perfil: só os campos do contrato, id string, sem jids; ehDono pelo ADMIN_JID; semApelido = apelido null', () => {
   const p = M.montarPerfil(perfilBase(), { temHevy: true, adminJid: JID });
-  assert.deepEqual(Object.keys(p).sort(), ['apelido', 'ehDono', 'fuso', 'id', 'metaPeso', 'metaPrazo', 'nome', 'objetivo', 'primeiroNome', 'temHevy', 'temRelogio', 'altura', 'ritmo'].sort());
-  assert.deepEqual(p, { id: ID, nome: 'Pessoa A Teste', primeiroNome: 'Pessoa', apelido: 'Pê', fuso: 'America/Sao_Paulo', objetivo: 'Hipertrofia: ganhar massa', metaPeso: 80, metaPrazo: '2030-07-15', temRelogio: true, temHevy: true, ehDono: true, altura: 178, ritmo: 'maximo' });
+  assert.deepEqual(Object.keys(p).sort(), ['apelido', 'ehDono', 'fuso', 'id', 'metaPeso', 'metaPrazo', 'nome', 'objetivo', 'primeiroNome', 'temHevy', 'temRelogio', 'altura', 'ritmo', 'idade', 'cidade', 'dieta', 'restricoes', 'genero'].sort());
+  assert.deepEqual(p, { id: ID, nome: 'Pessoa A Teste', primeiroNome: 'Pessoa', apelido: 'Pê', fuso: 'America/Sao_Paulo', objetivo: 'Hipertrofia: ganhar massa', metaPeso: 80, metaPrazo: '2030-07-15', temRelogio: true, temHevy: true, ehDono: true, altura: 178, ritmo: 'maximo', idade: null, cidade: null, dieta: null, restricoes: null, genero: null });
+  assert.deepEqual(M.montarPerfil({ _id: 'd', nome: 'D', idade: 31, cidade: ' Cidade Teste ', dieta: 'vegetariana', restricoes: 'sem lactose', genero: 'feminino' }), { ...M.montarPerfil({ _id: 'd', nome: 'D' }), idade: 31, cidade: 'Cidade Teste', dieta: 'vegetariana', restricoes: 'sem lactose', genero: 'feminino' });
   const outro = M.montarPerfil({ _id: 'b', nome: 'Pessoa B', jids: ['b@x'], semApelido: true, apelido: 'Bê', fuso: 'Fuso/Inexistente', altura: '172.6', ritmo: 'médio' }, { adminJid: JID });
   assert.equal(outro.apelido, null);
   assert.deepEqual([outro.altura, outro.ritmo], [173, null]); // ritmo só sem acento (como aplicarAtualizacao grava)
@@ -599,7 +600,7 @@ test('avisos: rótulo em caixa alta sai; rápido demais = cuidado; sono e treino
 
 // ---------- I4: todas as chaves do contrato, sempre (com null quando falta), em dados mínimos ----------
 const ESQUEMA = {
-  Perfil: ['id', 'nome', 'primeiroNome', 'apelido', 'fuso', 'objetivo', 'metaPeso', 'metaPrazo', 'temRelogio', 'temHevy', 'ehDono', 'altura', 'ritmo'],
+  Perfil: ['id', 'nome', 'primeiroNome', 'apelido', 'fuso', 'objetivo', 'metaPeso', 'metaPrazo', 'temRelogio', 'temHevy', 'ehDono', 'altura', 'ritmo', 'idade', 'cidade', 'dieta', 'restricoes', 'genero'],
   // fase 6: atividade (anéis) e sono no Hoje; distribuição dos macros dentro de macros
   Hoje: ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana', 'humor', 'eventos', 'atividade', 'sono'],
   Macros: ['proteina', 'carbo', 'gordura', 'distribuicao'],

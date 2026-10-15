@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,9 +36,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.nutribot.relogio.BuildConfig
 import br.nutribot.relogio.dados.Perfil
+import br.nutribot.relogio.dados.PerfilExtra
 import br.nutribot.relogio.dados.api.ErroApi
+import br.nutribot.relogio.dados.arr
+import br.nutribot.relogio.dados.objs
+import br.nutribot.relogio.dados.str
 import br.nutribot.relogio.ui.AppVM
 import br.nutribot.relogio.ui.Formato
 import br.nutribot.relogio.ui.Rotas
@@ -84,6 +90,14 @@ private val acentos = mapOf(
 @Composable
 fun TelaPerfil(vm: AppVM, perfil: Perfil?, voltar: () -> Unit, nav: (String) -> Unit) {
     var editar by rememberSaveable { mutableStateOf(false) }
+    var editarSobre by rememberSaveable { mutableStateOf(false) }
+    // fase 7: os campos novos vêm do JSON do perfil no /perfis; dieta e restrições, se faltarem lá, dos fatos do /nutri
+    val perfisCarga by vm.carga(AppVM.ROTA_PERFIS).collectAsStateWithLifecycle()
+    val rotaNutri = perfil?.let { AppVM.rotaNutri(it.id) }
+    val nutriCarga by (rotaNutri?.let { vm.carga(it) } ?: vm.carga(AppVM.ROTA_PERFIS)).collectAsStateWithLifecycle()
+    LaunchedEffect(rotaNutri) { rotaNutri?.let { vm.carregar(it) } }
+    val bruto = perfisCarga.dados.arr("perfis").objs().firstOrNull { it.str("id", "_id") == perfil?.id }
+    val extra = PerfilExtra.de(bruto, if (rotaNutri != null) nutriCarga.dados else null)
     Column(Modifier.fillMaxSize().navigationBarsPadding().verticalScroll(rememberScrollState())) {
         CabecalhoVoltar("Perfil", perfil?.nome, Pose.DuplaFeliz, voltar)
         if (perfil == null) { Vazio("Nenhum perfil escolhido."); return@Column }
@@ -121,15 +135,105 @@ fun TelaPerfil(vm: AppVM, perfil: Perfil?, voltar: () -> Unit, nav: (String) -> 
                 LinhaValor("Hevy", if (perfil.temHevy) "ligado" else "não")
                 LinhaValor("App neste celular", BuildConfig.VERSION_NAME)
             }
+            Cartao(atraso = 80) {
+                TituloSecao("Sobre ${perfil.curto}") { Link("Editar") { editarSobre = true } }
+                LinhaValor("Apelido", extra.apelido ?: "sem apelido")
+                LinhaValor("Idade", extra.idade?.let { "$it anos" } ?: "—")
+                LinhaValor("Cidade", extra.cidade ?: "—")
+                LinhaValor("Dieta", extra.dieta ?: "—")
+                LinhaValor("Restrições", extra.restricoes ?: "—")
+                Text("A Nutri usa isso nas dicas, aqui e no WhatsApp.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, modifier = Modifier.padding(top = 4.dp))
+            }
             Cartao(atraso = 140, padding = PaddingValues(12.dp)) {
                 Link("Agenda") { nav(Rotas.AGENDA) }
+                Link("Atividades fixas") { nav(Rotas.ATIVIDADES_FIXAS) }
+                // lugares e configurações do bot só no perfil do dono (D14, D15); o servidor também confere
+                if (perfil.ehDono) Link("Lugares") { nav(Rotas.LUGARES) }
                 Link("Integrações") { nav(Rotas.INTEGRACOES) }
                 Link("O que a Nutri sabe") { nav(Rotas.NUTRI) }
                 Link("Resumos") { nav(Rotas.RESUMOS) }
+                if (perfil.ehDono) Link("Configurações do bot") { nav(Rotas.CONFIGURACOES) }
             }
         }
     }
     if (editar && perfil != null) DialogoPerfil(vm, perfil, aoFechar = { editar = false })
+    if (editarSobre && perfil != null) DialogoSobre(vm, perfil, extra, aoFechar = { editarSobre = false })
+}
+
+/**
+ * Fase 7 (W10, W11): apelido, idade, cidade, dieta e restrições. PUT /perfis/:id só com o que mudou; o servidor não apaga
+ * idade, cidade, dieta nem restrições por aqui (o app avisa); o apelido apagado vai como semApelido: true, como o `!apelido nenhum`. Depois recarrega o /perfis e o /nutri.
+ */
+@Composable
+private fun DialogoSobre(vm: AppVM, perfil: Perfil, atual: PerfilExtra, aoFechar: () -> Unit) {
+    val escopo = rememberCoroutineScope()
+    var apelido by rememberSaveable { mutableStateOf(atual.apelido ?: "") }
+    var idade by rememberSaveable { mutableStateOf(atual.idade?.toString() ?: "") }
+    var cidade by rememberSaveable { mutableStateOf(atual.cidade ?: "") }
+    var dieta by rememberSaveable { mutableStateOf(atual.dieta ?: "") }
+    var restricoes by rememberSaveable { mutableStateOf(atual.restricoes ?: "") }
+    var enviando by remember { mutableStateOf(false) }
+    var erro by remember { mutableStateOf<String?>(null) }
+
+    fun salvar() {
+        val corpo = JSONObject()
+        val ap = apelido.trim()
+        if (ap != (atual.apelido ?: "")) {
+            if (ap.isBlank()) corpo.put("semApelido", true) else corpo.put("apelido", ap)
+        }
+        // o servidor não apaga cidade, idade, dieta nem restrições por aqui (dieta e restrições se apagam no que a Nutri sabe)
+        val apagou = listOf(idade to atual.idade?.toString(), cidade to atual.cidade, dieta to atual.dieta, restricoes to atual.restricoes)
+            .any { (novo, velho) -> novo.isBlank() && !velho.isNullOrBlank() }
+        if (apagou) { erro = "Para apagar dieta ou restrições, use a aba Nutri. Idade e cidade não ficam em branco."; return }
+        val id = idade.trim()
+        if (id.isNotBlank() && id != (atual.idade?.toString() ?: "")) {
+            val n = id.toIntOrNull()
+            if (n == null || n < 10 || n > 110) { erro = "Idade entre 10 e 110 anos."; return }
+            corpo.put("idade", n)
+        }
+        fun texto(chave: String, novo: String, velho: String?) {
+            val t = novo.trim()
+            if (t.isNotBlank() && t != (velho ?: "")) corpo.put(chave, t)
+        }
+        texto("cidade", cidade, atual.cidade)
+        texto("dieta", dieta, atual.dieta)
+        texto("restricoes", restricoes, atual.restricoes)
+        if (corpo.length() == 0) { aoFechar(); return }
+        escopo.launch {
+            enviando = true
+            erro = null
+            try {
+                vm.escrever("PUT", AppVM.rotaPerfil(perfil.id), corpo)
+                vm.carregar(AppVM.ROTA_PERFIS, forcar = true)
+                vm.invalidar(perfil.id) // dieta e restrições também aparecem nos fatos da Nutri
+                aoFechar()
+            } catch (e: ErroApi) {
+                erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
+            } catch (e: CancellationException) {
+                throw e
+            } finally {
+                enviando = false
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!enviando) aoFechar() },
+        containerColor = Cores.Branco,
+        title = { Text("Sobre ${perfil.curto}", style = MaterialTheme.typography.headlineSmall) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(apelido, { apelido = it.take(30) }, label = { Text("Apelido") }, placeholder = { Text("em branco = sem apelido") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(idade, { idade = it.filter { c -> c.isDigit() }.take(3) }, label = { Text("Idade") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(cidade, { cidade = it.take(60) }, label = { Text("Cidade") }, placeholder = { Text("ex.: Florianópolis") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(dieta, { dieta = it.take(120) }, label = { Text("Dieta") }, placeholder = { Text("ex.: vegetariana, low carb") }, minLines = 1, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(restricoes, { restricoes = it.take(120) }, label = { Text("Restrições") }, placeholder = { Text("ex.: sem lactose, alergia a camarão") }, minLines = 1, maxLines = 3, modifier = Modifier.fillMaxWidth())
+                erro?.let { AvisoErro(it) }
+            }
+        },
+        confirmButton = { Botao(if (enviando) "Salvando…" else "Salvar", habilitado = !enviando) { salvar() } },
+        dismissButton = { Botao("Cancelar", suave = true, habilitado = !enviando) { aoFechar() } },
+    )
 }
 
 /**

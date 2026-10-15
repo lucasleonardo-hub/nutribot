@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -49,6 +50,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -86,6 +88,8 @@ import br.nutribot.relogio.ui.telas.comida.distribuicaoDeJson
 import br.nutribot.relogio.ui.telas.comida.distribuicaoDoObjetivo
 import br.nutribot.relogio.ui.telas.comida.FolhaRegistrar
 import br.nutribot.relogio.ui.telas.comida.Imagens
+import br.nutribot.relogio.ui.telas.despensa.BotaoDespensa
+import br.nutribot.relogio.ui.telas.despensa.PainelDespensa
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
 import br.nutribot.relogio.ui.tema.Fredoka
@@ -144,115 +148,125 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
         aberta = r.id
     }
 
-    ConteudoCarga(
-        carga,
-        { vm.carregar(rota, forcar = true) },
-        topo = {
-            Cabecalho("Comida", "${perfil.curto} · diário por dia", Pose.DuplaCozinhando, 66.dp)
-            SemanaTopo(ini, sel, hoje, dias, aoEscolher = { diaSel = Formato.iso(it) }, aoMudarSemana = { delta ->
-                // o servidor recusa "ate" no futuro (400 intervalo_invalido): a semana nunca passa de hoje
-                val novo = minOf(fim.plusDays(7L * delta), hoje)
-                fimSemana = Formato.iso(novo)
-                diaSel = Formato.iso(novo)
-            })
-        },
-    ) { _ ->
-        val d = dias[sel]
-        val ehHoje = sel == hoje
-        val kcalHoje = hojeCarga.dados.obj("kcal")
-        val faixa = if (ehHoje) kcalHoje.obj("faixa") else null
-        val total = d?.kcal ?: d?.refeicoes?.sumOf { it.kcal ?: 0.0 }
-        val gP = d?.p ?: d?.refeicoes?.sumOf { it.p ?: 0.0 }
-        val gC = d?.c ?: d?.refeicoes?.sumOf { it.c ?: 0.0 }
-        val gG = d?.g ?: d?.refeicoes?.sumOf { it.g ?: 0.0 }
-        // fase 6: a distribuição real sai dos gramas do dia mostrado; no dia de hoje, sem gramas, a do /hoje
-        val distHoje = hojeCarga.dados.obj("macros").obj("distribuicao")
-        val distReal = distribuicaoDeGramas(gP, gC, gG) ?: (if (ehHoje) distribuicaoDeJson(distHoje.obj("real")) else null)
-        val distRec = distribuicaoDeJson(distHoje.obj("recomendada")) ?: distribuicaoDoObjetivo(perfil.objetivo)
-        Cartao(forma = Formas.Medio, padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(if (ehHoje) "Hoje" else Formato.diaLongo(sel).replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                Text(
-                    when { d == null -> "sem registro"; d.completo -> "dia completo"; else -> "dia incompleto" },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = when { d == null -> Cores.Tinta3; d.completo -> Cores.BomTinta; else -> Cores.AtencaoTinta },
-                )
-            }
-            Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
-                Text("≈ ${Formato.kcal(total ?: 0.0)}", style = MaterialTheme.typography.displaySmall, fontSize = 28.sp)
-                Text(
-                    faixa?.let { f -> " de ${Formato.kcal(f.num("min"))}–${Formato.kcal(f.num("max"))} kcal" } ?: " kcal",
-                    style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3,
-                )
-            }
-            val fMax = faixa.num("max")
-            val fMin = faixa.num("min")
-            val escala = maxOf((fMax ?: total ?: 1.0) * 1.15, total ?: 0.0, 1.0)
-            val f = animaAte(((total ?: 0.0) / escala).toFloat().coerceIn(0f, 1f), 900)
-            Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 10.dp).height(12.dp).clip(Formas.Pilula).background(Cores.Trilho)) {
-                if (fMin != null && fMax != null) Row(Modifier.fillMaxWidth()) {
-                    Spacer(Modifier.weight((fMin / escala).toFloat().coerceAtLeast(0.001f)))
-                    Box(Modifier.weight(((fMax - fMin) / escala).toFloat().coerceAtLeast(0.001f)).height(12.dp).background(Cores.MetaVerde))
-                    Spacer(Modifier.weight((1 - fMax / escala).toFloat().coerceAtLeast(0.001f)))
-                }
-                Box(Modifier.fillMaxWidth(f).height(12.dp).clip(Formas.Pilula).background(Brush.horizontalGradient(listOf(Cores.LilasForte, Cores.Acai))))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(
-                    Triple("Proteína", gP, Cores.ProteinaTrilho to Cores.ProteinaTinta),
-                    Triple("Carboidrato", gC, Cores.CarboTrilho to Cores.CarboTinta),
-                    Triple("Gordura", gG, Cores.GorduraTrilho to Cores.GorduraTinta),
-                ).forEach { (nome, g, cores) ->
-                    Column(Modifier.weight(1f).clip(Formas.Pequeno).background(cores.first).padding(horizontal = 10.dp, vertical = 8.dp)) {
-                        Text(nome, style = MaterialTheme.typography.labelSmall, color = cores.second)
-                        Text("${Formato.gramas(g)} g", style = MaterialTheme.typography.titleMedium, fontSize = 17.sp)
-                    }
-                }
-            }
-            if (distReal != null) DistribuicaoMacros(distReal, distRec, Modifier.padding(top = 12.dp))
-            Botao("Registrar refeição", Modifier.fillMaxWidth().padding(top = 12.dp)) { slotRegistrar = null; registrar = true }
-        }
-        // fase 4: a sugestão da IA para a próxima refeição, só no dia de hoje
-        if (ehHoje) CartaoProximaRefeicao(vm, perfil.id)
+    // fase 7: a Despensa abre por cima da Comida (tela cheia local, sem rota no NavHost); voltar fecha
+    var despensaAberta by rememberSaveable(perfil.id) { mutableStateOf(false) }
+    val hojeIso = hojeCarga.dados.str("dia")
 
-        val refeicoes = d?.refeicoes.orEmpty()
-        if (refeicoes.isEmpty()) Vazio(if (ehHoje) "Nada registrado hoje ainda." else "Nada registrado neste dia.", Pose.LontraTriste)
-        refeicoes.forEach { r ->
-            LinhaDoTempo(r.hora) {
-                CartaoRefeicao(r, r.id == aberta, aoTocar = { aberta = if (aberta == r.id) null else r.id }, aoAjustar = { ajustar = r.id }, aoApagar = { erroApagar = null; apagar = r.id })
-            }
-        }
-        if (ehHoje) {
-            hojeCarga.dados.arr("pendentes").objs().forEach { p ->
-                LinhaDoTempo(null) {
-                    Row(
-                        Modifier.fillMaxWidth().tracejado().padding(start = 4.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Mascote(Pose.LontraTriste, 56.dp)
-                        Column(Modifier.weight(1f)) {
-                            Text(p.str("nome") ?: p.str("slot") ?: "Refeição", style = MaterialTheme.typography.labelLarge, fontSize = 15.sp)
-                            Text("ainda não registrado", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp)
+    Box(Modifier.fillMaxSize()) {
+        ConteudoCarga(
+            carga,
+            { vm.carregar(rota, forcar = true) },
+            // com a Despensa aberta, o leitor de tela não percorre a Comida que ficou embaixo
+            modifier = if (despensaAberta) Modifier.clearAndSetSemantics {} else Modifier,
+            topo = {
+                Cabecalho("Comida", "${perfil.curto} · diário por dia", Pose.DuplaCozinhando, 66.dp)
+                BotaoDespensa(vm, perfil, hojeIso) { despensaAberta = true }
+                SemanaTopo(ini, sel, hoje, dias, aoEscolher = { diaSel = Formato.iso(it) }, aoMudarSemana = { delta ->
+                    // o servidor recusa "ate" no futuro (400 intervalo_invalido): a semana nunca passa de hoje
+                    val novo = minOf(fim.plusDays(7L * delta), hoje)
+                    fimSemana = Formato.iso(novo)
+                    diaSel = Formato.iso(novo)
+                })
+            },
+        ) { _ ->
+            val d = dias[sel]
+            val ehHoje = sel == hoje
+            val kcalHoje = hojeCarga.dados.obj("kcal")
+            val faixa = if (ehHoje) kcalHoje.obj("faixa") else null
+            val total = d?.kcal ?: d?.refeicoes?.sumOf { it.kcal ?: 0.0 }
+            val gP = d?.p ?: d?.refeicoes?.sumOf { it.p ?: 0.0 }
+            val gC = d?.c ?: d?.refeicoes?.sumOf { it.c ?: 0.0 }
+            val gG = d?.g ?: d?.refeicoes?.sumOf { it.g ?: 0.0 }
+            // fase 6: a distribuição real sai dos gramas do dia mostrado; no dia de hoje, sem gramas, a do /hoje
+            val distHoje = hojeCarga.dados.obj("macros").obj("distribuicao")
+            val distReal = distribuicaoDeGramas(gP, gC, gG) ?: (if (ehHoje) distribuicaoDeJson(distHoje.obj("real")) else null)
+            val distRec = distribuicaoDeJson(distHoje.obj("recomendada")) ?: distribuicaoDoObjetivo(perfil.objetivo)
+            Cartao(forma = Formas.Medio, padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(if (ehHoje) "Hoje" else Formato.diaLongo(sel).replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    Text(
+                        when { d == null -> "sem registro"; d.completo -> "dia completo"; else -> "dia incompleto" },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = when { d == null -> Cores.Tinta3; d.completo -> Cores.BomTinta; else -> Cores.AtencaoTinta },
+                    )
+                }
+                Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
+                    Text("≈ ${Formato.kcal(total ?: 0.0)}", style = MaterialTheme.typography.displaySmall, fontSize = 28.sp)
+                    Text(
+                        faixa?.let { f -> " de ${Formato.kcal(f.num("min"))}–${Formato.kcal(f.num("max"))} kcal" } ?: " kcal",
+                        style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3,
+                    )
+                }
+                val fMax = faixa.num("max")
+                val fMin = faixa.num("min")
+                val escala = maxOf((fMax ?: total ?: 1.0) * 1.15, total ?: 0.0, 1.0)
+                val f = animaAte(((total ?: 0.0) / escala).toFloat().coerceIn(0f, 1f), 900)
+                Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 10.dp).height(12.dp).clip(Formas.Pilula).background(Cores.Trilho)) {
+                    if (fMin != null && fMax != null) Row(Modifier.fillMaxWidth()) {
+                        Spacer(Modifier.weight((fMin / escala).toFloat().coerceAtLeast(0.001f)))
+                        Box(Modifier.weight(((fMax - fMin) / escala).toFloat().coerceAtLeast(0.001f)).height(12.dp).background(Cores.MetaVerde))
+                        Spacer(Modifier.weight((1 - fMax / escala).toFloat().coerceAtLeast(0.001f)))
+                    }
+                    Box(Modifier.fillMaxWidth(f).height(12.dp).clip(Formas.Pilula).background(Brush.horizontalGradient(listOf(Cores.LilasForte, Cores.Acai))))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        Triple("Proteína", gP, Cores.ProteinaTrilho to Cores.ProteinaTinta),
+                        Triple("Carboidrato", gC, Cores.CarboTrilho to Cores.CarboTinta),
+                        Triple("Gordura", gG, Cores.GorduraTrilho to Cores.GorduraTinta),
+                    ).forEach { (nome, g, cores) ->
+                        Column(Modifier.weight(1f).clip(Formas.Pequeno).background(cores.first).padding(horizontal = 10.dp, vertical = 8.dp)) {
+                            Text(nome, style = MaterialTheme.typography.labelSmall, color = cores.second)
+                            Text("${Formato.gramas(g)} g", style = MaterialTheme.typography.titleMedium, fontSize = 17.sp)
                         }
-                        Box(
-                            Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp)).background(Cores.AcaiEscuro)
-                                .clickable(role = Role.Button) { slotRegistrar = p.str("slot"); registrar = true }
-                                .padding(horizontal = 12.dp),
-                            contentAlignment = Alignment.Center,
-                        ) { Text("Registrar", color = Cores.Branco, style = MaterialTheme.typography.labelLarge, fontSize = 13.sp) }
+                    }
+                }
+                if (distReal != null) DistribuicaoMacros(distReal, distRec, Modifier.padding(top = 12.dp))
+                Botao("Registrar refeição", Modifier.fillMaxWidth().padding(top = 12.dp)) { slotRegistrar = null; registrar = true }
+            }
+            // fase 4: a sugestão da IA para a próxima refeição, só no dia de hoje
+            if (ehHoje) CartaoProximaRefeicao(vm, perfil.id)
+
+            val refeicoes = d?.refeicoes.orEmpty()
+            if (refeicoes.isEmpty()) Vazio(if (ehHoje) "Nada registrado hoje ainda." else "Nada registrado neste dia.", Pose.LontraTriste)
+            refeicoes.forEach { r ->
+                LinhaDoTempo(r.hora) {
+                    CartaoRefeicao(r, r.id == aberta, aoTocar = { aberta = if (aberta == r.id) null else r.id }, aoAjustar = { ajustar = r.id }, aoApagar = { erroApagar = null; apagar = r.id })
+                }
+            }
+            if (ehHoje) {
+                hojeCarga.dados.arr("pendentes").objs().forEach { p ->
+                    LinhaDoTempo(null) {
+                        Row(
+                            Modifier.fillMaxWidth().tracejado().padding(start = 4.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Mascote(Pose.LontraTriste, 56.dp)
+                            Column(Modifier.weight(1f)) {
+                                Text(p.str("nome") ?: p.str("slot") ?: "Refeição", style = MaterialTheme.typography.labelLarge, fontSize = 15.sp)
+                                Text("ainda não registrado", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp)
+                            }
+                            Box(
+                                Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp)).background(Cores.AcaiEscuro)
+                                    .clickable(role = Role.Button) { slotRegistrar = p.str("slot"); registrar = true }
+                                    .padding(horizontal = 12.dp),
+                                contentAlignment = Alignment.Center,
+                            ) { Text("Registrar", color = Cores.Branco, style = MaterialTheme.typography.labelLarge, fontSize = 13.sp) }
+                        }
                     }
                 }
             }
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Cores.Branco).padding(start = 6.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Mascote(Pose.DuplaCelular, 54.dp)
+                Text("Aqui ou no WhatsApp: tudo cai no mesmo diário.", style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352))
+            }
         }
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Cores.Branco).padding(start = 6.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Mascote(Pose.DuplaCelular, 54.dp)
-            Text("Aqui ou no WhatsApp: tudo cai no mesmo diário.", style = MaterialTheme.typography.bodySmall, color = Color(0xFF3B3352))
-        }
+        PainelDespensa(despensaAberta, vm, perfil, hojeIso) { despensaAberta = false }
     }
 
     if (registrar) {

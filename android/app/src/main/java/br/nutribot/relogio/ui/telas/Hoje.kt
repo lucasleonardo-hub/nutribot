@@ -38,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,8 +65,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.nutribot.relogio.dados.CorposDespensa
+import br.nutribot.relogio.dados.FixaDoDia
+import br.nutribot.relogio.dados.FixaPendente
+import br.nutribot.relogio.dados.HabitosHoje
 import br.nutribot.relogio.dados.Perfil
 import br.nutribot.relogio.dados.Refeicao
+import br.nutribot.relogio.dados.RotasDespensa
+import br.nutribot.relogio.dados.api.ErroApi
 import br.nutribot.relogio.dados.arr
 import br.nutribot.relogio.dados.bool
 import br.nutribot.relogio.dados.int
@@ -93,6 +100,7 @@ import br.nutribot.relogio.ui.componentes.linhaDormiu
 import br.nutribot.relogio.ui.componentes.poseDaNota
 import br.nutribot.relogio.ui.componentes.BarraFaixa
 import br.nutribot.relogio.ui.componentes.BarraMacro
+import br.nutribot.relogio.ui.componentes.Botao
 import br.nutribot.relogio.ui.componentes.Brotinho
 import br.nutribot.relogio.ui.componentes.Cartao
 import br.nutribot.relogio.ui.componentes.CartaoResumo
@@ -117,8 +125,10 @@ import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
 import br.nutribot.relogio.ui.tema.Fredoka
 import br.nutribot.relogio.ui.tema.LocalReduzirMovimento
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 private val coresPerfil = listOf(Color(0xFFC9B8FF), Color(0xFFFFC9B0), Color(0xFFB8EBD0), Color(0xFFFFE08A), Color(0xFFBFE0FF))
 
@@ -265,6 +275,8 @@ fun TelaHoje(vm: AppVM, perfisCarga: Carga, perfis: List<Perfil>, perfil: Perfil
                 vm.carregar(AppVM.rotaEnergia(perfil.id, diaIso), forcar = true)
                 vm.carregar(AppVM.rotaAtividade(perfil.id, diaIso), forcar = true)
             }
+            // fase 7: o cartão das atividades fixas busca a rota dele; puxar refaz também
+            vm.carregar(RotasDespensa.atividades(perfil.id), forcar = true)
         },
         topo = { SeletorPerfis(perfis, perfil, relogioEm, vm::escolherPerfil, nav) },
     ) { j -> ConteudoHoje(vm, j, perfil, nav) }
@@ -317,12 +329,18 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
     // recados (avisos): até 3, em carrossel horizontal; tocar mostra o texto inteiro logo abaixo (fase 5)
     Recados(j.arr("avisos").objs().take(3), nav)
 
+    // fase 7: "teve vôlei?" e as atividades fixas de hoje (some sem a rota /atividades ou sem nada para hoje)
+    val diaIso = Formato.iso(dia)
+    CartaoAtividadesFixas(vm, perfil.id, diaIso)
+
     // macros (cores fixas)
     CartaoMacros(j.obj("macros"))
 
+    // fase 7: água e álcool (do /hoje.habitos ou da rota /habitos; some quando o servidor não tem nenhum dos dois)
+    CartaoAguaAlcool(vm, perfil.id, diaIso, HabitosHoje.doHoje(j))
+
     // fase 6: energia (nota, rótulo, variação, fatores), sono e atividade (anéis); cada um abre a sua tela
     // (servidor antigo, sem as chaves `sono`/`atividade`: ficam os três blocos do relógio lá embaixo, como antes)
-    val diaIso = Formato.iso(dia)
     val fase6 = j.has("sono") || j.has("atividade")
     CartaoEnergia(vm, perfil.id, diaIso, j.obj("energia"), fase6) { nav(Rotas.energia(diaIso)) }
     if (fase6) {
@@ -824,5 +842,203 @@ private fun CartaoPeso(peso: JSONObject, aoVerProgresso: () -> Unit) {
         }
         peso.str("texto")?.let { semZap(it) }?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.AcaiEscuro, modifier = Modifier.padding(top = 4.dp)) }
         Link("ver progresso", aoVerProgresso)
+    }
+}
+
+// ---------- fase 7 (frente E): água e álcool, e as atividades fixas do dia ----------
+
+private val FundoAgua = Color(0xFFE6F2FF)
+private val TintaAgua = Color(0xFF1F5A8A)
+
+/** "750 ml", "1,5 L". */
+private fun textoAgua(ml: Double): String = if (ml >= 1000) "${Formato.decimal(ml / 1000, if (ml % 1000 == 0.0) 0 else 1)} L" else "${Formato.inteiro(ml)} ml"
+
+private fun textoDoses(d: Double): String = when {
+    d <= 0 -> "nenhuma dose"
+    d == 1.0 -> "1 dose"
+    else -> "${Formato.inteiro(d)} doses"
+}
+
+/** Mensagem de uma escrita do Hoje que falhou (rota que o servidor ainda não tem vira o aviso da atualização). */
+private fun mensagemErroHoje(e: ErroApi): String = when {
+    e.status == 404 && e.codigo == "rota_inexistente" -> "Isso chega com a próxima atualização do servidor."
+    e.semConexao -> "Sem resposta do servidor. Tente de novo."
+    else -> e.paraPessoa
+}
+
+/**
+ * Água e álcool do dia (W61): `/hoje.habitos` quando o /hoje traz a chave; senão GET /perfis/:id/habitos?dia= (a mesma
+ * forma { dia, aguaMl, alcoolDoses }). Servidor sem nenhum dos dois: o cartão não aparece. Cada toque soma ao dia
+ * (POST /perfis/:id/habitos { dia, aguaMl | alcoolDoses }, só valores positivos), o mesmo registro que a Nutri faz quando a
+ * pessoa conta no WhatsApp.
+ */
+@Composable
+private fun CartaoAguaAlcool(vm: AppVM, perfilId: String, diaIso: String, doHoje: HabitosHoje?) {
+    val rota = RotasDespensa.habitosDoDia(perfilId, diaIso)
+    val carga by vm.carga(rota).collectAsStateWithLifecycle()
+    LaunchedEffect(rota, doHoje == null) { if (doHoje == null) vm.carregar(rota) }
+    val escopo = rememberCoroutineScope()
+    var enviando by remember { mutableStateOf(false) }
+    var erro by remember { mutableStateOf<String?>(null) }
+    // o último toque, só para confirmar o que somou: (aguaMl, alcoolDoses)
+    var ultimo by rememberSaveable(diaIso) { mutableStateOf<Pair<Int, Int>?>(null) }
+    // a resposta do último toque vale até o /hoje chegar de novo (a chave doHoje zera este estado)
+    var somado by remember(diaIso, doHoje) { mutableStateOf<HabitosHoje?>(null) }
+    // a resposta da rota, quando veio nesta sessão, é mais nova que o /hoje guardado
+    val daRota = HabitosHoje.deResposta(carga.dados)
+    val h = somado ?: (if (!carga.doCache) daRota else null) ?: doHoje ?: daRota ?: return
+
+    fun somar(agua: Int, alcool: Int) {
+        if (enviando) return
+        escopo.launch {
+            enviando = true
+            erro = null
+            try {
+                val corpo = CorposDespensa.habito(diaIso, aguaMl = agua.takeIf { it > 0 }, alcoolDoses = alcool.takeIf { it > 0 })
+                val j = vm.escrever("POST", RotasDespensa.habitos(perfilId), corpo)
+                ultimo = agua to alcool
+                // a resposta já é o dia somado: entra na hora; o /hoje (e o resto do perfil) é buscado de novo
+                if (j.has("aguaMl") || j.has("alcoolDoses")) {
+                    somado = HabitosHoje.deResposta(j)
+                    vm.semear(rota, j)
+                }
+                vm.invalidar(perfilId)
+            } catch (e: ErroApi) {
+                erro = mensagemErroHoje(e)
+            } finally {
+                enviando = false
+            }
+        }
+    }
+
+    val copos = (h.aguaMl / 250).roundToInt()
+    Cartao(pincel = Brush.linearGradient(listOf(FundoAgua, Cores.Branco)), forma = Formas.Grande, padding = PaddingValues(18.dp), atraso = 105) {
+        Text("Água e álcool", style = MaterialTheme.typography.titleMedium, color = Cores.Tinta3)
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Água", style = MaterialTheme.typography.labelLarge, color = TintaAgua)
+                Text(textoAgua(h.aguaMl), style = MaterialTheme.typography.headlineMedium)
+                Text(if (copos == 1) "1 copo de 250 ml" else "$copos copos de 250 ml", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+            }
+            Mascote(Pose.LontraComendo, 52.dp)
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BotaoHabito("+ 1 copo", "Somar um copo de água, 250 mililitros", !enviando, Modifier.weight(1f)) { somar(250, 0) }
+            BotaoHabito("+ 500 ml", "Somar uma garrafa de água, 500 mililitros", !enviando, Modifier.weight(1f)) { somar(500, 0) }
+        }
+        Box(Modifier.fillMaxWidth().padding(vertical = 12.dp).height(1.dp).background(Cores.Trilho))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.weight(1f).semantics(mergeDescendants = true) {}) {
+                Text("Álcool", style = MaterialTheme.typography.labelLarge, color = Color(0xFF8A2448))
+                Text(textoDoses(h.alcoolDoses), style = MaterialTheme.typography.titleLarge)
+            }
+            BotaoHabito("+ 1 dose", "Somar uma dose de bebida alcoólica", !enviando) { somar(0, 1) }
+        }
+        ultimo?.let { u ->
+            Text(
+                if (u.first > 0) "Somou ${textoAgua(u.first.toDouble())} de água." else "Somou ${textoDoses(u.second.toDouble())}.",
+                style = MaterialTheme.typography.bodySmall, color = Cores.BomTinta, modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        erro?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.CuidadoTinta, modifier = Modifier.padding(top = 6.dp)) }
+    }
+}
+
+/** Botão em pílula dos hábitos (48 dp), com a descrição para o leitor de tela. */
+@Composable
+private fun BotaoHabito(texto: String, descricao: String, habilitado: Boolean, modifier: Modifier = Modifier, aoTocar: () -> Unit) {
+    Box(
+        modifier.heightIn(min = 48.dp).clip(Formas.Pilula).background(if (habilitado) Cores.Branco else Cores.Trilho)
+            .clickable(enabled = habilitado, role = Role.Button, onClickLabel = descricao, onClick = aoTocar)
+            .semantics { contentDescription = descricao }
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) { Text(texto, fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 15.sp, color = if (habilitado) TintaAgua else Cores.Tinta4, maxLines = 1) }
+}
+
+/** "hoje", "ontem" ou "em 12/10", a partir do dia da pendência e do hoje da pessoa. */
+private fun quandoFoi(dia: String?, diaIso: String): String {
+    val d = Formato.dia(dia) ?: return ""
+    val hoje = Formato.dia(diaIso) ?: return ""
+    return when (d) {
+        hoje -> ""
+        hoje.minusDays(1) -> " ontem"
+        else -> " em ${Formato.diaCurto(d)}"
+    }
+}
+
+/**
+ * Atividades fixas do dia (W20/W52): a pergunta "teve vôlei?" com Teve / Não teve (POST /perfis/:id/atividades/:aid/resposta)
+ * e a linha das que já foram respondidas ou estão previstas para hoje. Lê GET /perfis/:id/atividades; sem a rota (servidor
+ * antigo) ou sem nada para hoje, o cartão não aparece. O lugar e o "como" (que pode vir da localização) nunca são mostrados.
+ */
+@Composable
+private fun CartaoAtividadesFixas(vm: AppVM, perfilId: String, diaIso: String) {
+    val rota = RotasDespensa.atividades(perfilId)
+    val carga by vm.carga(rota).collectAsStateWithLifecycle()
+    LaunchedEffect(rota) { vm.carregar(rota) }
+    val escopo = rememberCoroutineScope()
+    var enviando by remember { mutableStateOf<String?>(null) }
+    var erro by remember { mutableStateOf<String?>(null) }
+    var recado by rememberSaveable(diaIso) { mutableStateOf<String?>(null) }
+
+    val j = carga.dados
+    val pendentes = FixaPendente.lista(j)
+    val doDia = FixaDoDia.lista(j).filter { f -> pendentes.none { it.id == f.id && (it.dia == null || it.dia == diaIso) } }
+    if (pendentes.isEmpty() && doDia.isEmpty() && recado == null) return
+
+    fun responder(p: FixaPendente, feita: Boolean) {
+        if (enviando != null) return
+        escopo.launch {
+            enviando = p.id
+            erro = null
+            try {
+                val r = vm.escrever("POST", RotasDespensa.respostaAtividade(perfilId, p.id), CorposDespensa.resposta(p.dia ?: diaIso, feita))
+                val nome = p.nome.replaceFirstChar { it.lowercase() }
+                val kcal = r.num("kcal")?.takeIf { it > 0 }
+                recado = when {
+                    !feita -> "Anotado: sem $nome${quandoFoi(p.dia, diaIso)}."
+                    kcal != null -> "Anotado: $nome feito, cerca de ${Formato.kcal(kcal)} kcal."
+                    else -> "Anotado: $nome feito."
+                }
+                vm.invalidar(perfilId)
+            } catch (e: ErroApi) {
+                erro = mensagemErroHoje(e)
+            } finally {
+                enviando = null
+            }
+        }
+    }
+
+    Cartao(pincel = Brush.linearGradient(listOf(Cores.BomFundo, Cores.Branco)), forma = Formas.Grande, padding = PaddingValues(18.dp), atraso = 90) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Atividades fixas", style = MaterialTheme.typography.titleMedium, color = Cores.Tinta3, modifier = Modifier.weight(1f))
+            Mascote(Pose.DuplaCorrendo, 44.dp)
+        }
+        pendentes.forEach { p ->
+            val nome = p.nome.replaceFirstChar { it.lowercase() }
+            Text("Teve $nome${quandoFoi(p.dia, diaIso)}?", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 8.dp))
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Botao(if (enviando == p.id) "Enviando…" else "Teve", Modifier.weight(1f), habilitado = enviando == null) { responder(p, true) }
+                Botao("Não teve", Modifier.weight(1f), suave = true, habilitado = enviando == null) { responder(p, false) }
+            }
+        }
+        doDia.forEach { f ->
+            val estado = when (f.feita) {
+                true -> "feito" + (f.kcal?.takeIf { it > 0 }?.let { " · cerca de ${Formato.kcal(it)} kcal" } ?: "")
+                false -> "não rolou"
+                null -> Formato.hora(f.inicio)?.let { "previsto às $it" } ?: "previsto para hoje"
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
+                Text(f.nome.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelLarge, fontSize = 15.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Pilula(
+                    estado,
+                    when (f.feita) { true -> Cores.BomFundo; false -> Cores.Trilho; null -> Cores.Branco },
+                    when (f.feita) { true -> Cores.BomTinta; false -> Cores.Tinta3; null -> Cores.LilasTexto },
+                )
+            }
+        }
+        recado?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.BomTinta, modifier = Modifier.padding(top = 8.dp)) }
+        erro?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.CuidadoTinta, modifier = Modifier.padding(top = 6.dp)) }
     }
 }

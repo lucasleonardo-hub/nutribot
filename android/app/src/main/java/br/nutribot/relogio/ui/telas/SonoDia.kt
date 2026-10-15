@@ -20,7 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.nutribot.relogio.dados.OxigenioSono
 import br.nutribot.relogio.dados.Perfil
+import br.nutribot.relogio.dados.TemperaturaSono
 import br.nutribot.relogio.dados.arr
 import br.nutribot.relogio.dados.num
 import br.nutribot.relogio.dados.obj
@@ -58,7 +60,7 @@ import kotlin.math.roundToInt
  * Tela do Sono (fase 6), dia navegável ‹ ›: GET /perfis/:id/sono?dia= →
  * { dia, nota, rotulo, variacao, inicio, fim, emCamaMin, dormidoMin, latenciaMin, fases{acordado,rem,leve,profundo:{min,pct}},
  *   tipicas{...:{min,max}}, etapas[{ini,fim,t}], fcMedia, fcMin, hrv, fatores[{id,nome,valor,nivel,explicacao}],
- *   semana[{dia,nota,dormidoMin}], texto }.
+ *   semana[{dia,nota,dormidoMin}], texto }. Fase 7 (só quando vieram): spo2{media,min,minutosAbaixo90}, temperatura{media,delta}.
  * `dia` de uma noite = o dia em que a pessoa acordou. A folha antiga das 14 noites (Sono.kt) fica a um toque, no fim.
  */
 @Composable
@@ -133,6 +135,19 @@ private fun ConteudoSono(j: JSONObject, dia: LocalDate, aoEscolherDia: (String) 
         }
     }
 
+    // fase 7: oxigênio no sangue e temperatura da pele, só quando o relógio mandou (permissões opcionais)
+    val oxigenio = OxigenioSono.de(j.obj("spo2"))
+    val temperatura = TemperaturaSono.de(j.obj("temperatura"))
+    if (oxigenio != null || temperatura != null) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (oxigenio != null) CartaoMedida("Oxigênio no sono", "${pctOxigenio(oxigenio.media)} %", linhaOxigenio(oxigenio), Modifier.weight(1f))
+            if (temperatura != null) CartaoMedida(
+                "Temperatura da pele", "${Formato.sinal(temperatura.delta, 1)} °C",
+                "do seu normal" + (temperatura.media?.let { " · ${Formato.decimal(it, 1)} °C" } ?: ""), Modifier.weight(1f),
+            )
+        }
+    }
+
     // os 7 dias até este (tocar escolhe o dia)
     val semana = j.arr("semana").objs().mapNotNull { s -> s.str("dia")?.let { d -> Triple(d, s.num("nota"), s.num("dormidoMin")) } }
     if (semana.isNotEmpty()) {
@@ -156,6 +171,15 @@ private fun ConteudoSono(j: JSONObject, dia: LocalDate, aoEscolherDia: (String) 
         Link("ver as últimas 14 noites", aoVer14)
     }
 }
+
+/** Porcentagem como o fator do servidor mostra: "95" ou "94,6". */
+private fun pctOxigenio(v: Double): String = if (v == Math.rint(v)) Formato.inteiro(v) else Formato.decimal(v, 1)
+
+/** "mínimo 88 % · 4 min abaixo de 90 %" (o que houver). */
+private fun linhaOxigenio(o: OxigenioSono): String? = listOfNotNull(
+    o.min?.let { "mínimo ${pctOxigenio(it)} %" },
+    o.minutosAbaixo90?.let { "${Formato.inteiro(it)} min abaixo de 90 %" },
+).joinToString(" · ").ifBlank { null }
 
 /** Fases da noite: o gráfico em degraus (quando o relógio mandou as etapas) e as barras de cada fase. */
 @Composable

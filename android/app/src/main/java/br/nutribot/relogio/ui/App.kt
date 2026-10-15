@@ -57,6 +57,9 @@ import br.nutribot.relogio.ui.telas.Legado
 import br.nutribot.relogio.ui.telas.rememberTrocas
 import br.nutribot.relogio.ui.telas.TelaAgenda
 import br.nutribot.relogio.ui.telas.TelaAtividade
+import br.nutribot.relogio.ui.telas.TelaAtividadesFixas
+import br.nutribot.relogio.ui.telas.TelaConfiguracoes
+import br.nutribot.relogio.ui.telas.TelaLugares
 import br.nutribot.relogio.ui.telas.TelaEnergia
 import br.nutribot.relogio.ui.telas.TelaSono
 import br.nutribot.relogio.ui.telas.TelaComida
@@ -80,6 +83,10 @@ object Rotas {
     const val AGENDA = "agenda"
     const val RESUMOS = "resumos"
     const val INTEGRACOES = "integracoes"
+    /** Fase 7: menu do nome. Lugares e Configurações só aparecem quando o perfil é do dono (D14, D15). */
+    const val LUGARES = "lugares"
+    const val ATIVIDADES_FIXAS = "atividades-fixas"
+    const val CONFIGURACOES = "configuracoes"
     /** Comida aberta num dia e numa refeição (vinda do Hoje). */
     fun comida(dia: String? = null, refeicao: String? = null) = "comida?dia=${dia ?: ""}&ref=${refeicao ?: ""}"
 
@@ -168,6 +175,9 @@ fun NutriApp(vm: AppVM, legado: Legado, rotaInicial: String?) {
             composable(Rotas.AGENDA) { TelaAgenda(vm, perfil, voltar = { nav.popBackStack() }) }
             composable(Rotas.RESUMOS) { TelaResumos(vm, perfil, voltar = { nav.popBackStack() }) }
             composable(Rotas.INTEGRACOES) { TelaIntegracoes(vm, legado, voltar = { nav.popBackStack() }) }
+            composable(Rotas.LUGARES) { TelaLugares(vm, perfil, voltar = { nav.popBackStack() }) }
+            composable(Rotas.ATIVIDADES_FIXAS) { TelaAtividadesFixas(vm, perfil, voltar = { nav.popBackStack() }) }
+            composable(Rotas.CONFIGURACOES) { TelaConfiguracoes(vm, perfil, voltar = { nav.popBackStack() }) }
             composable("sono?dia={dia}", arguments = listOf(navArgument("dia") { defaultValue = "" })) { e ->
                 TelaSono(vm, perfil, e.arguments?.getString("dia")?.takeIf { it.isNotBlank() }, voltar = { nav.popBackStack() })
             }

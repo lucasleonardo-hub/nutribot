@@ -23,6 +23,10 @@ import { ehDonoDaAgenda } from './agenda.js';
 import { ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { estado } from './estado.js';
 import { desconectadoHaMin } from './whatsapp.js';
+import { rotasDeLacunas, lacunasPadrao } from './api-lacunas.js';
+import { guardarPergunta, perguntasDe } from './perguntas.js';
+import { montarContextoApp } from './contexto-app.js';
+import { montarFalas } from './api-lacunas-montadores.js';
 
 export const MAX_DIAS_REFEICOES = 31;
 const ehDia = (d) => {
@@ -125,17 +129,10 @@ export function dadosPadrao() {
      * e ONDE a pessoa está, só como tipo de lugar ("em casa", "na academia"): o bloco de lugares do WhatsApp tem rua e
      * bairro e NÃO vai pra IA do app, porque a resposta volta pro app sem passar pelo filtro inteiro.
      */
-    async contextoSugestao(perfil, hoje) {
-      const [humor, eventos, despensa, agenda, situacao] = await Promise.all([
-        humorDe(perfil.jids || [], hoje, hoje),
-        eventosDe(perfil.jids || [], hoje, hoje),
-        import('./despensa.js').then((m) => m.blocoDespensa(perfil)).catch(() => ''),
-        import('./agenda.js').then((m) => m.agendaDe(perfil, { dias: 1 })).then((a) => a?.bloco || '').catch(() => ''),
-        perfil.lugaresAtivo ? import('./lugares.js').then((m) => m.situacaoAtual(perfil)).catch(() => null) : null,
-      ]);
-      const { estado } = await import('./estado.js');
-      return { humor: humor[0] || null, eventos, despensa, agenda, lugares: ondeEstaGenerico(situacao), persona: estado.persona || '' };
-    },
+    // Fase 7: o contexto único do app (contexto-app.js): o mesmo de antes ({ humor, eventos, despensa, agenda, lugares,
+    // persona }) e mais o `bloco` (fatos, reflexão, pensamento de hoje, falas de hoje no grupo, humor da semana, eventos,
+    // corpo, treino de hoje, atividades fixas sem o lugar), que vai como `contextoApp` pra sugestão e pro /perguntar.
+    contextoSugestao: (perfil, hoje) => montarContextoApp(perfil, { hoje }),
 
     /** Progresso e resumos: os 31 dias de acompanhamento.dadosDe. */
     async de31(perfil, dia) {
@@ -209,7 +206,7 @@ function enviarErro(res, status, codigo, mensagem) {
  * Roteador da API v1. `auth` = api-auth.criarAuth (pareamento e token); `dados` = dadosPadrao() ou um dublê; `agora()` o
  * instante (dia e hora de cada pessoa saem dele, no fuso dela); `adminJid` marca o perfil do dono.
  */
-export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita = escritaPadrao(), ia = { estimarRefeicaoApp, sugerirRefeicao, responderApp }, grafico = { configGrafico, renderizar }, agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda, podeAnalisar = criarLimiteAnalises() } = {}) {
+export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita = escritaPadrao(), ia = { estimarRefeicaoApp, sugerirRefeicao, responderApp }, grafico = { configGrafico, renderizar }, agora = () => new Date(), adminJid = (process.env.ADMIN_JID || '').trim(), temHevyDe = temHevy, ehDonoDaAgendaDe = ehDonoDaAgenda, podeAnalisar = criarLimiteAnalises(), lacunas = lacunasPadrao(), perguntas = { guardarPergunta, perguntasDe } } = {}) {
   const r = express.Router();
   // fase 4: a sugestão de refeição (IA) fica guardada 1 h por pessoa, dia e slot; a promessa entra no mapa (dois pedidos
   // no mesmo instante = uma chamada), e cada pessoa tem no máximo 6 chamadas por hora além do limite do processo
@@ -239,7 +236,10 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
   // na própria rota, depois do token (revisão: anônimo não faz o servidor parsear 6 MB)
   const jsonPequeno = express.json({ limit: '32kb' });
   const jsonFoto = express.json({ limit: '6mb' });
-  r.use((req, res, next) => (req.method === 'POST' && /^\/perfis\/[^/]+\/refeicoes\/?$/.test(req.path) ? next() : jsonPequeno(req, res, next)));
+  // fase 7: o texto da página da nota fiscal (POST /compras) também passa de 32 kb; é lido só depois do token
+  const jsonNota = express.json({ limit: '1mb' });
+  const corpoGrande = (req) => req.method === 'POST' && /^\/perfis\/[^/]+\/(refeicoes|compras)\/?$/.test(req.path);
+  r.use((req, res, next) => (corpoGrande(req) ? next() : jsonPequeno(req, res, next)));
 
   // ---------- pareamento (sem token) ----------
   r.post('/parear', async (req, res) => {
@@ -384,8 +384,11 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
       if (valor) relatoriosCache = { em: agoraMs, valor };
       return valor;
     };
-    const [d31, relatorios] = await Promise.all([dados.de31(perfil, dia), relatoriosDe()]);
-    res.json(montarResumos({ perfil, dia, ...d31, relatorios, termosLocal: termosDeLugar(perfis) }));
+    // fase 7 (W58, D20): o texto das notas de voz do grupo nos últimos 31 dias; sem a coleção, só fica de fora
+    const falasDe = () => (typeof lacunas?.falas === 'function' ? Promise.resolve(lacunas.falas(diasAnteriores(dia, 31)[0], dia)).catch(() => []) : Promise.resolve([]));
+    const [d31, relatorios, falas] = await Promise.all([dados.de31(perfil, dia), relatoriosDe(), falasDe()]);
+    const termos = termosDeLugar(perfis);
+    res.json({ ...montarResumos({ perfil, dia, ...d31, relatorios, termosLocal: termos }), falas: montarFalas(falas, { termos }) });
   });
 
   /** Fase 4: série por dia (kcal, gasto, peso, massa magra, sono, passos) de [de, ate], ≤ 92 dias, e a faixa da meta. */
@@ -426,19 +429,25 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
   });
 
   /**
-   * Fase 5: pergunta rápida à Nutri pelo app. Texto puro de volta; nada vai pro grupo nem pra memória. 20 por pessoa por
-   * hora e o limite do processo.
+   * Fase 5: pergunta rápida à Nutri pelo app. Texto puro de volta; nada vai pro grupo nem pra memória do dia. 20 por pessoa
+   * por hora e o limite do processo. Fase 7 (mapa, seção 3): cada troca fica em `perguntas_app` (perguntas.js, melhor
+   * esforço: se a gravação falhar, a resposta sai mesmo assim) e o "anteriores" vem do servidor (as 5 últimas trocas das
+   * últimas 24 h); o que o app manda só vale se o banco não responder.
    */
   r.post('/perfis/:id/perguntar', async (req, res) => {
     const { perfil, hoje, hora } = await perfilDo(req);
     const corpo = req.body && typeof req.body === 'object' ? req.body : {};
     const pergunta = typeof corpo.texto === 'string' ? corpo.texto.trim().replace(/\s+/g, ' ').slice(0, 400) : '';
     if (!pergunta) throw erroApi(400, 'pedido_invalido', 'texto vazio');
-    const anteriores = (Array.isArray(corpo.anteriores) ? corpo.anteriores : [])
+    const doApp = (Array.isArray(corpo.anteriores) ? corpo.anteriores : [])
       .slice(-5)
       .map((t) => ({ pergunta: String(t?.pergunta || '').slice(0, 400), resposta: String(t?.resposta || '').slice(0, 800) }))
       .filter((t) => t.pergunta);
     const agoraMs = agora().getTime();
+    const anteriores = await perguntas
+      .perguntasDe(perfil.jids || [], { desde: new Date(agoraMs - 24 * 3600_000), n: 5 })
+      .then((l) => l.map((t) => ({ pergunta: String(t.pergunta || '').slice(0, 400), resposta: String(t.resposta || '').slice(0, 800) })).filter((t) => t.pergunta))
+      .catch(() => doApp);
     if (!podePerguntar(String(perfil._id), agoraMs)) throw erroApi(429, 'muitas_analises', 'muitas perguntas na última hora; espere um pouco');
     if (!podeAnalisar()) throw erroApi(429, 'muitas_analises', 'muitas análises na última hora; tente mais tarde');
     const [{ refeicoes, pesagens }, ctx, plano, d] = await Promise.all([dados.registrosSugestao(perfil, hoje), dados.contextoSugestao(perfil, hoje), dados.planoDe(perfil).catch(() => null), dados.doDia(perfil, hoje).catch(() => null)]);
@@ -464,12 +473,20 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
         plano: plano?.texto || '',
         humor: ctx.humor ? `humor ${ctx.humor.humor}/5${ctx.humor.energia ? `, energia ${ctx.humor.energia}/5` : ''}${ctx.humor.sono ? `, sono ${ctx.humor.sono}/5` : ''}` : '',
         treino,
+        contextoApp: ctx.bloco || '',
       })
       .catch((e) => {
         console.error('[api] pergunta pelo app falhou:', e?.message || e);
         throw erroApi(503, 'ia_indisponivel', 'a Nutri não conseguiu responder agora; tente de novo em instantes');
       });
-    res.json({ resposta: semZap(tirarLocalizacao(resposta, termosDeLugar(await dados.listarPerfis()))), geradaEm: agora().toISOString() });
+    const final = semZap(tirarLocalizacao(resposta, termosDeLugar(await dados.listarPerfis())));
+    // a troca guardada é a que o app recebeu (já sem localização e sem marcação); confidência: só a própria pessoa a vê
+    // espera a gravação no máximo 3 s pra devolver o `id` (o app usa pra apagar a troca); sem ele, a resposta sai igual
+    const salva = await Promise.race([
+      Promise.resolve(perguntas.guardarPergunta({ perfil, dia: hoje, pergunta, resposta: final, hora })).catch(() => null),
+      new Promise((ok) => setTimeout(() => ok(null), 3000).unref?.()),
+    ]);
+    res.json({ resposta: final, geradaEm: agora().toISOString(), id: salva?._id != null ? String(salva._id) : null, dia: hoje });
   });
 
   /** Fase 4: sugestão da IA pra próxima refeição (ou pro ?slot=), guardada 1 h; conta no limite de análises por hora. */
@@ -520,6 +537,7 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
         eventos: (ctx.eventos || []).map((e) => `${e.hora ? `${e.hora} ` : ''}${e.titulo} (${e.tipo})${e.nota ? ` — ${e.nota}` : ''}`).join('; '),
         humor: ctx.humor ? `humor ${ctx.humor.humor}/5${ctx.humor.energia ? `, energia ${ctx.humor.energia}/5` : ''}${ctx.humor.sono ? `, sono ${ctx.humor.sono}/5` : ''}` : '',
         persona: ctx.persona,
+        contextoApp: ctx.bloco || '',
         dia: hoje,
       })
       .catch((e) => {
@@ -546,6 +564,9 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
 
   // ---------- escrita (fase 2): refeição, humor, eventos, pesagem, perfil ----------
   rotasDeEscrita(r, { escrita, ia, perfilDo, hojeDe, nutriDe, lerJsonFoto: jsonFoto, agora, temHevyDe, adminJid, montarPerfil, montarRefeicao, ...(podeAnalisar ? { podeAnalisar } : {}) });
+
+  // ---------- fase 7: as lacunas do WhatsApp no app (api-lacunas.js) ----------
+  rotasDeLacunas(r, { lacunas, perfilDo, listarPerfis: () => dados.listarPerfis(), adminJid, agora, lerJsonNota: jsonNota });
 
   // ---------- o resto: 404 e erros no formato do contrato ----------
   r.use((_req, res) => enviarErro(res, 404, 'rota_inexistente', 'rota inexistente na API v1'));

@@ -12,6 +12,8 @@
 //   <Nome da pessoa>/Nutri-Saude.md      -> resumo dos dados do relógio (saude.js), regerado quando a planilha muda
 //   <Nome da pessoa>/                    -> pasta de cada usuário: docs que ELE deixa + Nutri-Notas.md e Nutri-Ficha.md (pessoas.js)
 //   Logs/YYYY-MM-DD.md                   -> log técnico do dia
+//   <Nome da pessoa>/Dias, Semanas, Planos, Nutri-Despensa.md, Nutri-Pensamentos, Nutri-Conversas-App
+//                                        -> espelho do dia, da semana e do resto de cada pessoa (drive-pessoa.js, fase 7)
 
 import { google } from 'googleapis';
 import { Readable } from 'node:stream';
@@ -205,6 +207,50 @@ export function salvarEmPasta(pastaId, nomeArquivo, conteudo, mimeType = 'text/m
 }
 
 /**
+ * Erro do Drive que repetir na hora não resolve: credencial vencida ou revogada, escopo bloqueado, cota cheia, Drive não
+ * configurado, pedido malformado (400/401). Os outros (rede, 5xx, 429, 403 de limite de taxa, 404 de arquivo que sumiu
+ * entre a busca e a escrita, prazo estourado) valem nova tentativa.
+ */
+export function erroPermanenteDrive(e) {
+  const msg = String(e?.message || e || '');
+  const codigo = Number(e?.code || e?.status || e?.response?.status) || 0;
+  if (/DRIVE_FOLDER_ID|Service Account não encontrada|invalid_grant|invalid_rapt|expired or revoked|insufficient authentication scopes|access_denied|unauthorized_client|storageQuotaExceeded/i.test(msg)) return true;
+  return codigo === 400 || codigo === 401;
+}
+
+/**
+ * Roda `fn` e repete se falhar: até `tentativas` vezes, com espera crescente (esperaMs, 3×esperaMs, ...). Erro permanente
+ * (`permanente(e)`) não repete. Devolve o resultado de `fn` ou lança o último erro. `dormir` é injetável pro teste.
+ */
+export async function comRepeticao(fn, { tentativas = 3, esperaMs = 2000, dormir = (ms) => new Promise((r) => setTimeout(r, ms).unref?.()), permanente = erroPermanenteDrive } = {}) {
+  let ultimo;
+  for (let i = 1; i <= Math.max(1, tentativas); i++) {
+    try {
+      return await fn(i);
+    } catch (e) {
+      ultimo = e;
+      if (i >= tentativas || permanente(e)) break;
+      await dormir(esperaMs * 3 ** (i - 1));
+    }
+  }
+  throw ultimo;
+}
+
+/**
+ * Salva (ou sobrescreve) um arquivo texto num caminho de subpastas dentro de uma pasta pelo ID (ex.: a pasta da pessoa +
+ * "Dias/2026-10"), criando as subpastas que faltarem; caminho vazio = a própria pasta. Com repetição (comRepeticao): uma
+ * falha passageira do Drive não perde o arquivo. Lança se todas as tentativas falharem (quem chama marca a pendência).
+ */
+export function salvarNaPasta(pastaId, caminho, nomeArquivo, conteudo, opcoes = {}) {
+  return comRepeticao(async () => {
+    iniciarDrive();
+    let id = pastaId;
+    for (const parte of String(caminho || '').split('/').filter(Boolean)) id = await garantirPasta(parte, id);
+    return salvarEmPasta(id, nomeArquivo, conteudo);
+  }, opcoes);
+}
+
+/**
  * Salva (ou sobrescreve) um arquivo .md
  * @param {string} caminhoPasta  ex: "Resumos" ou "Diario/2026-09-15"
  * @param {string} nomeArquivo   ex: "2026-09-15.md"
@@ -312,6 +358,46 @@ export function mdMomento(m) {
   return `- ${m.dia} · [[${m.pessoa}]] · #${m.tipo}: ${m.texto}`;
 }
 
+const DIA_SEMANA_CURTO = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+const kgFicha = (v) => String(Math.round((Number(v) || 0) * 100) / 100).replace('.', ',');
+const ddmmFicha = (d) => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
+/** Minutos de uma atividade fixa (inicio/fim "HH:MM"); 0 se faltar. */
+function minutosAtividade(a) {
+  const m = (h) => {
+    const x = /^(\d{1,2}):(\d{2})$/.exec(String(h || ''));
+    return x ? Number(x[1]) * 60 + Number(x[2]) : null;
+  };
+  return Math.max(0, (m(a?.fim) ?? 0) - (m(a?.inicio) ?? 0));
+}
+
+/**
+ * Puro. Seção "Atividades fixas" da ficha (fase 7): nome, dias, horário e o gasto estimado (MET × peso × horas, a mesma
+ * conta de atividades.kcalAtividade). Sem o lugar: localização não vai para arquivo nenhum além do resumo de lugares.
+ */
+export function secaoAtividadesFixas(p) {
+  const lista = (p?.atividades || []).filter((a) => a?.nome);
+  if (!lista.length) return '';
+  const linhas = lista.map((a) => {
+    const min = minutosAtividade(a);
+    const kcal = Math.round(((Number(a.met) || 0) * (Number(p.peso) || 70) * min) / 60);
+    const dias = (a.dias || []).map((d) => DIA_SEMANA_CURTO[d]).filter(Boolean).join(', ');
+    return `- ${a.nome}${dias ? ` · ${dias}` : ''}${a.inicio && a.fim ? ` ${a.inicio}–${a.fim}` : ''}${a.met ? ` · MET ${a.met}` : ''}${kcal > 0 ? ` ≈ ${kcal} kcal` : ''}`;
+  });
+  return `\n## Atividades fixas\n${linhas.join('\n')}\n`;
+}
+
+/**
+ * Puro. Seção "Metas de carga da semana" da ficha (fase 7): as sugestões de carga em aberto (perfil.sugestoesCarga, as que
+ * não foram encerradas), com o estado de cada uma. '' sem metas.
+ */
+export function secaoMetasCarga(p) {
+  const vivas = (p?.sugestoesCarga || []).filter((s) => s?.exercicio && s.status !== 'encerrada');
+  if (!vivas.length) return '';
+  const estado = (s) => (s.status === 'batida' ? `bateu${s.batidaEm ? ` em ${ddmmFicha(s.batidaEm)}` : ''}${s.como ? ` (${s.como})` : ''}` : s.status === 'tentando' ? `tentou ${s.tentativas || 1} vez(es)` : 'ainda não fez');
+  const linhas = vivas.map((s) => `- ${s.exercicio}: de ${kgFicha(s.deKg)} kg × ${s.deReps ?? '?'} para ${kgFicha(s.paraKg)} kg (ou ${s.paraReps ?? '?'} repetições com ${kgFicha(s.deKg)} kg) · ${estado(s)}`);
+  return `\n## Metas de carga da semana${vivas[0].feitaEm ? ` (desde ${ddmmFicha(vivas[0].feitaEm)})` : ''}\n${linhas.join('\n')}\n`;
+}
+
 export function mdPerfil(p) {
   return (
     frontmatter({ tipo: 'perfil', nome: p.nome, peso_kg: p.peso, altura_cm: p.altura, objetivo: `"${p.objetivo}"`, cidade: p.cidade ? `"${p.cidade}"` : '', fuso: p.fuso || '', dieta: p.dieta || '', tags: ['nutribot', 'perfil'] }) +
@@ -321,6 +407,8 @@ export function mdPerfil(p) {
     `- Gírias aprendidas: ${(p.girias || []).map((g) => `[[${g}]]`).join(', ') || 'nenhuma ainda'}\n` +
     (p.horarios ? `- Horários habituais: ${p.horarios}\n` : '') +
     (p.rotina ? `\n## Rotina observada\n${p.rotina}\n` : '') +
+    secaoAtividadesFixas(p) +
+    secaoMetasCarga(p) +
     (p.lugares?.length
       ? `\n## Lugares (localização do celular; só tipo, bairro e padrão)\n${p.lugares
           .filter((l) => l.visitas >= 2 || l.papel || l.manual)

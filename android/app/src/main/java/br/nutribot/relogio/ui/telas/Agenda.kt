@@ -55,8 +55,10 @@ import br.nutribot.relogio.dados.DiaSerie
 import br.nutribot.relogio.dados.Evento
 import br.nutribot.relogio.dados.Perfil
 import br.nutribot.relogio.dados.Refeicao
+import br.nutribot.relogio.dados.EventoGoogle
 import br.nutribot.relogio.dados.api.ErroApi
 import br.nutribot.relogio.dados.arr
+import br.nutribot.relogio.dados.bool
 import br.nutribot.relogio.dados.int
 import br.nutribot.relogio.dados.obj
 import br.nutribot.relogio.dados.objs
@@ -124,6 +126,14 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
         rotaDias?.let { vm.carregar(it) }
         vm.carregar(AppVM.rotaHoje(perfil.id))
     }
+    // fase 7 (W26): a agenda do Google, só leitura e só do dono da credencial. As Integrações dizem de quem é; sem essa
+    // informação ainda, pede assim mesmo e esconde o erro (403/404 = este perfil não tem agenda ligada).
+    val integracoes by vm.carga(AppVM.ROTA_INTEGRACOES).collectAsStateWithLifecycle()
+    val agendaLigada = integracoes.dados.arr("perfis").objs().firstOrNull { it.str("id") == perfil.id }?.obj("agenda")?.bool("ativo")
+    val rotaGoogle = if (agendaLigada == false) null else AppVM.rotaAgendaGoogle(perfil.id)
+    val cargaGoogle by (rotaGoogle?.let { vm.carga(it) } ?: vm.carga(rotaEv)).collectAsStateWithLifecycle()
+    LaunchedEffect(rotaGoogle) { rotaGoogle?.let { vm.carregar(it) } }
+    val doGoogle = if (rotaGoogle == null) emptyList() else EventoGoogle.lista(cargaGoogle.dados)
     var selStr by rememberSaveable { mutableStateOf(Formato.iso(hoje)) }
     val sel = Formato.dia(selStr) ?: hoje
     var novo by rememberSaveable { mutableStateOf(false) }
@@ -132,7 +142,10 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
     var apagando by remember { mutableStateOf(false) }
 
     ConteudoCarga(
-        cargaEv, { vm.carregar(rotaEv, forcar = true); rotaRef?.let { vm.carregar(it, forcar = true) }; rotaDias?.let { vm.carregar(it, forcar = true) } },
+        cargaEv, {
+            vm.carregar(rotaEv, forcar = true); rotaRef?.let { vm.carregar(it, forcar = true) }; rotaDias?.let { vm.carregar(it, forcar = true) }
+            rotaGoogle?.let { vm.carregar(it, forcar = true) }
+        },
         topo = { CabecalhoVoltar("Agenda", "${perfil.curto} · o que aconteceu e o que vem", Pose.LontraRelogio, voltar) },
     ) { jEv ->
         val alturaChip = 56.dp * LocalDensity.current.fontScale.coerceAtMost(1.3f)
@@ -181,9 +194,11 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
         val treinos = if (sel == hoje) hojeCarga.dados.obj("relogio").arr("treinos").objs() else emptyList()
         // eventos: a janela do /eventos mais os que vêm em cada dia do /refeicoes (o mesmo evento pode vir nos dois: fica um)
         val eventos = (Evento.lista(jEv) + Evento.lista(diaRef)).filter { it.dia == Formato.iso(sel) }.distinctBy { it.id }
+        val google = doGoogle.filter { it.dia == Formato.iso(sel) }
         val itens = refeicoes.map { ItemDia(it.hora, "Refeição", it.nome, "≈ ${Formato.kcal(it.kcal)} kcal" + (it.descricao?.let { d -> " · $d" } ?: ""), Color(0xFFFFF1EA), Cores.ProteinaTinta) } +
             treinos.map { ItemDia(it.str("hora"), "Treino", it.str("nome") ?: "Treino", it.int("min")?.let { m -> "$m min" }, Color(0xFFEEFAF3), Cores.GorduraTinta) } +
-            eventos.map { e -> val (f, t) = corDoTipo(e.tipo); ItemDia(e.hora, Evento.rotulo(e.tipo), e.titulo, e.nota, f, t, eventoId = e.id) }
+            eventos.map { e -> val (f, t) = corDoTipo(e.tipo); ItemDia(e.hora, Evento.rotulo(e.tipo), e.titulo, e.nota, f, t, eventoId = e.id) } +
+            google.map { g -> ItemDia(g.inicio, "Google", g.titulo, g.fim?.let { f -> "até $f" } ?: if (g.inicio == null) "o dia todo" else null, Color(0xFFE8F3FF), Color(0xFF1F4E8A)) }
         if (itens.isEmpty()) Vazio(if (sel.isAfter(hoje)) "Nada marcado. Conte o que vem: jantar fora, viagem, festa." else "Dia livre: nada registrado.", Pose.DuplaDescansando)
         itens.sortedBy { it.hora ?: "99:99" }.forEach { e ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -206,7 +221,8 @@ fun TelaAgenda(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
             }
         }
         Text(
-            "A Nutri lê seus eventos e adapta as dicas.",
+            if (doGoogle.isNotEmpty()) "A Nutri lê seus eventos e adapta as dicas. Os do Google só aparecem aqui; para mudar, use o Google Agenda."
+            else "A Nutri lê seus eventos e adapta as dicas.",
             style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4,
         )
     }

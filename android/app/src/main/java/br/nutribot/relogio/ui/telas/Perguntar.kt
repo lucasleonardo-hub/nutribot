@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -29,8 +30,10 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -47,11 +50,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.nutribot.relogio.dados.Perfil
+import br.nutribot.relogio.dados.PerguntaApp
 import br.nutribot.relogio.dados.api.ErroApi
+import br.nutribot.relogio.dados.obj
 import br.nutribot.relogio.dados.str
 import br.nutribot.relogio.ui.AppVM
+import br.nutribot.relogio.ui.Formato
 import br.nutribot.relogio.ui.componentes.AvisoErro
+import br.nutribot.relogio.ui.componentes.Botao
 import br.nutribot.relogio.ui.componentes.Chip
+import br.nutribot.relogio.ui.componentes.Link
 import br.nutribot.relogio.ui.componentes.Mascote
 import br.nutribot.relogio.ui.componentes.Pose
 import br.nutribot.relogio.ui.componentes.semZap
@@ -62,30 +70,49 @@ import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Uma troca com a Nutri: o que a pessoa perguntou e o que ela respondeu. Fica só em memória, nesta sessão do app. */
-data class Troca(val pergunta: String, val resposta: String)
+/**
+ * Uma troca com a Nutri: o que a pessoa perguntou e o que ela respondeu. Fase 7: `id` = a troca guardada no servidor
+ * (coleção perguntas_app), que dá para apagar; null = servidor antigo, que não guarda (a troca fica só nesta sessão).
+ * `dia` = o dia da troca (AAAA-MM-DD), para separar as conversas antigas por dia.
+ */
+data class Troca(val pergunta: String, val resposta: String, val id: String? = null, val dia: String? = null)
 
 private const val MAX_TEXTO = 400
 private const val ANTERIORES = 5
+private const val HISTORICO_INICIAL = 20
+private const val HISTORICO_MAX = 100
 private val sugestoes = listOf("O que como agora?", "Como foi minha semana?", "Posso treinar hoje?")
 private val iconeEnviar = icone("M12 19V5", "M5 12l7-7 7 7")
 
 /**
- * As trocas da sessão, guardadas fora da folha (sobrevivem a fechar a folha e à rotação; zeram ao trocar de perfil).
- * Serializadas como uma lista plana [pergunta, resposta, pergunta, resposta…].
+ * As trocas desta sessão, guardadas fora da folha (sobrevivem a fechar a folha e à rotação; zeram ao trocar de perfil).
+ * Serializadas como uma lista plana [pergunta, resposta, id, dia, …] (id e dia vazios = null).
  */
 @Composable
 fun rememberTrocas(perfilId: String?): SnapshotStateList<Troca> = rememberSaveable(
     perfilId,
     saver = listSaver<SnapshotStateList<Troca>, String>(
-        save = { lista -> lista.flatMap { listOf(it.pergunta, it.resposta) } },
-        restore = { plana -> mutableStateListOf<Troca>().apply { plana.chunked(2).forEach { if (it.size == 2) add(Troca(it[0], it[1])) } } },
+        save = { lista -> lista.flatMap { listOf(it.pergunta, it.resposta, it.id ?: "", it.dia ?: "") } },
+        restore = { plana ->
+            mutableStateListOf<Troca>().apply {
+                plana.chunked(4).forEach { if (it.size == 4) add(Troca(it[0], it[1], it[2].ifBlank { null }, it[3].ifBlank { null })) }
+            }
+        },
     ),
 ) { mutableStateListOf() }
 
+/** O que pede confirmação na folha: apagar uma troca ou todas. */
+private sealed class Apagar {
+    data class Uma(val id: String) : Apagar()
+    data object Todas : Apagar()
+}
+
 /**
- * Folha "Perguntar à Nutri" (fase 5): o mascote, as trocas em balões, o campo (≤ 400 letras) e o botão de enviar.
- * POST /perfis/:id/perguntar { texto, anteriores: últimas 5 trocas } -> { resposta }. Nada é gravado no servidor.
+ * Folha "Perguntar à Nutri" (fase 5; fase 7 com o histórico do servidor). O mascote, as trocas em balões (as guardadas no
+ * servidor primeiro, depois as desta sessão que ainda não voltaram de lá), o campo (≤ 400 letras) e o botão de enviar.
+ * POST /perfis/:id/perguntar { texto, anteriores } -> { resposta, id? }. GET /perfis/:id/perguntas?n= traz o histórico;
+ * DELETE /perfis/:id/perguntas/:pid apaga uma troca e DELETE /perfis/:id/perguntas?confirmar=sim apaga todas.
+ * Pergunta feita aqui é confidência (D10): a Nutri leva em conta e não cita no grupo.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,8 +124,26 @@ fun FolhaPerguntar(vm: AppVM, perfil: Perfil, trocas: SnapshotStateList<Troca>, 
     val escopo = rememberCoroutineScope()
     val rolagem = rememberScrollState()
 
-    // a lista rola até o fim quando chega uma resposta ou começa a espera
-    LaunchedEffect(trocas.size, pensando) { rolagem.animateScrollTo(rolagem.maxValue) }
+    // histórico do servidor: o último que chegou fica guardado enquanto um pedido maior ("ver mais antigas") carrega
+    var quantas by rememberSaveable(perfil.id) { mutableIntStateOf(HISTORICO_INICIAL) }
+    val rotaHist = AppVM.rotaPerguntas(perfil.id, quantas)
+    val histCarga by vm.carga(rotaHist).collectAsStateWithLifecycle()
+    LaunchedEffect(rotaHist) { vm.carregar(rotaHist) }
+    var ultimoHist by remember(perfil.id) { mutableStateOf<List<PerguntaApp>>(emptyList()) }
+    LaunchedEffect(histCarga.dados) { histCarga.dados?.let { ultimoHist = PerguntaApp.lista(it) } }
+    val apagadas = remember(perfil.id) { mutableStateListOf<String>() }
+    var confirmar by remember { mutableStateOf<Apagar?>(null) }
+
+    val servidor = ultimoHist.filter { it.id !in apagadas }
+    val idsServidor = servidor.map { it.id }.toSet()
+    val recentes = servidor.takeLast(10).map { it.pergunta }.toSet()
+    val daSessao = trocas.filter { t -> if (t.id != null) t.id !in idsServidor && t.id !in apagadas else t.pergunta !in recentes }
+    val exibidas = servidor.map { Troca(it.pergunta, semZap(it.resposta), it.id, it.dia?.take(10)) } + daSessao
+    // o histórico do servidor antigo (sem a rota) volta 404: aí a folha funciona como antes, só com a sessão
+    val erroHist = histCarga.erro?.takeIf { histCarga.dados == null && it.status != 404 }
+
+    // a lista rola até o fim quando chega uma resposta, chega o histórico ou começa a espera
+    LaunchedEffect(exibidas.size, pensando) { rolagem.animateScrollTo(rolagem.maxValue) }
 
     fun enviar(bruto: String) {
         val t = bruto.trim().take(MAX_TEXTO)
@@ -109,10 +154,12 @@ fun FolhaPerguntar(vm: AppVM, perfil: Perfil, trocas: SnapshotStateList<Troca>, 
         escopo.launch {
             try {
                 val anteriores = JSONArray()
-                trocas.takeLast(ANTERIORES).forEach { anteriores.put(JSONObject().put("pergunta", it.pergunta).put("resposta", it.resposta)) }
+                exibidas.takeLast(ANTERIORES).forEach { anteriores.put(JSONObject().put("pergunta", it.pergunta).put("resposta", it.resposta)) }
                 val j = vm.escrever("POST", AppVM.rotaPerguntar(perfil.id), JSONObject().put("texto", t).put("anteriores", anteriores))
                 val resposta = j.str("resposta")?.let { semZap(it) }?.takeIf { it.isNotBlank() } ?: "A Nutri não respondeu. Tente de novo."
-                trocas.add(Troca(t, resposta))
+                val id = j.str("id") ?: j.obj("pergunta").str("id") ?: j.obj("troca").str("id")
+                trocas.add(Troca(t, resposta, id, j.str("dia")))
+                if (id != null) vm.carregar(rotaHist, forcar = true)
             } catch (e: ErroApi) {
                 erro = when {
                     e.status == 429 -> "Muitas perguntas agora. Espere um pouco."
@@ -137,22 +184,49 @@ fun FolhaPerguntar(vm: AppVM, perfil: Perfil, trocas: SnapshotStateList<Troca>, 
                 Mascote(Pose.LontraChef, 56.dp)
                 Column(Modifier.weight(1f)) {
                     Text("Pergunte à Nutri", style = MaterialTheme.typography.headlineMedium)
-                    Text("Resposta curta, com o que ela sabe de hoje. Nada fica guardado.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                    Text("Fica guardado só para você. A Nutri leva em conta e não comenta no grupo.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
                 }
             }
             Column(
                 Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rolagem),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (trocas.isEmpty() && !pensando) {
+                if (servidor.size >= quantas && quantas < HISTORICO_MAX) {
+                    Link("Ver conversas mais antigas") { quantas = (quantas + 40).coerceAtMost(HISTORICO_MAX) }
+                }
+                if (histCarga.carregando && ultimoHist.isEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CircularProgressIndicator(Modifier.size(16.dp), color = Cores.Acai, strokeWidth = 2.dp)
+                        Text(if (histCarga.acordando) "Buscando as conversas… o servidor está acordando." else "Buscando as conversas…", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                    }
+                }
+                if (erroHist != null) {
+                    Text("As conversas antigas não vieram: ${erroHist.paraPessoa}", style = MaterialTheme.typography.bodySmall, color = Cores.CuidadoTinta)
+                    Link("tentar de novo") { vm.carregar(rotaHist, forcar = true) }
+                }
+                if (exibidas.isEmpty() && !pensando) {
                     Text("Por exemplo:", style = MaterialTheme.typography.labelMedium, color = Cores.Tinta3)
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.Start) {
                         sugestoes.forEach { s -> Chip(s, false, papel = Role.Button) { enviar(s) } }
                     }
                 }
-                trocas.forEach { t ->
+                var diaAnterior: String? = null
+                exibidas.forEach { t ->
+                    // separador por dia nas conversas guardadas ("14/10"), só quando o dia muda
+                    if (t.dia != null && t.dia != diaAnterior) {
+                        Formato.dia(t.dia)?.let { d ->
+                            Text(Formato.diaLongo(d).replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelMedium, color = Cores.Tinta4, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                        }
+                        diaAnterior = t.dia
+                    }
                     Balao(t.pergunta, pergunta = true)
                     Balao(t.resposta, pergunta = false)
+                    val id = t.id
+                    if (id != null) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                            Link("apagar esta conversa") { confirmar = Apagar.Uma(id) }
+                        }
+                    }
                 }
                 if (pensando) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 2.dp)) {
@@ -161,6 +235,11 @@ fun FolhaPerguntar(vm: AppVM, perfil: Perfil, trocas: SnapshotStateList<Troca>, 
                     }
                 }
                 erro?.let { AvisoErro(it) }
+                if (exibidas.isNotEmpty() && !pensando) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                        Link("Apagar todas as conversas") { confirmar = Apagar.Todas }
+                    }
+                }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -185,6 +264,74 @@ fun FolhaPerguntar(vm: AppVM, perfil: Perfil, trocas: SnapshotStateList<Troca>, 
             }
         }
     }
+
+    when (val c = confirmar) {
+        is Apagar.Uma -> DialogoApagarConversa(
+            vm, titulo = "Apagar esta conversa?", texto = "Some do app e a Nutri deixa de levar em conta.",
+            rota = AppVM.rotaPerguntaApp(perfil.id, c.id), soLocal = false,
+            aoFechar = { confirmar = null },
+        ) {
+            apagadas.add(c.id)
+            trocas.removeAll { it.id == c.id }
+            vm.carregar(rotaHist, forcar = true)
+        }
+        Apagar.Todas -> DialogoApagarConversa(
+            vm, titulo = "Apagar todas as conversas?", texto = "Some tudo o que você perguntou aqui. A Nutri deixa de levar em conta.",
+            // a troca desta sessão que voltou com id já está gravada no servidor: aí o DELETE é obrigatório
+            rota = AppVM.rotaApagarPerguntas(perfil.id), soLocal = servidor.isEmpty() && trocas.none { it.id != null },
+            aoFechar = { confirmar = null },
+        ) {
+            apagadas.addAll(servidor.map { it.id })
+            apagadas.addAll(trocas.mapNotNull { it.id })
+            trocas.clear()
+            ultimoHist = emptyList()
+            vm.carregar(rotaHist, forcar = true)
+        }
+        null -> {}
+    }
+}
+
+/**
+ * Confirmação antes de apagar: DELETE na rota e, se deu certo, `aoApagar`. `soLocal` = não há nada no servidor (servidor
+ * antigo): só limpa a sessão, sem chamar a API.
+ */
+@Composable
+private fun DialogoApagarConversa(vm: AppVM, titulo: String, texto: String, rota: String, soLocal: Boolean, aoFechar: () -> Unit, aoApagar: () -> Unit) {
+    val escopo = rememberCoroutineScope()
+    var enviando by remember { mutableStateOf(false) }
+    var erro by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = { if (!enviando) aoFechar() },
+        containerColor = Cores.Branco,
+        title = { Text(titulo, style = MaterialTheme.typography.headlineSmall) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(texto, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+                erro?.let { AvisoErro(it) }
+            }
+        },
+        confirmButton = {
+            Botao(if (enviando) "Apagando…" else "Apagar", habilitado = !enviando) {
+                if (soLocal) { aoApagar(); aoFechar(); return@Botao }
+                escopo.launch {
+                    enviando = true
+                    erro = null
+                    try {
+                        vm.escrever("DELETE", rota, null)
+                        aoApagar()
+                        aoFechar()
+                    } catch (e: ErroApi) {
+                        erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
+                    } catch (e: CancellationException) {
+                        throw e
+                    } finally {
+                        enviando = false
+                    }
+                }
+            }
+        },
+        dismissButton = { Botao("Cancelar", suave = true, habilitado = !enviando) { aoFechar() } },
+    )
 }
 
 /** Balão da conversa: a pergunta à direita (açaí, texto branco), a resposta à esquerda (branco). */

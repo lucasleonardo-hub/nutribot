@@ -121,6 +121,82 @@ test('treinos em caixas: o dia da sessão é o do fuso da pessoa (treino às 22:
   assert.equal(caixas[0].exercicios[0].ultimoKg, 52.5);
 });
 
+// ---------- fase 7: oxigênio, temperatura da pele, distância e kcal ativas oficiais (permissões opcionais) ----------
+/** A mesma saúde de saudeC, com o que o coletor 2.7 manda quando a pessoa libera as quatro permissões novas. */
+function saudeF7() {
+  const s = saudeC();
+  const noite = s.sonos.find((x) => x.dia === DIA);
+  noite.spo2 = { media: 94.6, min: 88, minutosAbaixo90: 4 };
+  noite.temperatura = { media: 34.1, delta: -0.62 };
+  const hoje = s.atividades.find((x) => x.dia === DIA);
+  Object.assign(hoje, { distanciaM: 4812, kcalAtivas: 430, porHora: { passos: Array(24).fill(300), kcal: Array(24).fill(90), kcalAtivas: Array.from({ length: 24 }, (_, h) => (h === 18 ? 200 : 10)) } });
+  return s;
+}
+
+test('fase 7 montarSono: oxigênio e temperatura só quando vieram, cada um com o seu fator no fim', () => {
+  const s = M.montarSono({ saude: saudeF7(), dia: DIA });
+  assert.deepEqual(s.spo2, { media: 94.6, min: 88, minutosAbaixo90: 4 });
+  assert.deepEqual(s.temperatura, { media: 34.1, delta: -0.62 });
+  assert.equal(s.fatores.length, 9);
+  assert.deepEqual(s.fatores.slice(-2).map((f) => [f.id, f.nome, f.valor, f.nivel]), [
+    ['spo2', 'Oxigênio no sangue', '94,6 %', 'bom'],
+    ['temperatura', 'Temperatura da pele', '−0,6 °C', 'bom'],
+  ]);
+  assert.ok(s.fatores.every((f) => f.explicacao.length > 10 && f.explicacao.length < 70 && !/[*_~]/.test(f.explicacao)));
+  // a nota não muda com os dados novos (eles são informação, não parte da conta)
+  assert.equal(s.nota, M.montarSono({ saude: saudeC(), dia: DIA }).nota);
+  // envio antigo ou noite sem os dados: as chaves não existem e os 7 fatores ficam como antes
+  const antigo = M.montarSono({ saude: saudeC(), dia: DIA });
+  for (const k of ['spo2', 'temperatura']) assert.equal(k in antigo, false, k);
+  assert.equal(antigo.fatores.length, 7);
+  const ontem = M.montarSono({ saude: saudeF7(), dia: somarDias(DIA, -1) });
+  assert.equal('spo2' in ontem, false);
+});
+
+test('fase 7 fatores de oxigênio e temperatura: os cortes de nível', () => {
+  const ox = (media, minutosAbaixo90) => M.fatorOxigenio({ media, min: null, minutosAbaixo90 })?.nivel;
+  assert.deepEqual([ox(97, 0), ox(95, 1), ox(95, 3), ox(94, 5), ox(93, 10), ox(92, 20), ox(90, 0)], ['excelente', 'excelente', 'bom', 'bom', 'razoavel', 'atencao', 'atencao']);
+  assert.equal(M.fatorOxigenio({ media: 96, min: 94, minutosAbaixo90: null }).nivel, 'excelente'); // sem os minutos: conta zero
+  assert.equal(M.fatorOxigenio(null), null);
+  const tp = (delta) => M.fatorTemperatura({ media: null, delta });
+  assert.deepEqual([0.2, -0.5, 0.9, -1.4, 2].map((d) => tp(d).nivel), ['excelente', 'excelente', 'bom', 'razoavel', 'atencao']);
+  assert.deepEqual([tp(0.6).valor, tp(-0.04).valor, tp(0).valor], ['+0,6 °C', '+0 °C', '+0 °C']);
+  assert.equal(M.fatorTemperatura(null), null);
+  assert.equal(M.temperaturaDaNoite({ media: 34 }), null); // sem delta não há diferença do normal
+  assert.deepEqual(M.spo2DaNoite({ media: 95, min: '', minutosAbaixo90: null }), { media: 95, min: null, minutosAbaixo90: null });
+});
+
+test('fase 7 montarAtividade: kcal ativas oficiais vencem a estimativa; distância e ativas por hora só quando vieram', () => {
+  const a = M.montarAtividade({ perfil: perfis[0], saude: saudeF7(), dia: DIA, hoje: DIA, horaAgora: '12:00' });
+  assert.deepEqual([a.kcalAtivas, a.kcalAtivasEstimada, a.distanciaKm, a.kcalTotal], [430, false, 4.81, 2200]);
+  assert.equal(a.porHora.kcalAtivas[18], 200);
+  assert.equal(a.porHora.passos.length, 24);
+  assert.equal(a.semana[6].kcalPct, 0.86); // a semana usa as oficiais também (430 / 500)
+  // o anel do Hoje é o mesmo número
+  assert.equal(M.anelAtividade({ perfil: perfis[0], saude: saudeF7(), dia: DIA, hoje: DIA, horaAgora: '12:00' }).kcalAtivas, 430);
+  // dia sem os dados novos (ontem): a estimativa de antes, sem as chaves novas
+  const ontem = M.montarAtividade({ perfil: perfis[0], saude: saudeF7(), dia: somarDias(DIA, -1), hoje: DIA, horaAgora: '12:00' });
+  assert.deepEqual([ontem.kcalAtivas, ontem.kcalAtivasEstimada, 'distanciaKm' in ontem], [2200 - 1420, true, false]);
+  // kcal ativas oficiais zero (dia parado) também valem
+  const parado = saudeF7();
+  parado.atividades.find((x) => x.dia === DIA).kcalAtivas = 0;
+  assert.deepEqual(['kcalAtivas', 'kcalAtivasEstimada'].map((k) => M.montarAtividade({ perfil: perfis[0], saude: parado, dia: DIA, hoje: DIA })[k]), [0, false]);
+});
+
+test('fase 7 rotas: GET /sono e /atividade devolvem os campos novos do envio guardado', async () => {
+  const antes = dados.saudeDe;
+  dados.saudeDe = async (perfil) => (chamadas.push(perfil.nome), saudeF7());
+  try {
+    let r = await pedir(`/perfis/${ID}/sono`);
+    assert.equal(r.status, 200);
+    assert.deepEqual([r.corpo.spo2.minutosAbaixo90, r.corpo.temperatura.delta, r.corpo.fatores.length], [4, -0.62, 9]);
+    r = await pedir(`/perfis/${ID}/atividade`);
+    assert.deepEqual([r.corpo.distanciaKm, r.corpo.kcalAtivas, r.corpo.kcalAtivasEstimada, r.corpo.porHora.kcalAtivas.length], [4.81, 430, false, 24]);
+  } finally {
+    dados.saudeDe = antes;
+  }
+});
+
 test('fase 6: sem token = 401; perfil inexistente = 404; a busca é pelo perfil do :id', async () => {
   let r = await pedir(`/perfis/${ID}/sono`, null);
   assert.deepEqual([r.status, r.corpo.erro.codigo], [401, 'sem_token']);

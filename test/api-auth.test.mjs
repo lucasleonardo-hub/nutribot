@@ -96,6 +96,18 @@ test('pareamento: código vira token; no banco só os hashes; código não serve
   await assert.rejects(auth.parear({ codigo, aparelho: 'outro', ip: '1.1.1.1' }), (e) => e.status === 401 && e.codigo === 'codigo_invalido');
 });
 
+test('dono: o jid de quem pediu o código vai pro aparelho e volta no autenticar; o !app grava o ADMIN_JID', async () => {
+  const b = banco();
+  const auth = criarAuth({ colecao: b.colecao, agora: relogio().agora });
+  const { token } = await auth.parear({ codigo: (await auth.novoCodigo({ dono: 'a@s.whatsapp.net' })).codigo, ip: '1.1.1.1' });
+  assert.equal(b.cols.dispositivos.docs[0].dono, 'a@s.whatsapp.net');
+  assert.equal((await auth.autenticar(token)).dono, 'a@s.whatsapp.net');
+  const antigo = await auth.parear({ codigo: (await auth.novoCodigo()).codigo, ip: '1.1.1.1' });
+  assert.equal((await auth.autenticar(antigo.token)).dono, null);
+  await comandoApp('!app', auth, { dono: 'admin@s.whatsapp.net' });
+  assert.equal(b.cols.codigos_app.docs.at(-1).dono, 'admin@s.whatsapp.net');
+});
+
 test('código expira em 10 minutos', async () => {
   const b = banco();
   const r = relogio();

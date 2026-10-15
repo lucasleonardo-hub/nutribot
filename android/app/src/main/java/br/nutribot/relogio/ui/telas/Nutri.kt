@@ -13,16 +13,23 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,17 +43,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import br.nutribot.relogio.dados.DocConhecimento
+import br.nutribot.relogio.dados.DocDossie
+import br.nutribot.relogio.dados.Licoes
+import br.nutribot.relogio.dados.Momento
 import br.nutribot.relogio.dados.Perfil
+import br.nutribot.relogio.dados.Persona
 import br.nutribot.relogio.dados.api.ErroApi
 import br.nutribot.relogio.dados.arr
 import br.nutribot.relogio.dados.bool
@@ -59,19 +74,26 @@ import br.nutribot.relogio.ui.componentes.AvisoErro
 import br.nutribot.relogio.ui.componentes.Botao
 import br.nutribot.relogio.ui.componentes.Cabecalho
 import br.nutribot.relogio.ui.componentes.Cartao
+import br.nutribot.relogio.ui.componentes.CartaoExpansivel
 import br.nutribot.relogio.ui.componentes.Chip
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
 import br.nutribot.relogio.ui.componentes.Link
 import br.nutribot.relogio.ui.componentes.MarkdownSimples
+import br.nutribot.relogio.ui.componentes.Mascote
 import br.nutribot.relogio.ui.componentes.Pilula
 import br.nutribot.relogio.ui.componentes.Pose
+import br.nutribot.relogio.ui.componentes.TamanhoVisual
+import br.nutribot.relogio.ui.componentes.TituloSecao
 import br.nutribot.relogio.ui.componentes.Vazio
+import br.nutribot.relogio.ui.componentes.semZap
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
 import br.nutribot.relogio.ui.tema.Fredoka
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -93,7 +115,8 @@ private fun rotuloNatureza(n: String?): String = when (n) {
     else -> n ?: "—"
 }
 
-private val abasNutri = listOf("fatos", "hipóteses", "pensamentos", "plano", "diário")
+/** As cinco abas da fase 4 mantêm a posição (o índice salvo continua valendo); as da fase 7 vêm depois. */
+private val abasNutri = listOf("fatos", "hipóteses", "pensamentos", "plano", "diário", "lições", "quem ela é", "conhecimento", "documentos", "momentos")
 
 private val soData = Regex("^\\d{4}-\\d{2}-\\d{2}$")
 
@@ -159,7 +182,8 @@ private sealed class AcaoNutri {
 }
 
 /**
- * O que a Nutri sabe, em cinco abas (fase 4): Fatos | Hipóteses | Pensamentos | Plano | Diário. Fatos com `editavel` ganham
+ * O que a Nutri sabe, em abas (fase 4): Fatos | Hipóteses | Pensamentos | Plano | Diário; fase 7: Lições | Quem ela é |
+ * Conhecimento | Documentos | Momentos, cada uma lendo a sua rota. Fatos com `editavel` ganham
  * "corrigir", com `apagavel` ganham "apagar"; hipótese aberta com `apagavel` ganha "descartar". Toda resposta traz o /nutri
  * recalculado, que entra no lugar do guardado (vm.semear). Tudo o que tem data (diário, pensamentos, reflexões, anotações,
  * hipóteses fechadas) aparece também no Diário. O Plano vem do /plano.
@@ -173,8 +197,9 @@ fun TelaNutri(vm: AppVM, perfil: Perfil?) {
     var aba by rememberSaveable { mutableIntStateOf(0) }
     var acao by remember { mutableStateOf<AcaoNutri?>(null) }
     val fuso = perfil.fuso
+    // puxar atualiza o /nutri e também o Plano e a aba aberta (cada um lê a sua rota)
     ConteudoCarga(
-        carga, { vm.carregar(rota, forcar = true) },
+        carga, { vm.carregar(rota, forcar = true); vm.recarregarVisiveis(perfil.id, AppVM.rotaMomentos(30)) },
         topo = {
             Cabecalho("O que a Nutri sabe", "sobre ${perfil.curto}", Pose.DuplaConferindo, 60.dp)
             // cinco abas não cabem num segmentado: chips roláveis, nenhum texto cortado
@@ -196,7 +221,12 @@ fun TelaNutri(vm: AppVM, perfil: Perfil?) {
             }
             2 -> Pensamentos(j, fuso)
             3 -> Plano(vm, perfil.id)
-            else -> Diario(j, fuso) { acao = it }
+            4 -> Diario(j, fuso) { acao = it }
+            5 -> AbaLicoes(vm)
+            6 -> AbaPersona(vm)
+            7 -> AbaConhecimento(vm)
+            8 -> AbaDocumentos(vm, perfil)
+            else -> AbaMomentos(vm, fuso)
         }
     }
     when (val a = acao) {
@@ -306,6 +336,276 @@ private fun Plano(vm: AppVM, perfilId: String) {
                     MarkdownSimples(texto, Modifier.padding(top = 8.dp))
                     plano.str("criadoEm")?.let { c -> Text("enviado ${quandoCurto(c, null) ?: ""}", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.padding(top = 8.dp)) }
                 }
+            }
+            PedirPlano(vm, perfilId)
+        }
+    }
+}
+
+/**
+ * Fase 7 (W28, D13 ajustada pelo dono): pedir um plano novo pelo app. POST /perfis/:id/plano { pedido? } -> 202. O plano
+ * sai completo no grupo do WhatsApp também (para quem não usa o app), fica aqui na aba Plano e no Drive. 1 por dia.
+ */
+@Composable
+private fun PedirPlano(vm: AppVM, perfilId: String) {
+    val escopo = rememberCoroutineScope()
+    var aberto by rememberSaveable { mutableStateOf(false) }
+    var pedido by rememberSaveable { mutableStateOf("") }
+    var enviando by remember { mutableStateOf(false) }
+    var erro by remember { mutableStateOf<String?>(null) }
+    var feito by rememberSaveable(perfilId) { mutableStateOf(false) }
+    Cartao(cor = Cores.Trilho) {
+        Text("Plano novo", style = MaterialTheme.typography.titleMedium)
+        Text(
+            if (feito) "Pedido feito. Em alguns minutos o plano aparece aqui e chega no grupo do WhatsApp. Puxe a tela para atualizar."
+            else "O plano chega aqui, no Drive e no grupo do WhatsApp, para quem não usa o app. Toda sexta a Nutri também oferece no grupo.",
+            style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, modifier = Modifier.padding(top = 4.dp),
+        )
+        if (!feito) Botao("Pedir plano novo", Modifier.padding(top = 10.dp).fillMaxWidth()) { erro = null; aberto = true }
+    }
+    if (aberto) {
+        AlertDialog(
+            onDismissRequest = { if (!enviando) aberto = false },
+            containerColor = Cores.Branco,
+            title = { Text("Pedir plano novo", style = MaterialTheme.typography.headlineSmall) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Leva alguns minutos. Sai um plano por dia.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+                    OutlinedTextField(pedido, { pedido = it.take(200) }, label = { Text("Algum pedido? (opcional)") }, placeholder = { Text("ex.: orçamento apertado, mais peixe") }, minLines = 1, maxLines = 4, modifier = Modifier.fillMaxWidth())
+                    erro?.let { AvisoErro(it) }
+                }
+            },
+            confirmButton = {
+                Botao(if (enviando) "Enviando…" else "Pedir", habilitado = !enviando) {
+                    escopo.launch {
+                        enviando = true
+                        erro = null
+                        try {
+                            val corpo = JSONObject()
+                            pedido.trim().takeIf { it.isNotBlank() }?.let { corpo.put("pedido", it) }
+                            vm.escrever("POST", AppVM.rotaGerarPlano(perfilId), corpo)
+                            feito = true
+                            aberto = false
+                            pedido = ""
+                        } catch (e: ErroApi) {
+                            erro = when {
+                                e.codigo == "whatsapp_desconectado" -> "O WhatsApp do bot está fora do ar agora. Peça de novo quando ele voltar."
+                                e.status == 429 -> "Já saiu um plano hoje. Amanhã dá para pedir outro."
+                                e.status == 403 -> "Este celular não pode pedir o plano desse perfil."
+                                e.status == 404 || e.status == 405 -> "O servidor ainda não aceita esse pedido pelo app."
+                                e.semConexao -> "Sem resposta do servidor. Tente de novo."
+                                else -> e.paraPessoa
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } finally {
+                            enviando = false
+                        }
+                    }
+                }
+            },
+            dismissButton = { Botao("Cancelar", suave = true, habilitado = !enviando) { aberto = false } },
+        )
+    }
+}
+
+/**
+ * Uma rota lida dentro de uma aba do /nutri (o mesmo jeito do Plano): roda enquanto busca, aviso de servidor acordando,
+ * erro com "tentar de novo" e, quando há dados, o conteúdo. Fase 7: Lições, Quem ela é, Conhecimento, Documentos e Momentos.
+ */
+@Composable
+internal fun CargaEmbutida(vm: AppVM, rota: String, buscando: String, conteudo: @Composable (JSONObject) -> Unit) {
+    val carga by vm.carga(rota).collectAsStateWithLifecycle()
+    LaunchedEffect(rota) { vm.carregar(rota) }
+    val dados = carga.dados
+    val erro = carga.erro
+    when {
+        dados == null && erro != null -> {
+            Text(erro.paraPessoa, style = MaterialTheme.typography.bodyMedium, color = Cores.CuidadoTinta)
+            Link("tentar de novo") { vm.carregar(rota, forcar = true) }
+        }
+        dados == null -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            CircularProgressIndicator(Modifier.size(18.dp), color = Cores.Acai, strokeWidth = 2.dp)
+            Text(if (carga.acordando) "Acordando o servidor. Leva até 1 minuto." else buscando, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+        }
+        else -> conteudo(dados)
+    }
+}
+
+/** Lições (W34): as regras que a Nutri adotou depois de errar, e o caderno inteiro num cartão que abre. */
+@Composable
+private fun AbaLicoes(vm: AppVM) {
+    CargaEmbutida(vm, AppVM.ROTA_LICOES, "Buscando as lições…") { j ->
+        val l = Licoes.de(j)
+        val regras = l?.regras.orEmpty().map { semZap(it) }.filter { it.isNotBlank() }
+        if (regras.isEmpty() && l?.documento.isNullOrBlank()) { Vazio("A Nutri ainda não anotou lições.", Pose.CorgiLupa); return@CargaEmbutida }
+        Text("O que ela aprendeu com os próprios erros e passou a seguir.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+        regras.forEachIndexed { i, r ->
+            Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = (i * 30).coerceAtMost(300)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("${i + 1}", fontFamily = Fredoka, fontWeight = FontWeight.W600, fontSize = 16.sp, color = Cores.AcaiEscuro)
+                    Text(r, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                }
+            }
+        }
+        l?.dia?.let { d -> quandoCurto(d, null)?.let { Text("atualizado em $it", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp) } }
+        l?.documento?.takeIf { it.isNotBlank() }?.let { doc ->
+            CartaoExpansivel(
+                "licoes-caderno", atraso = 120,
+                cabecalho = {
+                    Mascote(Pose.CorgiLupa, TamanhoVisual)
+                    Column(Modifier.weight(1f)) {
+                        Text("Caderno completo", style = MaterialTheme.typography.titleMedium)
+                        Text("erros, causas e regras", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                    }
+                },
+            ) { MarkdownSimples(semZap(doc)) }
+        }
+    }
+}
+
+/** Quem ela é (W33): a persona de hoje e como ela mudou (as versões anteriores, em trechos). */
+@Composable
+private fun AbaPersona(vm: AppVM) {
+    CargaEmbutida(vm, AppVM.ROTA_PERSONA, "Buscando quem ela é…") { j ->
+        val p = Persona.de(j)
+        val texto = p?.texto?.let { semZap(it) }?.takeIf { it.isNotBlank() }
+        if (p == null || texto == null) { Vazio("Ela ainda está se conhecendo. Volta depois do primeiro resumo do dia.", Pose.DuplaDescansando); return@CargaEmbutida }
+        Cartao(pincel = Brush.linearGradient(listOf(Cores.Trilho, Cores.BomFundo))) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Mascote(Pose.DuplaFeliz, 56.dp)
+                Column(Modifier.weight(1f)) {
+                    Text("Quem a Nutri é hoje", style = MaterialTheme.typography.titleLarge)
+                    p.atualizado?.let { a -> quandoCurto(a, null)?.let { Text("reescrita em $it", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3) } }
+                }
+            }
+            MarkdownSimples(texto, Modifier.padding(top = 10.dp))
+        }
+        if (p.versoes.isNotEmpty()) {
+            TituloSecao("Como ela mudou")
+            p.versoes.take(10).forEachIndexed { i, (em, trecho) ->
+                Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = (i * 30).coerceAtMost(300)) {
+                    em?.let { e -> quandoCurto(e, null)?.let { Pilula(it, Cores.Lavanda, Cores.Tinta2) } }
+                    Text(semZap(trecho), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
+                }
+            }
+        }
+    }
+}
+
+/** Tira acentos e caixa, para a busca achar "proteina" em "Proteína". */
+private fun semAcento(s: String): String = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "").lowercase()
+
+/**
+ * Base de conhecimento (W35) com busca: o termo (3 letras ou mais, meio segundo depois de parar de digitar) vai para o
+ * servidor como `?q=`; se a resposta trouxer `trecho`, vale a busca do servidor (no texto); senão, a tela filtra pelo título
+ * e pelo foco. Tocar num documento abre o texto inteiro numa folha.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AbaConhecimento(vm: AppVM) {
+    var termo by rememberSaveable { mutableStateOf("") }
+    var busca by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(termo) {
+        delay(500)
+        busca = termo.trim().takeIf { it.length >= 3 } ?: ""
+    }
+    var aberto by rememberSaveable { mutableStateOf<String?>(null) }
+    OutlinedTextField(
+        termo, { termo = it.take(60) },
+        label = { Text("Buscar na base") }, placeholder = { Text("ex.: proteína, sono, creatina") },
+        singleLine = true, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    val rota = if (busca.isBlank()) AppVM.ROTA_CONHECIMENTO else AppVM.ROTA_CONHECIMENTO + "?q=" + URLEncoder.encode(busca, "UTF-8")
+    CargaEmbutida(vm, rota, "Buscando a base…") { j ->
+        val todos = DocConhecimento.lista(j)
+        val doServidor = busca.isNotBlank() && todos.any { it.trecho != null }
+        val alvo = semAcento(termo.trim())
+        val docs = when {
+            doServidor -> todos
+            alvo.isBlank() -> todos
+            else -> todos.filter { semAcento(it.titulo).contains(alvo) || semAcento(it.foco ?: "").contains(alvo) }
+        }
+        if (docs.isEmpty()) {
+            Vazio(if (termo.isBlank()) "A base de conhecimento ainda está vazia." else "Nada encontrado para \"${termo.trim()}\".", Pose.CorgiLupa)
+            return@CargaEmbutida
+        }
+        Text("${docs.size} ${if (docs.size == 1) "documento" else "documentos"} que a Nutri estudou", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+        docs.forEachIndexed { i, d ->
+            Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = (i * 30).coerceAtMost(300), aoTocar = { aberto = d.id }, rotuloToque = "Ler ${d.titulo}") {
+                Text(d.titulo, style = MaterialTheme.typography.titleMedium)
+                d.foco?.let { Text(semZap(it), style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp)) }
+                d.trecho?.let { Text("… ${semZap(it)} …", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp)) }
+                val rodape = listOfNotNull(d.versao?.let { "versão $it" }, d.atualizado?.let { a -> quandoCurto(a, null)?.let { "atualizado $it" } }).joinToString(" · ")
+                if (rodape.isNotBlank()) Text(rodape, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+    }
+    val id = aberto
+    if (id != null) {
+        ModalBottomSheet(onDismissRequest = { aberto = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Cores.Lavanda) {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(start = 18.dp, end = 18.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                CargaEmbutida(vm, AppVM.rotaConhecimentoDoc(id), "Abrindo o documento…") { j ->
+                    Text(j.str("titulo") ?: "Documento", style = MaterialTheme.typography.headlineSmall)
+                    val texto = j.str("texto")
+                    if (texto.isNullOrBlank()) Text("Documento vazio.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3)
+                    else MarkdownSimples(texto)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Documentos (W32): o dossiê da pessoa, ou seja, os arquivos da pasta dela no Drive que a Nutri lê, com o resumo de cada um.
+ * "Abrir a pasta" só abre endereço https.
+ */
+@Composable
+private fun AbaDocumentos(vm: AppVM, perfil: Perfil) {
+    val abrir = LocalUriHandler.current
+    CargaEmbutida(vm, AppVM.rotaDocumentos(perfil.id), "Buscando os documentos…") { j ->
+        val docs = DocDossie.lista(j)
+        val pasta = j.str("pastaUrl")?.takeIf { it.startsWith("https://") }
+        Text("Arquivos da pasta de ${perfil.curto} no Drive. A Nutri lê e usa nas dicas.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+        if (pasta != null) Link("Abrir a pasta no Drive") { runCatching { abrir.openUri(pasta) } }
+        if (docs.isEmpty()) { Vazio("Nenhum documento na pasta ainda. Exames e planos de treino entram aqui.", Pose.CorgiLupa); return@CargaEmbutida }
+        docs.forEachIndexed { i, d ->
+            Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = (i * 30).coerceAtMost(300)) {
+                Text(d.nome, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                    d.rotulo?.let { Pilula(it, Cores.Lavanda, Cores.Tinta2) }
+                    when (d.lido) {
+                        true -> Pilula("lido pela Nutri", Cores.BomFundo, Cores.BomTinta)
+                        false -> Pilula("ainda não lido", Cores.AtencaoFundo, Cores.AtencaoTinta)
+                        null -> {}
+                    }
+                }
+                d.resumo?.let { Text(semZap(it), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp)) }
+                d.modificadoEm?.let { m -> quandoCurto(m, perfil.fuso)?.let { Text("mudou em $it", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp)) } }
+            }
+        }
+    }
+}
+
+/** Momentos (W57): o que a Nutri guardou como marcante no grupo, nos últimos 30 dias, o mais novo primeiro. */
+@Composable
+private fun AbaMomentos(vm: AppVM, fuso: String?) {
+    CargaEmbutida(vm, AppVM.rotaMomentos(30), "Buscando os momentos…") { j ->
+        val momentos = Momento.lista(j).sortedByDescending { it.dia ?: "" }
+        if (momentos.isEmpty()) { Vazio("Nenhum momento guardado nos últimos 30 dias.", Pose.DuplaDescansando); return@CargaEmbutida }
+        Text("O que ficou marcado no grupo, nos últimos 30 dias.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2)
+        momentos.forEachIndexed { i, m ->
+            Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = (i * 30).coerceAtMost(300)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    m.pessoa?.let { Pilula(it, Cores.Trilho, Cores.LilasTexto) }
+                    m.tipo?.let { Pilula(it.lowercase(), Cores.Lavanda, Cores.Tinta2) }
+                }
+                Text(semZap(m.texto), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
+                m.dia?.let { d -> quandoCurto(d, fuso)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp)) } }
             }
         }
     }

@@ -1,5 +1,6 @@
 package br.nutribot.relogio.ui.telas
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -8,23 +9,33 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import br.nutribot.relogio.dados.DiaSerie
+import br.nutribot.relogio.dados.Fala
 import br.nutribot.relogio.dados.Perfil
 import br.nutribot.relogio.dados.int
 import br.nutribot.relogio.dados.num
@@ -40,13 +51,17 @@ import br.nutribot.relogio.ui.componentes.MarkdownSimples
 import br.nutribot.relogio.ui.componentes.Mascote
 import br.nutribot.relogio.ui.componentes.MiniGrafico
 import br.nutribot.relogio.ui.componentes.ModoGrafico
+import br.nutribot.relogio.ui.componentes.Pilula
 import br.nutribot.relogio.ui.componentes.Pose
 import br.nutribot.relogio.ui.componentes.Segmentado
 import br.nutribot.relogio.ui.componentes.TamanhoVisual
+import br.nutribot.relogio.ui.componentes.TituloSecao
 import br.nutribot.relogio.ui.componentes.Vazio
+import br.nutribot.relogio.ui.componentes.semZap
 import br.nutribot.relogio.ui.tema.Cores
 import br.nutribot.relogio.ui.tema.Formas
 import org.json.JSONObject
+import java.time.LocalDate
 
 /**
  * /resumos (formato da frente S): { semana, mes, sequencia, relatorio }, cada período
@@ -60,15 +75,28 @@ fun TelaResumos(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
     val rota = AppVM.rotaResumos(perfil.id)
     val carga by vm.carga(rota).collectAsStateWithLifecycle()
     LaunchedEffect(rota) { vm.carregar(rota) }
-    var aba by rememberSaveable { mutableIntStateOf(0) }
+    // fase 7: 0 = Dia (o resumo das 23:59 e as falas do dia), 1 = Semana (o padrão de antes), 2 = Mês
+    var aba by rememberSaveable { mutableIntStateOf(1) }
+    val ontem = Formato.hojeDe(null, perfil.fuso).minusDays(1)
+    var diaStr by rememberSaveable(perfil.id) { mutableStateOf(Formato.iso(ontem)) }
     ConteudoCarga(
-        carga, { vm.carregar(rota, forcar = true) },
+        carga, {
+            vm.carregar(rota, forcar = true)
+            if (aba == 0) vm.carregar(AppVM.rotaResumoDia(perfil.id, diaStr), forcar = true)
+        },
         topo = {
-            CabecalhoVoltar("Resumos", "${perfil.curto} · últimos 7 e 30 dias fechados", Pose.DuplaProgresso, voltar)
-            Segmentado(listOf("Semana", "Mês (30 dias)"), aba, { aba = it }, Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp))
+            CabecalhoVoltar("Resumos", "${perfil.curto} · o dia, a semana e o mês", Pose.DuplaProgresso, voltar)
+            Segmentado(listOf("Dia", "Semana", "Mês (30 dias)"), aba, { aba = it }, Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp))
         },
     ) { j ->
-        val chave = if (aba == 0) "semana" else "mes"
+        val falas = Fala.lista(j)
+        if (aba == 0) {
+            val dia = Formato.dia(diaStr) ?: ontem
+            ResumoDoDia(vm, perfil.id, dia, ontem) { diaStr = Formato.iso(it) }
+            Falas(falas.filter { it.dia == Formato.iso(dia) })
+            return@ConteudoCarga
+        }
+        val chave = if (aba == 1) "semana" else "mes"
         val p = j.obj(chave)
         if (p == null) {
             Vazio("Ainda não há dados para este período.")
@@ -77,6 +105,8 @@ fun TelaResumos(vm: AppVM, perfil: Perfil?, voltar: () -> Unit) {
             Graficos(vm, perfil.id, p, chave)
         }
         Relatorio(j.obj("relatorio").obj(chave), chave)
+        val desde = p.str("de")?.take(10) ?: Formato.iso(ontem.minusDays(if (aba == 1) 6 else 29))
+        Falas(falas.filter { it.dia >= desde })
         j.int("sequencia")?.let { s ->
             Cartao(cor = Cores.BomFundo) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -179,6 +209,66 @@ private fun Graficos(vm: AppVM, perfilId: String, p: JSONObject, chave: String) 
                 MiniGrafico("Sono por noite", media(sono)?.let { Formato.sono(it * 60) } ?: "—", sono, ModoGrafico.Barras, Cores.LilasForte, Modifier.weight(1f), faixa = 7.0 to 9.0, corFaixa = Cores.Trilho, descricao = "Sono: média ${Formato.sono(media(sono)?.times(60))} por noite", atraso = 180)
                 MiniGrafico("Passos por dia", media(passos)?.let { Formato.inteiro(it) } ?: "—", passos, ModoGrafico.Barras, Cores.Verde, Modifier.weight(1f), descricao = "Passos: média ${Formato.inteiro(media(passos))} por dia", atraso = 200)
             }
+        }
+    }
+}
+
+/**
+ * Fase 7 (W44): o resumo do dia que a Nutri fecha às 23:59 (o mesmo do grupo). GET /perfis/:id/resumos/dia?dia= ->
+ * { dia, texto }. Setas para andar entre os dias, até ontem (o de hoje ainda não fechou).
+ */
+@Composable
+private fun ResumoDoDia(vm: AppVM, perfilId: String, dia: LocalDate, ontem: LocalDate, aoMudar: (LocalDate) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SetaDia("Dia anterior", "‹", habilitada = true) { aoMudar(dia.minusDays(1)) }
+        Text(
+            if (dia == ontem) "Ontem" else Formato.diaLongo(dia).replaceFirstChar { it.uppercase() },
+            style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, modifier = Modifier.weight(1f),
+        )
+        SetaDia("Próximo dia", "›", habilitada = dia.isBefore(ontem)) { aoMudar(dia.plusDays(1)) }
+    }
+    CargaEmbutida(vm, AppVM.rotaResumoDia(perfilId, Formato.iso(dia)), "Buscando o resumo…") { r ->
+        val texto = r.str("texto")?.let { semZap(it) }?.takeIf { it.isNotBlank() }
+        if (texto == null) {
+            Vazio("Sem resumo deste dia.", Pose.DuplaDescansando)
+        } else {
+            Cartao(pincel = Brush.linearGradient(listOf(Cores.Trilho, Cores.BomFundo))) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Mascote(Pose.DuplaConferindo, 48.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text("Resumo do dia", style = MaterialTheme.typography.titleMedium)
+                        Text("o que a Nutri fechou no grupo", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                    }
+                }
+                MarkdownSimples(texto, Modifier.padding(top = 10.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SetaDia(rotulo: String, simbolo: String, habilitada: Boolean, aoTocar: () -> Unit) {
+    Text(
+        simbolo, fontSize = 22.sp, color = if (habilitada) Cores.AcaiEscuro else Cores.Cinza,
+        modifier = Modifier.minimumInteractiveComponentSize().clip(CircleShape)
+            .clickable(enabled = habilitada, role = Role.Button, onClickLabel = rotulo, onClick = aoTocar)
+            .semantics { contentDescription = rotulo }
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+    )
+}
+
+/** Fase 7 (W58): o texto das notas de voz da Nutri (segunda e sexta), o mais novo primeiro. */
+@Composable
+private fun Falas(falas: List<Fala>) {
+    if (falas.isEmpty()) return
+    TituloSecao("O que a Nutri falou")
+    falas.take(8).forEachIndexed { i, f ->
+        Cartao(forma = Formas.Cartao, padding = PaddingValues(14.dp), atraso = (i * 30).coerceAtMost(300)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Formato.dia(f.dia)?.let { d -> Pilula(Formato.semanaCurta(d) + " " + Formato.diaCurto(d), Cores.Trilho, Cores.LilasTexto) }
+                Pilula(f.tipo?.let { t -> "nota de voz · ${t.lowercase()}" } ?: "nota de voz", Cores.Lavanda, Cores.Tinta2)
+            }
+            Text(semZap(f.texto), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
         }
     }
 }

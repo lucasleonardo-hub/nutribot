@@ -1,6 +1,6 @@
 // perfis.js - Perfis enriquecidos com horários habituais e atualização de dados vindos da conversa.
 
-import { refeicoesDesde } from './mongo.js';
+import { refeicoesDesde, eventosDe } from './mongo.js';
 import { treinoDe } from './treino.js';
 import { agendaDe } from './agenda.js';
 import { contextoLugares, roteiroDoDia, localDe, visitasDeHoje } from './lugares.js';
@@ -22,6 +22,29 @@ function precisaSincronizar(p) {
   return true;
 }
 
+/**
+ * Puro. Eventos marcados no app (fase 7) no formato da agenda que o roteiroDoDia lê: só os do dia com hora; duração de
+ * 90 min (refeição, festa) ou 60 min (o resto); o tipo diz que veio do app. `fuso` = o da pessoa.
+ */
+const NOME_EVENTO = { comer_fora: 'refeição fora', festa: 'festa', viagem: 'viagem', treino: 'treino', consulta: 'consulta', outro: 'compromisso' };
+export function eventosComoAgenda(eventos = [], { dia, fuso = 'America/Sao_Paulo' } = {}) {
+  const instante = (hhmm) => {
+    // "2026-10-15" + "20:00" no fuso da pessoa -> Date, pelo deslocamento medido com o próprio localDe
+    const alvo = new Date(`${dia}T${hhmm}:00Z`);
+    const l = localDe(alvo, fuso);
+    const [h, m] = hhmm.split(':').map(Number);
+    const desvio = (Number(l.dia.slice(8, 10)) - Number(dia.slice(8, 10))) * 1440 + (l.hora * 60 - (h * 60 + m));
+    return new Date(alvo.getTime() - Math.round(desvio) * 60000);
+  };
+  return (eventos || [])
+    .filter((e) => e?.dia === dia && /^\d{2}:\d{2}$/.test(String(e.hora || '')))
+    .map((e) => {
+      const ini = instante(e.hora);
+      const dur = e.tipo === 'comer_fora' || e.tipo === 'festa' ? 90 : 60;
+      return { titulo: `${e.titulo || 'evento'} (marcado no app)`, tipo: `app ${NOME_EVENTO[e.tipo] || 'compromisso'}`, inicio: ini.toISOString(), fim: new Date(ini.getTime() + dur * 60000).toISOString() };
+    });
+}
+
 export async function enriquecerPerfis(perfis, dia) {
   const desde = diasAnteriores(dia, DIAS_ROTINA)[0];
   return Promise.all(
@@ -36,6 +59,9 @@ export async function enriquecerPerfis(perfis, dia) {
       const lg = p.lugaresAtivo ? await contextoLugares(p).catch(() => null) : null;
       // roteiro provável de hoje: padrão de lugares no dia da semana + agenda de hoje + treino já feito (relógio), com janelas apertadas
       let roteiro = '';
+      // fase 7: eventos que a pessoa marcou no app pra hoje (comer fora, festa, viagem...): entram no roteiro e a cobrança
+      // pula a refeição que eles tiram de casa (cobranca.js)
+      let eventosApp = [];
       try {
         const fuso = fusoDe(p);
         const agoraLocal = localDe(new Date(), fuso);
@@ -43,7 +69,9 @@ export async function enriquecerPerfis(perfis, dia) {
         const rel = p.relogio ? await situacaoRelogio(p, agoraLocal.dia).catch(() => null) : null;
         const fixas = atividadesComoAgenda(p, { dia: agoraLocal.dia, dow: agoraLocal.dow, fuso });
         const visitasHoje = p.lugaresAtivo ? await visitasDeHoje(p, agoraLocal.dia).catch(() => []) : [];
-        roteiro = roteiroDoDia({ lugares: p.lugares || [], agenda: [...agendaHoje, ...fixas], treinos: rel?.treinosHoje || [], dow: agoraLocal.dow, fuso, horaAgora: agoraLocal.hora, dia: agoraLocal.dia, situacao: lg?.situacao || null, visitasHoje });
+        eventosApp = p.jids?.length ? await eventosDe(p.jids, agoraLocal.dia, agoraLocal.dia).catch(() => []) : [];
+        const doApp = eventosComoAgenda(eventosApp, { dia: agoraLocal.dia, fuso });
+        roteiro = roteiroDoDia({ lugares: p.lugares || [], agenda: [...agendaHoje, ...fixas, ...doApp], treinos: rel?.treinosHoje || [], dow: agoraLocal.dow, fuso, horaAgora: agoraLocal.hora, dia: agoraLocal.dia, situacao: lg?.situacao || null, visitasHoje });
       } catch (e) {
         console.warn('[perfis] roteiro:', e.message);
       }
@@ -55,7 +83,7 @@ export async function enriquecerPerfis(perfis, dia) {
         // pré e pós-treino de hoje calculados em código (café das 8h29 depois da Garra das 7h06 É o pós-treino)
         treinoHoje = await blocoTreinoRefeicoes(p, al.dia, { rel: p.relogio ? await situacaoRelogio(p, al.dia).catch(() => null) : null }).catch(() => '');
       } catch {}
-      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t, _agenda: ag, _lugares: lg, _roteiro: roteiro, _atividades: atividadesBloco, _treinoHoje: treinoHoje };
+      return { ...p, horarios: descreverHorarios(hab), _hab: hab, _refs: refs, treino: t?.linha || null, _treino: t, _agenda: ag, _lugares: lg, _roteiro: roteiro, _atividades: atividadesBloco, _treinoHoje: treinoHoje, _eventosApp: eventosApp };
     })
   );
 }

@@ -181,6 +181,16 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Puxar para atualizar numa tela com várias rotas (a Nutri: /nutri, /plano e a aba aberta): busca de novo, com forcar,
+     * todas as rotas desse perfil que alguma tela está observando agora, e as `outras` (rotas sem o perfil, como os
+     * momentos) se estiverem sendo observadas. Não apaga cache de nada.
+     */
+    fun recarregarVisiveis(perfilId: String, vararg outras: String) {
+        val prefixo = "/perfis/$perfilId/"
+        cargas.filter { (rota, f) -> (rota.startsWith(prefixo) || rota in outras) && f.subscriptionCount.value > 0 }.keys.toList().forEach { carregar(it, forcar = true) }
+    }
+
+    /**
      * Uma imagem da API (2.3: o gráfico da Nutri), em bytes. Devolve a cópia guardada no cacheDir quando tem menos de 1 h;
      * senão busca (em IO) e guarda. Se a busca falhar e houver uma cópia velha, devolve a velha em vez de lançar.
      * Lança ErroApi (503 grafico_indisponivel, 401, 404, sem rede) quando não há o que mostrar.
@@ -315,6 +325,48 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         /** Fase 4: sugestão da IA para a próxima refeição (slot opcional). */
         fun rotaSugestaoRefeicao(id: String, slot: String? = null) = "/perfis/$id/sugestao-refeicao" + (slot?.let { "?slot=$it" } ?: "")
         const val ROTA_INTEGRACOES = "/integracoes"
+
+        // ---------- fase 7 (rotas da frente A; mapa do ecossistema, seções 1 e 3) ----------
+        /** Atividades fixas: GET -> { fixas, hoje, pendentes }; POST { nome, dias:[0-6], inicio, fim, met } -> { atividade }. */
+        fun rotaAtividades(id: String) = "/perfis/$id/atividades"
+        /** DELETE apaga a atividade fixa (por id) -> { apagada }. */
+        fun rotaAtividadeFixa(id: String, aid: String) = "/perfis/$id/atividades/$aid"
+        /** POST { dia, feita } responde o "teve?" -> { feita, kcal } (e cancela a pergunta no grupo). */
+        fun rotaRespostaAtividade(id: String, aid: String) = "/perfis/$id/atividades/$aid/resposta"
+        /** Lugares (só o perfil do dono; os outros recebem 403): GET -> { agora, lugares }; DELETE ?confirmar=sim esquece todos. */
+        fun rotaLugares(id: String) = "/perfis/$id/lugares"
+        /** PUT { tipo?, nome?, papel?: 'casa'|'trabalho'|null } -> { lugar }. */
+        fun rotaLugar(id: String, lid: String) = "/perfis/$id/lugares/$lid"
+        fun rotaEsquecerLugares(id: String) = "/perfis/$id/lugares?confirmar=sim"
+        /** Agenda do Google, só leitura e só do dono da credencial: { eventos:[{dia,inicio,fim,titulo,tipo}], janelas }. */
+        fun rotaAgendaGoogle(id: String, dias: Int = 14) = "/perfis/$id/agenda-google?dias=$dias"
+        /** Dossiê da pessoa no Drive: { arquivos:[{nome,tipo,lido,modificadoEm,resumo}], pastaUrl }. */
+        fun rotaDocumentos(id: String) = "/perfis/$id/documentos"
+        /** Histórico das perguntas feitas no app: { perguntas:[{id,dia,em,pergunta,resposta,tema}] } (a mais nova primeiro ou não). */
+        fun rotaPerguntas(id: String, n: Int = 20) = "/perfis/$id/perguntas?n=$n"
+        /** DELETE apaga uma troca. */
+        fun rotaPerguntaApp(id: String, pid: String) = "/perfis/$id/perguntas/$pid"
+        /** DELETE apaga todas as trocas da pessoa. */
+        fun rotaApagarPerguntas(id: String) = "/perfis/$id/perguntas?confirmar=sim"
+        /** Resumo do dia (o mesmo das 23:59 no grupo): { dia, texto }. */
+        fun rotaResumoDia(id: String, dia: String? = null) = "/perfis/$id/resumos/dia" + (dia?.let { "?dia=$it" } ?: "")
+        /** POST { pedido? } -> 202 { emAndamento }: plano novo da semana (vai para o app, o Drive e o grupo, D13). */
+        fun rotaGerarPlano(id: String) = "/perfis/$id/plano"
+        /** Configurações do bot (só o celular do dono, D14): GET -> { vozLigada, silencioAte, nomeBot }; PUT { vozLigada } | { silencioAte }. */
+        /** Pelo perfil: o servidor confere o `:id` e se o aparelho é o do dono (gravado no pareamento pelo !app). */
+        fun rotaConfig(id: String) = "/perfis/$id/config"
+        /** Saúde do bot (só o dono): { uptime, gemini:{chamadas,tokens,modelos,castigos}, reservas, voz, revisoes }. */
+        fun rotaStatus(id: String) = "/perfis/$id/sistema/status"
+        /** Quem a Nutri é: { texto, atualizado, versoes:[{em,trecho}] }. */
+        const val ROTA_PERSONA = "/nutri/persona"
+        /** O que ela aprendeu com os erros: { regras:[], documento, dia }. */
+        const val ROTA_LICOES = "/nutri/licoes"
+        /** Base de conhecimento: { docs:[{id,titulo,versao,atualizado,foco}] }; cada doc em rotaConhecimentoDoc -> { texto }. */
+        const val ROTA_CONHECIMENTO = "/nutri/conhecimento"
+        fun rotaConhecimentoDoc(did: String) = "/nutri/conhecimento/$did"
+        /** Momentos memoráveis do grupo: { momentos:[{dia,pessoa,tipo,texto}] }. */
+        fun rotaMomentos(dias: Int = 30) = "/nutri/momentos?dias=$dias"
+
         private const val UMA_HORA_MS = 60L * 60 * 1000
     }
 }

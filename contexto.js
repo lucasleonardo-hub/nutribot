@@ -2,10 +2,13 @@
 // o que comprou (notas da despensa), atividade fixa feita ou não, treino do relógio. Entra nas notas noturnas, no diário
 // e nos momentos, além da conversa (via lugares/despensa). Sem endereço de casa, sem CPF, sem total da nota.
 
-import { colecao } from './mongo.js';
+import { colecao, pesagensDesde } from './mongo.js';
 import { visitasDeHoje, localDe } from './lugares.js';
 import { fusoDe } from './util.js';
 import { diasDeComida } from './progresso.js';
+// fase 7 (D18): a carga sugerida tem fonte única, a do dia (a mesma das caixas de treino do app). O ciclo de import com
+// api-montadores.js (que importa progressaoForca e companhia daqui) é seguro: nada é chamado no carregamento do módulo
+import { sugerirCargaExercicio, treinosPorTitulo, contextoDoTreino } from './api-montadores.js';
 
 // gasto estimado por MET quando o relógio não traz kcal da sessão (o Hevy grava a sessão sem calorias): MET × kg × h
 const MET_POR_NOME = [
@@ -241,7 +244,8 @@ export function progressaoForca(sessoes = [], { dia, semanas = 8 } = {}) {
     const primeiro = lista[0];
     const caiu = ultimo.melhor < primeiro.melhor - 0.01 && ultimo.melhor < lista[lista.length - 2].melhor;
     const situacao = caiu ? 'caindo' : semanasParado >= 2 ? 'parado' : 'subindo';
-    exercicios.push({ title, sessoes: lista.length, melhor: ultimo.melhor, reps: ultimo.reps, desde: primeiro.melhor, ultimaSubida, semanasParado, situacao });
+    // historico: o mesmo formato que sugerirCargaExercicio lê (D18: a meta da semana sai da conta do dia)
+    exercicios.push({ title, sessoes: lista.length, melhor: ultimo.melhor, reps: ultimo.reps, desde: primeiro.melhor, ultimaSubida, semanasParado, situacao, historico: lista.map((x) => ({ dia: x.dia, kg: x.melhor, reps: x.reps })) });
   }
   exercicios.sort((a, b) => b.semanasParado - a.semanasParado);
   return { exercicios, parados: exercicios.filter((e) => e.situacao === 'parado'), subindo: exercicios.filter((e) => e.situacao === 'subindo'), caindo: exercicios.filter((e) => e.situacao === 'caindo') };
@@ -268,11 +272,13 @@ export function suplementosPelosRegistros(refeicoes = [], { dias = 14 } = {}) {
  * suplementos pelos registros, e uma LEITURA em código (recuperação / comida / estímulo). '' sem Hevy.
  */
 export async function blocoForcaRecuperacao(perfil, dia, opts = {}) {
-  const a = await analiseForca(perfil, dia, opts);
+  // o bloco (conversa, pensamentos, reflexão) leva os treinos com a carga de hoje; o resumo da semana (dia.js) chama a
+  // analiseForca direto e fica só com as metas da semana, pra não misturar o número do dia com o da semana
+  const a = await analiseForca(perfil, dia, { comTreinos: true, ...opts });
   return a.texto;
 }
-/** Igual ao bloco, mas devolve também a estrutura: { texto, prog, podePuxar, sugestoes }. */
-export async function analiseForca(perfil, dia, { magraSem = null, faixa = null } = {}) {
+/** Igual ao bloco, mas devolve também a estrutura: { texto, prog, podePuxar, sugestoes, caixas }. */
+export async function analiseForca(perfil, dia, { magraSem = null, faixa = null, comTreinos = false } = {}) {
   const jids = perfil.jids || [];
   if (!jids.length) return { texto: '', prog: null, podePuxar: false, sugestoes: [] };
   const desde8 = new Date(new Date(`${dia}T12:00:00Z`).getTime() - 56 * 86400_000).toISOString();
@@ -329,7 +335,55 @@ export async function analiseForca(perfil, dia, { magraSem = null, faixa = null 
     `- Suplementos pelos registros (14 dias): creatina em ${sup.diasCreatina} de ${sup.diasComRegistro} dias${sup.diasCreatina >= 10 ? ' (constante: saturado, efeito pleno)' : sup.diasCreatina ? ' (irregular: estoque não satura)' : ''}; whey ~${sup.wheyMedio} g/dia em ${sup.diasWhey} dias; hipercalórico ${sup.hipercalorico}x\n` +
     (leitura.length ? `- LEITURA: ${leitura.join(' | ')}` : '- LEITURA: sem sinal claro') +
     (txtSug ? `\n${txtSug}` : '');
-  return { texto, prog, podePuxar, sugestoes, sonoMedioMin, kcalMedia, pMedia };
+  // fase 7 (D18): os treinos pelo título, com a carga de hoje (a mesma das caixas do app). Só Mongo; falhou, fica sem
+  const treinos = comTreinos ? await treinosDoDia(perfil, dia, { sessoes, refeicoes: refs28 }).catch(() => null) : null;
+  return { texto: treinos?.texto ? `${texto}\n${treinos.texto}` : texto, prog, podePuxar, sugestoes, sonoMedioMin, kcalMedia, pMedia, caixas: treinos?.caixas || [] };
+}
+
+// ---------- treinos pelo título com a carga do dia (fase 7, D18: fonte única = sugerirCargaExercicio) ----------
+const SIGLA_DOW = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+/**
+ * Puro. Bloco TREINOS a partir das caixas (api-montadores.treinosPorTitulo, as mesmas do app) e do contexto do dia
+ * (contextoDoTreino: sono, energia, comida). Até 4 treinos e 6 exercícios por treino; marca o de hoje pelo dia da semana.
+ * '' sem caixas.
+ */
+export function blocoTreinosDoDia(caixas = [], { dia, contexto = null, nome = '' } = {}) {
+  if (!caixas?.length) return '';
+  const dowHoje = dia ? SIGLA_DOW[new Date(`${dia}T12:00:00Z`).getUTCDay()] : null;
+  const kg = (n) => (n == null ? '?' : `${String(Math.round(n * 100) / 100).replace('.', ',')} kg`);
+  const linhaEx = (e) => {
+    if (!e.ultimoKg) return `${e.nome}: ${e.ultimasReps || '?'} repetições, repete`;
+    const alvo = e.acao === 'subir' ? `sobe pra ${kg(e.sugeridoKg)} × ${e.sugeridasReps}` : e.acao === 'repetir' ? `fica em ${kg(e.ultimoKg)}, tenta ${e.sugeridasReps} repetições` : `mantém ${kg(e.ultimoKg)} × ${e.ultimasReps}`;
+    return `${e.nome}: pegou ${kg(e.ultimoKg)} × ${e.ultimasReps} → hoje ${alvo}`;
+  };
+  const linhas = caixas.slice(0, 4).map((c) => {
+    const ehHoje = dowHoje && (c.dias || []).includes(dowHoje);
+    return `- ${c.titulo} (${(c.dias || []).join(', ') || 'sem dia fixo'}${ehHoje ? '; É HOJE' : ''}): ${(c.exercicios || []).slice(0, 6).map(linhaEx).join('; ')}`;
+  });
+  return `TREINOS${nome ? ` DE ${nome.toUpperCase()}` : ''} PELO TÍTULO NO HEVY (carga sugerida pra hoje, calculada pelo sistema; é o MESMO número que o app mostra, não invente outro)${contexto?.texto ? `. Hoje: ${contexto.texto}` : ''}:\n${linhas.join('\n')}`;
+}
+
+/**
+ * As caixas de treino do dia com a carga sugerida (a mesma do app) e o bloco em texto. Lê o Mongo (sessões de 8 semanas,
+ * catálogo do Hevy, relógio, pesagens de 35 dias); `sessoes` e `refeicoes` podem vir prontas de quem chama.
+ * @returns {Promise<{ caixas, contexto, texto }>}
+ */
+export async function treinosDoDia(perfil, dia, { sessoes = null, refeicoes = null } = {}) {
+  const jids = perfil?.jids || [];
+  if (!jids.length) return { caixas: [], contexto: null, texto: '' };
+  const desde8 = new Date(new Date(`${dia}T12:00:00Z`).getTime() - 57 * 86400_000).toISOString();
+  const diaMenos = (n) => new Date(new Date(`${dia}T12:00:00Z`).getTime() - n * 86400_000).toISOString().slice(0, 10);
+  const [sess, catalogo, saude, pesagens, refs] = await Promise.all([
+    sessoes || colecao('treinos').find({ jid: { $in: jids }, inicio: { $gte: desde8 } }).toArray().catch(() => []),
+    colecao('hevy_exercicios').findOne({ _id: 'catalogo' }).then((d) => d?.mapa || {}).catch(() => ({})),
+    colecao('saude_relogio').findOne({ _id: jids[0] }, { projection: { sonos: { $slice: -20 }, atividades: { $slice: -20 } } }).catch(() => null),
+    pesagensDesde(jids, diaMenos(35), dia).catch(() => []),
+    refeicoes || colecao('refeicoes').find({ jid: { $in: jids }, dia: { $gte: diaMenos(28), $lte: dia } }).toArray().catch(() => []),
+  ]);
+  if (!sess.length) return { caixas: [], contexto: null, texto: '' };
+  const contexto = contextoDoTreino({ perfil, dia, refeicoes: refs, pesagens, saude });
+  const caixas = treinosPorTitulo({ sessoes: sess, catalogo, dia, contexto, fuso: fusoDe(perfil) });
+  return { caixas, contexto, texto: blocoTreinosDoDia(caixas, { dia, contexto, nome: String(perfil.nome || '').split(' ')[0] }) };
 }
 
 // ---------- sugestões de carga da semana: propostas no domingo, conferidas no Hevy durante a semana ----------
@@ -343,8 +397,11 @@ export function incrementoDeCarga(title, kg) {
   return 2.5;
 }
 /**
- * Puro. A partir dos exercícios parados (com carga), até `max` sugestões: subir carga OU repetições.
- * Devolve [{ id, exercicio, deKg, deReps, paraKg, paraReps, feitaEm, status: 'aberta' }].
+ * Puro. A META DA SEMANA (D18): a partir dos exercícios parados (com carga), até `max` metas: subir carga OU repetições.
+ * Quando o exercício traz o `historico` (progressaoForca já devolve), a meta é derivada da sugestão do dia
+ * (sugerirCargaExercicio, sem o contexto do dia, que muda a cada manhã): "subir" vira a carga sugerida; "repetir" (subiu há
+ * pouco ou poucas repetições) vira a carga de partida com as repetições sugeridas, e a carga seguinte como alternativa. Sem
+ * histórico, a conta antiga (incrementoDeCarga). Devolve [{ id, exercicio, deKg, deReps, paraKg, paraReps, feitaEm, status }].
  */
 export function gerarSugestoesCarga(parados = [], { dia, max = 3 } = {}) {
   return parados
@@ -353,7 +410,11 @@ export function gerarSugestoesCarga(parados = [], { dia, max = 3 } = {}) {
     .slice(0, max)
     .map((e, i) => {
       const inc = incrementoDeCarga(e.title, e.melhor);
-      return { id: `s${String(dia).replace(/-/g, '')}${i + 1}`, exercicio: e.title, deKg: e.melhor, deReps: e.reps, paraKg: Math.round((e.melhor + inc) * 100) / 100, paraReps: Math.max(1, (e.reps || 8) + 2), feitaEm: dia, status: 'aberta', tentativas: 0 };
+      const base = { id: `s${String(dia).replace(/-/g, '')}${i + 1}`, exercicio: e.title, deKg: e.melhor, deReps: e.reps, feitaEm: dia, status: 'aberta', tentativas: 0 };
+      const sug = Array.isArray(e.historico) && e.historico.length ? sugerirCargaExercicio({ nome: e.title, historico: e.historico, contexto: {} }) : null;
+      if (sug?.acao === 'subir') return { ...base, paraKg: sug.sugeridoKg, paraReps: Math.max(1, (e.reps || 8) + 2), origem: 'dia' };
+      if (sug?.acao === 'repetir') return { ...base, paraKg: Math.round((e.melhor + inc) * 100) / 100, paraReps: Math.max(1, sug.sugeridasReps || (e.reps || 8) + 1), origem: 'dia' };
+      return { ...base, paraKg: Math.round((e.melhor + inc) * 100) / 100, paraReps: Math.max(1, (e.reps || 8) + 2) };
     });
 }
 /**
@@ -389,7 +450,7 @@ export function textoSugestoesCarga(sugestoes = [], { hoje } = {}) {
     const estado = s.status === 'batida' ? `BATEU em ${s.batidaEm.slice(8, 10)}/${s.batidaEm.slice(5, 7)} (${s.como}) ✓` : s.status === 'tentando' ? `fez o exercício ${s.tentativas}x e ainda não subiu` : 'ainda não fez o exercício desde a sugestão';
     return `- ${textoSugestao(s)} → ${estado}`;
   });
-  return `SUGESTÕES DE CARGA DA SEMANA (feitas em ${vivas[0].feitaEm.slice(8, 10)}/${vivas[0].feitaEm.slice(5, 7)} e conferidas no Hevy a cada sincronização${hoje ? `; hoje ${hoje}` : ''}):\n${linhas.join('\n')}`;
+  return `METAS DE CARGA DA SEMANA (feitas em ${vivas[0].feitaEm.slice(8, 10)}/${vivas[0].feitaEm.slice(5, 7)} a partir da mesma conta da carga do dia e conferidas no Hevy a cada sincronização${hoje ? `; hoje ${hoje}` : ''}; quando houver o bloco TREINOS, a carga de HOJE é a dele, a mesma do app):\n${linhas.join('\n')}`;
 }
 /** Lê as sugestões do perfil, confere contra o Hevy desde a data e grava o estado novo. Devolve a lista atualizada. */
 export async function atualizarSugestoesCarga(perfil, { salvar = true } = {}) {

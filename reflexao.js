@@ -18,6 +18,25 @@ import { resumoDespensaPeriodo } from './despensa.js';
 import { pensamentosDaSemana } from './pensamentos.js';
 import { blocoForcaRecuperacao } from './contexto.js';
 import { ferramentasPara } from './ferramentas.js';
+import { humorDe } from './mongo.js';
+import { blocoHumorDias, perguntasRecentes, perguntasParaPrompt, moduloDePerguntas, confidenciasDe, corpoCompacto, semConfidencias, semCorpoSensivel } from './contexto-app.js';
+
+/**
+ * Fase 7: o que a reflexão de domingo recebe do app (prompt particular): humor da semana com o texto (confidência), temas e
+ * até 10 perguntas da semana feitas no app e o corpo (sono, energia, atividade; oxigênio e temperatura fora do normal).
+ * Devolve { texto, confidencias }.
+ */
+async function appDaSemana(perfil, dia) {
+  const jids = perfil.jids || [];
+  if (!jids.length) return { texto: '', confidencias: [] };
+  const [humores, perguntas, modulo] = await Promise.all([
+    humorDe(jids, diasAnteriores(dia, 7)[0], dia).catch(() => []),
+    perguntasRecentes(perfil, { desde: new Date(Date.now() - 7 * 24 * 3600_000), n: 40 }).catch(() => []),
+    moduloDePerguntas().catch(() => null),
+  ]);
+  const texto = [blocoHumorDias(humores, { hoje: dia, dias: 7, confidencia: true }), perguntasParaPrompt(perguntas, { modo: 'reflexao', hoje: dia, modulo }), corpoCompacto(perfil.relogio, { propria: true })].filter(Boolean).join('\n\n');
+  return { texto, confidencias: confidenciasDe({ perguntas, humores }) };
+}
 
 export const ARQ_REFLEXOES = 'Nutri-Reflexoes.md';
 const MAX_SINTESE = 600;
@@ -106,6 +125,7 @@ export async function refletirSobre(perfil, { dia, persona, motivo = 'domingo' }
   const despensa = await resumoDespensaPeriodo(perfil, dia).catch(() => '');
   const pensamentos = await pensamentosDaSemana(perfil, dia).catch(() => '');
   const forca = await blocoForcaRecuperacao(perfil, dia).catch(() => '');
+  const app = await appDaSemana(perfil, dia).catch(() => ({ texto: '', confidencias: [] }));
   const padrao = padraoAlimentar(refs, { periodoDias: 28 });
   const fontes = {
     visao,
@@ -145,16 +165,24 @@ export async function refletirSobre(perfil, { dia, persona, motivo = 'domingo' }
     hipoteses: blocoHipoteses(abertas, fechadas),
     despensa,
     pensamentos,
+    app: app.texto,
     persona,
     dia,
   });
-  const limpo = ia.separarAtualizacao(texto).texto?.trim();
+  // D10 em código: a síntese e as suspeitas aparecem no grupo (!reflexao); frase que copia pergunta do app ou texto do humor sai
+  const bruto = ia.separarAtualizacao(texto).texto?.trim();
+  // e, pela D12, a frase de oxigênio ou temperatura da pele também (o !reflexao mostra a síntese no grupo)
+  const semConf = semConfidencias(bruto || '', app.confidencias);
+  const semCorpo = semCorpoSensivel(semConf.texto);
+  const nRemovidas = semConf.removidas.length + semCorpo.removidas.length;
+  if (nRemovidas) console.log(`[reflexao] ${perfil.nome}: ${nRemovidas} frase(s) com confidência do app ou oxigênio/temperatura retirada(s)`);
+  const limpo = semCorpo.texto.trim();
   if (!limpo || limpo.length < 200) throw new Error('reflexão vazia ou curta demais');
   const sintese = extrairSintese(limpo);
 
   // 3) novas suspeitas do texto viram hipóteses abertas (pra conferir na semana que vem)
   try {
-    const novas = await ia.extrairHipoteses({ perfil: comExtras, texto: limpo, abertas, dia });
+    const novas = (await ia.extrairHipoteses({ perfil: comExtras, texto: limpo, abertas, dia })).filter((h) => !semConfidencias(String(h?.texto || ''), app.confidencias).removidas.length);
     // o que a pessoa descartou pelo app não volta com o mesmo texto (fase 3 do app)
     const descartadas = await colecao('hipoteses').find({ jid: { $in: perfil.jids || [] }, status: 'descartada' }).project({ texto: 1 }).toArray().catch(() => []);
     abertas = fundirHipoteses(abertas, novas, dia, descartadas.map((h) => h.texto));
