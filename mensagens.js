@@ -41,6 +41,7 @@ import { notaDeAtraso, atrasoEmMinutos, ATRASO_DESCULPAS_MIN, RESGATE_IDADE_MAX_
 import { comandoApp } from './api-auth.js';
 import { blocoApp, somarDias } from './api-escrita.js';
 import { humorDe, eventosDe } from './mongo.js';
+import { registrarAdiamento, detectarAdiamento } from './cobranca.js';
 import { blocoAppConversa, perguntasRecentes, moduloDePerguntas, confidenciasDe, semConfidencias, protegerFerramentas } from './contexto-app.js';
 
 /**
@@ -968,6 +969,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   let incertezaIA = null; // linha INCERTEZA da análise de foto (alta|media|baixa): vai pro registro
   let perguntaIA = null; // linha PERGUNTA: a bot pediu um dado (uma por refeição)
   let atividadeRelato = null; // linha ATIVIDADE: relato de atividade fixa feita/não feita fora do horário
+  let adiarLinha = null; // linha ADIAR: a refeição vai atrasar (a cobrança espera)
   let notaLida = null; // linha NOTA: a foto era um cupom de mercado (itens pra despensa)
   let despensaLinha = null; // linha DESPENSA: baixas/entradas na despensa
   try {
@@ -984,7 +986,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
         console.warn('[ferramentas] conversa falhou; caminho normal:', e.message);
       }
     }
-    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto, reacao, atividade: atividadeRelato, nota: notaLida, despensa: despensaLinha, incerteza: incertezaIA, pergunta: perguntaIA } = r1 || (await ia.responder({ ...base, conhecimento, leve: !motivo })));
+    ({ texto: resposta, atualizacao, habito, audio: querAudio, registro, refeicao, produto, reacao, atividade: atividadeRelato, nota: notaLida, despensa: despensaLinha, incerteza: incertezaIA, pergunta: perguntaIA, adiar: adiarLinha } = r1 || (await ia.responder({ ...base, conhecimento, leve: !motivo })));
   } catch (e) {
     // Gemini (todos) e reservas fora do ar: avisa em vez de ficar muda
     console.error('[ia] falha total:', e.message);
@@ -1227,6 +1229,17 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     }
     // reação com emoji na mensagem da pessoa (linha REAGIR da IA): prato nota 10, piada boa, conquista
     if (reacao && !contestacao) reagir(jidGrupo, msg.key, reacao).catch(() => {});
+    // atraso avisado ("almoço vai demorar 1h30"): a linha ADIAR da IA, ou a frase lida em código quando o modelo esquece a linha
+    const tAdiar = marcaDeTempo(eu);
+    const adiarFinal = adiarLinha || detectarAdiamento(texto, minutosDe(tAdiar.horaLocal));
+    if (adiarFinal) {
+      const t = tAdiar;
+      const a = registrarAdiamento(estado.memoria, { nome: eu.nome, refeicao: adiarFinal.refeicao, ate: adiarFinal.ate, dia: t.dia, agoraMin: minutosDe(t.horaLocal) });
+      if (a) {
+        persistirMemoria(estado.memoria).catch(() => {});
+        console.log(`[cobranca] ${perfil.nome}: ${a.slot} adiado até ${hhmmDe(a.ateMin)} (avisou na conversa)`);
+      }
+    }
     if (atividadeRelato) {
       const nota = await registrarRelato(eu, atividadeRelato, dia).catch((e) => (console.error('[atividades] relato:', e.message), null));
       if (nota) console.log(`[atividades] relato de ${perfil.nome}: ${nota}`);

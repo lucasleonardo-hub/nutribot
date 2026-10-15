@@ -458,3 +458,14 @@ export function parseJsonTolerante(texto) {
   }
   return null;
 }
+
+/**
+ * Puro. Vetor por hora (24) que é só o total do dia dividido igual entre as horas: o Samsung Health grava passos e
+ * calorias no Health Connect como UM registro do dia inteiro, e a agregação por hora do Health Connect rateia esse total
+ * (15/10: 409 passos em cada uma das 24 horas). Isso não é dado por hora e não pode virar gráfico nem "hora de pico".
+ */
+export function vetorRateado(v) {
+  if (!Array.isArray(v)) return false;
+  const pos = v.map(Number).filter((x) => Number.isFinite(x) && x > 0);
+  return pos.length >= 6 && Math.max(...pos) - Math.min(...pos) <= 1;
+}

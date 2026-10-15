@@ -39,7 +39,7 @@ function envioNovo() {
     hrv: 44.6,
   };
   e.sonos[1] = { ...e.sonos[1], fcMedia: 70, etapas: [{ i: '2030-03-29T17:00:00Z', f: '2030-03-29T17:30:00Z', t: 'leve' }] }; // cochilo: não manda
-  e.dias[0] = { ...e.dias[0], porHora: { passos: vinteQuatro((h) => (h === 18 ? 2500 : 200)), kcal: vinteQuatro(() => 104.2) }, minAtivos: 47 };
+  e.dias[0] = { ...e.dias[0], porHora: { passos: vinteQuatro((h) => (h === 18 ? 2500 : 200)), kcal: vinteQuatro((h) => 104.2 + h) }, minAtivos: 47 };
   e.dias.push({ dia: '2030-03-10', passos: 6000, calorias: 2300 }); // dia antigo: o coletor manda sem porHora
   return e;
 }
@@ -80,8 +80,8 @@ test('fase 6 validações: bpm 30–150, VFC 1–300 ms, minutos 0–1440, vetor
   assert.equal('porHora' in d.atividades[0], false);
   assert.equal('minAtivos' in d.atividades[0], false);
   // um vetor válido e outro não: só o válido fica
-  e.dias[0].porHora = { passos: vinteQuatro(() => 10), kcal: null };
-  assert.deepEqual(normalizarEnvio(e, FUSO).atividades[0].porHora, { passos: vinteQuatro(() => 10), kcal: null });
+  e.dias[0].porHora = { passos: vinteQuatro((h) => 10 + h), kcal: null };
+  assert.deepEqual(normalizarEnvio(e, FUSO).atividades[0].porHora, { passos: vinteQuatro((h) => 10 + h), kcal: null });
   assert.equal(vetor24(vinteQuatro(() => null)), null);
   assert.equal(vetor24(vinteQuatro(() => '7')).every((x) => x === 7), true);
   assert.equal(vetor24('abc'), null);
@@ -245,4 +245,13 @@ test('fase 7 fundir: o envio sem os campos novos (permissão tirada, outro apare
   const h = fundir(guardado, normalizarEnvio(novo, FUSO), '2030-03-29');
   assert.equal(h.atividades.find((x) => x.dia === '2030-03-29').kcalAtivas, 700);
   assert.equal(h.sonos.find((x) => x.dia === '2030-03-29').spo2.media, 97);
+});
+
+test('por hora rateado (registro do dia inteiro do Samsung Health dividido igual por 24) não vira dado por hora', async () => {
+  const { vetorRateado } = await import('../util.js');
+  assert.equal(vetorRateado(Array(24).fill(409)), true);
+  assert.equal(vetorRateado([...Array(23).fill(279), 280]), true);
+  assert.equal(vetorRateado([0, 0, 0, 0, 0, 0, 120, 800, 300, 50, 900, 40, 600, 20, 10, 700, 300, 0, 2000, 100, 50, 0, 0, 0]), false);
+  assert.equal(vetorRateado([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 500]), false, 'uma hora só não é rateio');
+  assert.equal(vetorRateado(null), false);
 });

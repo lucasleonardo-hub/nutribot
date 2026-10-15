@@ -418,7 +418,7 @@ export function concordarVocativos(texto, { genero, outrosNomes = [] } = {}) {
     .join('\n');
 }
 
-const RE_LINHA_OCULTA = /^\s*(REFEICAO|ATUALIZAR|HABITO|REGISTRO|AUDIO|REAGIR|NOTA|DESPENSA|ATIVIDADE|PESQUISAR|PRODUTO)\s*:.*$/gim;
+const RE_LINHA_OCULTA = /^\s*(REFEICAO|ATUALIZAR|HABITO|REGISTRO|AUDIO|REAGIR|NOTA|DESPENSA|ATIVIDADE|ADIAR|PESQUISAR|PRODUTO)\s*:.*$/gim;
 /** Cobrança pronta pra sair: sem linha técnica, sem bordão de chegada, gíria e vocativo conferidos. */
 export function prepararCobranca(texto, { genero, outrosNomes = [], persona = '' } = {}) {
   const limpo = String(texto || '').replace(RE_LINHA_OCULTA, '').replace(/\n{3,}/g, '\n\n').trim();

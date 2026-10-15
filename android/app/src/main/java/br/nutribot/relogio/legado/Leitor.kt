@@ -86,6 +86,48 @@ object Leitor {
         return opcional { permissoesOpcionais(context) - concedidas(context) } ?: emptySet()
     }
 
+    /** Um dado do relógio na conferência da tela Integrações. `registros` null = sem permissão ou a leitura falhou. */
+    data class Diagnostico(val nome: String, val permissao: Boolean, val registros: Int?)
+
+    /**
+     * "Conferir dados do relógio" (15/10: a VFC, o oxigênio e a temperatura não chegavam e não dava pra saber por quê): por
+     * dado, se a permissão foi dada e quantos registros o Health Connect tem nos últimos 7 dias. Permissão dada com zero
+     * registros = o app do relógio (Samsung Health) não grava esse dado no Health Connect; nada no NutriBot muda isso.
+     */
+    suspend fun diagnostico(context: Context): List<Diagnostico> {
+        if (!disponivel(context)) return emptyList()
+        val client = HealthConnectClient.getOrCreate(context)
+        val dadas = opcional { client.permissionController.getGrantedPermissions() } ?: emptySet()
+        val agora = Instant.now()
+        val faixa = TimeRangeFilter.between(agora.minus(Duration.ofDays(7)), agora)
+        val out = ArrayList<Diagnostico>()
+        suspend fun <T : Record> conta(nome: String, tipo: KClass<T>) {
+            val perm = HealthPermission.getReadPermission(tipo) in dadas
+            val n = if (!perm) null else try {
+                client.readRecords(ReadRecordsRequest(tipo, faixa, pageSize = 1000)).records.size
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            out.add(Diagnostico(nome, perm, n))
+        }
+        conta("Sono (fases)", SleepSessionRecord::class)
+        conta("Frequência cardíaca", HeartRateRecord::class)
+        conta("VFC (variabilidade cardíaca)", HeartRateVariabilityRmssdRecord::class)
+        conta("FC em repouso", RestingHeartRateRecord::class)
+        conta("Oxigênio no sangue", OxygenSaturationRecord::class)
+        if (temTemperatura(context)) conta("Temperatura da pele", SkinTemperatureRecord::class)
+        conta("Passos", StepsRecord::class)
+        conta("Distância", DistanceRecord::class)
+        conta("Calorias totais", TotalCaloriesBurnedRecord::class)
+        conta("Calorias ativas", ActiveCaloriesBurnedRecord::class)
+        conta("Exercícios", ExerciseSessionRecord::class)
+        conta("Peso", WeightRecord::class)
+        conta("Gordura corporal", BodyFatRecord::class)
+        return out
+    }
+
     /** Máximo de etapas por sessão de sono no envio (o contrato da fase 6 fixa 200). */
     private const val MAX_ETAPAS = 200
 

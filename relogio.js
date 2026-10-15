@@ -6,7 +6,7 @@
 
 import { colecao, listarPerfis, salvarPerfil } from './mongo.js';
 import { aplicarDadosSaude } from './saude.js';
-import { fusoDe, fusoValido, decidirFuso, marcaDeTempo } from './util.js';
+import { fusoDe, fusoValido, decidirFuso, marcaDeTempo, vetorRateado } from './util.js';
 import { fusoDasCoordenadas } from './clima.js';
 import { preferirPesagem } from './progresso.js';
 import { receberLocais, descreverSituacao } from './lugares.js';
@@ -208,9 +208,11 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
     if (n(d.fcRepouso) && n(d.fcRepouso) >= 30 && n(d.fcRepouso) <= 120) a.fcRepouso = Math.round(n(d.fcRepouso));
     if (n(d.hrv) && n(d.hrv) > 0) a.hrv = Math.round(n(d.hrv));
     // fase 6: passos e calorias por hora (só os últimos 14 dias vêm com isso) e minutos ativos
-    const porHora = { passos: vetor24(d.porHora?.passos, MAX_POR_HORA.passos), kcal: vetor24(d.porHora?.kcal, MAX_POR_HORA.kcal) };
+    // rateio do total do dia (registro único do Samsung Health) não é dado por hora: não guarda
+    const real = (x) => (x && !vetorRateado(x) ? x : null);
+    const porHora = { passos: real(vetor24(d.porHora?.passos, MAX_POR_HORA.passos)), kcal: real(vetor24(d.porHora?.kcal, MAX_POR_HORA.kcal)) };
     // fase 7: calorias ativas por hora (ActiveCaloriesBurnedRecord); a chave só existe quando veio válida
-    const ativasHora = vetor24(d.porHora?.kcalAtivas, MAX_POR_HORA.kcalAtivas);
+    const ativasHora = real(vetor24(d.porHora?.kcalAtivas, MAX_POR_HORA.kcalAtivas));
     if (ativasHora) porHora.kcalAtivas = ativasHora;
     if (porHora.passos || porHora.kcal || porHora.kcalAtivas) a.porHora = porHora;
     const minAtivos = naFaixa(d.minAtivos, 0, 1440);

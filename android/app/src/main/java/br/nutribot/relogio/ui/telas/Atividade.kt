@@ -158,7 +158,7 @@ private fun ConteudoAtividade(j: JSONObject, dia: LocalDate, horaAtual: Int?, ao
         Cartao(forma = Formas.Cartao, atraso = 40) {
             if (passosHora == null && kcalHora == null && ativasHora == null) {
                 Text("Por hora", style = MaterialTheme.typography.titleMedium)
-                Text("sem dados por hora neste dia", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                Text("Sem dados por hora neste dia: o relógio mandou só o total do dia.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     passosHora?.let { BarrasHora("Passos", it, CoresAtividade.Passos, "passos", j.str("picoHora")) }

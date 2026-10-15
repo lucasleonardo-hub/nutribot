@@ -121,6 +121,7 @@ private fun diaDaPergunta(dia: String): String = Formato.dia(dia)?.let { Formato
 internal fun AvisoAtividade(vm: AppVM, perfilId: String, p: FixaProxima, mostrarDia: Boolean, modifier: Modifier = Modifier) {
     val escopo = rememberCoroutineScope()
     var marcado by remember(p.dia, p.id, p.aviso) { mutableStateOf(p.aviso) }
+    var mudando by remember(p.dia, p.id) { mutableStateOf(false) }
     var enviando by remember { mutableStateOf(false) }
     var erro by remember { mutableStateOf<String?>(null) }
 
@@ -132,6 +133,7 @@ internal fun AvisoAtividade(vm: AppVM, perfilId: String, p: FixaProxima, mostrar
             try {
                 vm.escrever("POST", RotasDespensa.avisoAtividade(perfilId, p.id), CorposDespensa.aviso(p.dia, v))
                 marcado = v
+                mudando = false
                 vm.invalidar(perfilId) // o gasto previsto e a faixa do Hoje mudam
             } catch (e: ErroApi) {
                 erro = if (e.semConexao) "Sem resposta do servidor. Tente de novo." else e.paraPessoa
@@ -153,10 +155,23 @@ internal fun AvisoAtividade(vm: AppVM, perfilId: String, p: FixaProxima, mostrar
             }
             if (p.registrada) {
                 if (p.feita == true) Pilula("teve", Cores.BomFundo, Cores.BomTinta) else Pilula("não teve", Cores.Lavanda, Cores.Tinta2)
+            } else if (marcado != null && !mudando) {
+                // marcado: vira um selo (o toque de novo desfazia sem querer, 15/10); "mudar" abre as opções
+                if (marcado == "vai") Pilula("vai ter", Cores.BomFundo, Cores.BomTinta) else Pilula("não vai ter", Cores.Lavanda, Cores.Tinta2)
+                Text(
+                    "mudar", style = MaterialTheme.typography.labelMedium, color = Cores.LilasTexto,
+                    modifier = Modifier.clip(Formas.Pilula).clickable(role = Role.Button, onClickLabel = "Mudar o aviso de ${p.nome}") { mudando = true }.padding(horizontal = 10.dp, vertical = 14.dp),
+                )
             } else {
-                Chip(if (enviando && marcado != "vai") "…" else "Vai", marcado == "vai", papel = Role.Checkbox) { marcar(if (marcado == "vai") null else "vai") }
-                Chip("Não vai", marcado == "nao", papel = Role.Checkbox) { marcar(if (marcado == "nao") null else "nao") }
+                Chip(if (enviando) "…" else "Vai", marcado == "vai", papel = Role.RadioButton) { if (marcado == "vai") mudando = false else marcar("vai") }
+                Chip("Não vai", marcado == "nao", papel = Role.RadioButton) { if (marcado == "nao") mudando = false else marcar("nao") }
             }
+        }
+        if (mudando && marcado != null) {
+            Text(
+                "tirar o aviso", style = MaterialTheme.typography.labelMedium, color = Cores.Tinta3,
+                modifier = Modifier.clip(Formas.Pilula).clickable(role = Role.Button) { marcar(null) }.padding(vertical = 8.dp),
+            )
         }
         erro?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Cores.CuidadoTinta, modifier = Modifier.padding(top = 4.dp)) }
     }

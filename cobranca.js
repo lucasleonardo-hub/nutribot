@@ -31,6 +31,73 @@ export function contextoDaCobranca({ perfil, dia, eventos = [], humor = null } =
   return partes.join('\n');
 }
 
+// ---------- adiamento avisado na conversa ("vou almoçar mais tarde", "almoço vai demorar 1h30"; pedido do dono em 15/10) ----------
+/** Folga depois da hora que a pessoa disse, antes de cobrar. */
+export const FOLGA_ADIAMENTO_MIN = 30;
+/** Sem hora dita ("vou almoçar mais tarde"): segura por este tanto a partir do aviso. */
+export const ADIAMENTO_PADRAO_MIN = 120;
+
+/** Puro. O slot cobrado a partir do nome que a IA mandou ("almoço", "janta", "café da manhã"); null se não for cobrado. */
+export function slotDoNome(nome) {
+  const t = String(nome || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '');
+  if (/almoc/.test(t)) return 'almoco';
+  if (/jant|janta/.test(t)) return 'jantar';
+  if (/cafe|desjejum/.test(t)) return 'cafe';
+  return null;
+}
+
+/**
+ * Puro. Grava o adiamento em `memoria.adiamentos` (a memória do dia: vira a página à meia-noite) e devolve { slot, dia,
+ * ateMin } ou null. `ate` "HH:MM" no horário da pessoa; sem ela (ou inválida), `agoraMin` + 2 h. Hora antes de agora vale
+ * como dita errado: usa o padrão.
+ */
+export function registrarAdiamento(memoria, { nome, refeicao, ate, dia, agoraMin }) {
+  const slot = slotDoNome(refeicao);
+  if (!slot || !nome || !dia || !Number.isFinite(agoraMin)) return null;
+  const dita = /^\d{1,2}:\d{2}$/.test(String(ate || '')) ? minutosDe(ate) : null;
+  const ateMin = dita != null && dita > agoraMin && dita < 24 * 60 ? dita : agoraMin + ADIAMENTO_PADRAO_MIN;
+  memoria.adiamentos ||= {};
+  memoria.adiamentos[`${nome}:${slot}`] = { dia, ateMin };
+  // a pessoa avisou de novo depois de já ter sido cobrada: a próxima cobrança volta a valer depois da hora nova
+  if (memoria.cobrancas) delete memoria.cobrancas[`${nome}:${slot}`];
+  return { slot, dia, ateMin };
+}
+
+const PISTA_ATRASO = /(vai demorar|vai atrasar|demorar (ainda|mais|um pouco)|mais tarde|atrasad[oa]|ainda n[aã]o (almocei|jantei|tomei caf[eé])|vou (almo[cç]ar|jantar|comer|tomar caf[eé])\s+(s[oó]\s+)?(depois|mais tarde|l[aá] pel[ao]s|[àa]s|perto d[ae]s?)|s[oó] vou (almo[cç]ar|jantar|comer)|(almo[cç]o|janta|jantar)\s+(s[oó]\s+)?(vai ser|fica|sai)\s+(depois|mais tarde|l[aá] pel[ao]s|[àa]s|perto d[ae]s?|daqui))/i;
+
+/**
+ * Puro. Rede de segurança da linha ADIAR, em código: frase da pessoa que diz que o almoço, o jantar ou o café vão atrasar
+ * ("meu almoço vai demorar ainda 1h30", "vou almoçar mais tarde", "janto lá pelas 21h"). Devolve { refeicao, ate } (ate
+ * "HH:MM" ou null) ou null. `agoraMin` = minutos do dia no horário da pessoa.
+ */
+export function detectarAdiamento(texto, agoraMin) {
+  const t = String(texto || '').toLowerCase();
+  if (!t || !PISTA_ATRASO.test(t)) return null;
+  const refeicao = /almo[cç]/.test(t) ? 'almoço' : /jant/.test(t) ? 'jantar' : /caf[eé] da manh[aã]|tomar caf[eé]|tomei caf[eé]/.test(t) ? 'café da manhã' : null;
+  if (!refeicao || !Number.isFinite(agoraMin)) return null;
+  let ateMin = null;
+  const h = t.match(/(\d{1,2})\s*h(?:oras?|rs?)?\s*(?:e\s*)?(\d{1,2})?(?:\s*min)?/);
+  const so = t.match(/(\d{1,3})\s*min/);
+  const relogio = t.match(/(?:[àa]s|pel[ao]s|perto d[ae]s?)\s*(\d{1,2})(?:[:h](\d{2})|h)?(?!\d)/);
+  if (/meia hora/.test(t)) ateMin = agoraMin + 30;
+  else if (/uma hora e meia/.test(t)) ateMin = agoraMin + 90;
+  else if (/uma hora/.test(t)) ateMin = agoraMin + 60;
+  else if (relogio) ateMin = Number(relogio[1]) * 60 + Number(relogio[2] || 0);
+  else if (h && Number(h[1]) <= 5) ateMin = agoraMin + Number(h[1]) * 60 + Number(h[2] || 0);
+  else if (so) ateMin = agoraMin + Number(so[1]);
+  const ate = ateMin != null && ateMin > agoraMin && ateMin < 24 * 60 ? hhmmDe(ateMin) : null;
+  return { refeicao, ate };
+}
+
+/** Puro. Até quando (minutos do dia) a refeição está adiada hoje, ou null. */
+export function adiadoAte(memoria, nome, slot, dia) {
+  const a = memoria?.adiamentos?.[`${nome}:${slot}`];
+  return a && a.dia === dia && Number.isFinite(a.ateMin) ? a.ateMin : null;
+}
+
 export const ATRASO_COBRANCA_MIN = Number(process.env.ATRASO_COBRANCA_MIN) || 75; // minutos depois do horário habitual
 export const JANELA_COBRANCA_MIN = Number(process.env.JANELA_COBRANCA_MIN) || 120; // depois disso não cobra mais (fica pro resumo do dia)
 
@@ -65,7 +132,9 @@ export async function verificarCobrancas() {
       }
       const h = p._hab[s.id];
       if (!h.aprendido) return false; // só cobra horário que ela JÁ aprendeu (3+ refeições registradas nesse slot)
-      const limite = h.minutos + ATRASO_COBRANCA_MIN;
+      // avisou que vai atrasar: o limite passa a ser a hora dita + folga (a janela de cobrança anda junto)
+      const adiado = adiadoAte(estado.memoria, p.nome, s.id, diaP);
+      const limite = Math.max(h.minutos + ATRASO_COBRANCA_MIN, adiado != null ? adiado + FOLGA_ADIAMENTO_MIN : 0);
       if (agoraMin < limite || agoraMin > limite + JANELA_COBRANCA_MIN) return false; // passou da janela: fica pro resumo do dia
       const jaMandou = hoje.some((r) => r.dia === diaP && r.slot === s.id && p.jids.includes(r.jid));
       return !jaMandou && !estado.memoria.cobrancas[`${p.nome}:${s.id}`];

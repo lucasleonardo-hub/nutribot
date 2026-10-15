@@ -300,6 +300,12 @@ export const CENARIOS = [
     refeicao: (r) => Boolean(r && r.kcal > 500 && r.kcal < 1300 && /almo/i.test(r.tipo || '')),
   },
   {
+    // 15/10: "meu almoço vai demorar ainda 1h30" às 13:04 e a cobrança saiu às 14:10 mesmo assim
+    id: 'C48', categoria: 'linha oculta', titulo: 'aviso de almoço atrasado traz a linha ADIAR com a hora prevista', quem: 'lucas', hora: '13:04',
+    texto: 'meu almoço vai demorar ainda 1h30 pra ficar pronto, acha válido eu tomar um hipercalórico ou comer um pão com frango?',
+    adiar: (a) => Boolean(a && /almo/i.test(a.refeicao || '') && /^14:(2\d|3\d|4\d)$/.test(String(a.ate || ''))),
+  },
+  {
     id: 'C47', categoria: 'incerteza', titulo: 'quantidade invisível pede UMA pergunta e marca incerteza', quem: 'ale', hora: '08:40',
     texto: 'café da manhã: pão com queijo e café',
     perguntaOuIncerteza: true,

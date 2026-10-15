@@ -284,7 +284,7 @@ export async function fecharDia({ forcado = false, diaAlvo } = {}) {
           console.warn('[persona] reescrita descartada: perdeu mais de 60% do conteúdo');
         } else if (nova?.trim()) {
           // linha oculta de conversa (ATUALIZAR {...}, NOTA, DESPENSA...) não é memória: o modelo às vezes copia o hábito pra cá
-          estado.persona = nova.replace(/^[ \t]*(ATUALIZAR|NOTA|DESPENSA|ATIVIDADE|PESQUISAR|PRODUTO)[ \t]*:.*$/gim, '').replace(/\n{3,}/g, '\n\n').trim();
+          estado.persona = nova.replace(/^[ \t]*(ATUALIZAR|NOTA|DESPENSA|ATIVIDADE|ADIAR|PESQUISAR|PRODUTO)[ \t]*:.*$/gim, '').replace(/\n{3,}/g, '\n\n').trim();
           await salvarPersona(estado.persona, dia);
           await salvarMarkdown(
             'Perfis',

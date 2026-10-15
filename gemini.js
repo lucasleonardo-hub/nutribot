@@ -119,6 +119,7 @@ VOCÊ É GENTE DO GRUPO (não um serviço):
 - ETAPAS E RITMO: quem quer "ganhar o máximo que der, sem teto" tem meta_modo etapa: a meta de peso é um degrau que você sobe quando bater (o sistema propõe a próxima etapa no domingo), e o ritmo alvo é o teto saudável (0,5% do peso por semana no ganho), com freio automático se a gordura corporal da bioimpedância subir rápido. A faixa de calorias do dia já vem calculada com isso ("Ritmo alvo" e META ADAPTATIVA no acompanhamento; quando ela diz "calibrada pela balança", é a meta em calorias registradas e o saldo "pelo relógio" é só dado): não invente outra. Ganho mais rápido que o teto saudável vira gordura, e você diz isso quando a tendência passar dele.
 - GÊNERO E CONCORDÂNCIA: cada perfil traz o gênero da pessoa. Vale pra TODO vocativo da mensagem: quem recebe a resposta define o gênero ("amada", "querida", "menina", "guerreira" só pra mulher; pra homem "amado", "querido", "menino", "guerreiro"); antes de enviar, releia os vocativos. Adjetivos, apelidos e gírias concordam com ele: pra homem "divo", "meu rei", "menino", "passado", "amigo"; pra mulher "diva", "rainha", "menina", "passada", "amiga"; "outro" ou desconhecido = forma neutra ("criatura", "gente", o nome). Apelido que você criou segue a mesma regra: nada de "diva" pra homem. Se o gênero não estiver no perfil, deduza pelo nome só pra concordância e pergunte quando couber (via ATUALIZAR genero).
 - ATIVIDADES FIXAS: o bloco "ATIVIDADES FIXAS" lista esporte sem relógio (vôlei, futebol) com dia, horário e gasto estimado por MET. O sistema confere pela localização e SOMA o gasto no dia sozinho quando confirma; você não soma por conta própria nem assume que houve. Se estiver "em dúvida", a pessoa responde "teve"/"não teve" e o sistema anota. Use pra contexto: dia de vôlei à noite pede lanche antes e proteína depois; se não houve, o gasto do dia é menor.
+- LINHA OCULTA ADIAR: quando a pessoa avisar que uma refeição vai ATRASAR ou ficar pra mais tarde ("vou almoçar mais tarde", "meu almoço vai demorar 1h30", "hoje janto lá pelas 21h", "ainda não jantei, vou comer depois do vôlei"), acrescente no fim a linha ADIAR: {"refeicao": "almoço", "ate": "HH:MM"} com a refeição (café da manhã, almoço, lanche ou jantar) e a hora prevista no horário DELA, calculada a partir da hora da mensagem ("1h30" dita às 13:04 = "14:34"); sem hora dita, mande sem "ate". O sistema segura a cobrança dessa refeição até lá; você não precisa prometer nada sobre isso.
 - LINHA OCULTA ATIVIDADE: quando a pessoa contar que FEZ uma atividade fixa fora do horário cadastrado, ou que NÃO teve ("adiantei o vôlei pras 18h", "hoje não rolou vôlei", "joguei areia ontem das 17h às 19h"), acrescente no fim a linha ATIVIDADE: {"nome": "vôlei de quadra", "feita": true, "inicio": "18:00", "fim": "20:00", "dia": "AAAA-MM-DD"} (inicio/fim/dia só se ela disse; feita false quando não houve). Vale também para AVISO ANTES de um dia que ainda vem ("quinta não vai ter vôlei", "amanhã tem vôlei sim"): mesma linha com o "dia" daquele dia e feita true (vai ter) ou false (não vai). O sistema ajusta o gasto do dia; você não soma calorias por conta própria. Não use pra treino de academia (esse vem do relógio/Hevy).
 - DESPENSA (o que tem em casa): o bloco "DESPENSA" lista o que a pessoa tem em casa pelas notas de mercado. Use pra sugerir refeição com o que HÁ ("você tem frango e brócolis vencendo, hoje é dia disso"), pra lembrar o que vence, e como âncora quando ela comer um item dali (a tabela nutricional por 100 g está entre colchetes). Não invente item que não está no bloco. Baixas pela linha oculta no FIM da resposta: DESPENSA: [{"item": "iogurte grego", "acao": "acabou"}] com acao em usei (com "qtd" quando souber: ovos, iogurtes, frutas), acabou, acabando, comprei (com qtd/unidade) ou tem (ela confirmou que ainda tem). Emita quando: a refeição registrada usou itens da despensa (usei), ela disser que algo acabou/está acabando/comprou, ou responder a uma pergunta sua de validade. Granel (arroz, azeite) só muda de estado, nunca por grama.
 - CUPOM DE MERCADO: se a foto for um cupom fiscal / nota de compras (lista de itens com preços, não comida), NÃO analise como refeição. Responda curto no personagem ("peguei tua compra") e acrescente no FIM a linha NOTA: {"loja": "nome", "data": "AAAA-MM-DD", "itens": [{"descricao": "como impresso", "qtd": 1, "unidade": "un", "valorTotal": 12.9, "codigo": "ean se houver"}]} com TODOS os itens legíveis. Sem bloco de estimativa, sem linha REFEICAO.
@@ -909,10 +910,22 @@ export function separarAtualizacao(resposta) {
     }
     texto = `${texto.slice(0, dp.index)}\n${texto.slice(dp.index + dp[0].length)}`.trim();
   }
+  // linha oculta ADIAR: {"refeicao": "almoço", "ate": "14:35"} -> a pessoa avisou que a refeição vai atrasar (a cobrança espera)
+  let adiar = null;
+  const ad = texto.match(/\n?\s*ADIAR:\s*(\{[^\n]*\})\s*/i);
+  if (ad) {
+    try {
+      const j = JSON.parse(ad[1]);
+      if (j && typeof j === 'object' && j.refeicao) adiar = j;
+    } catch {
+      adiar = null;
+    }
+    texto = `${texto.slice(0, ad.index)}\n${texto.slice(ad.index + ad[0].length)}`.trim();
+  }
   // SILENCIO (ou nada sobrando depois das linhas ocultas) vira null SÓ AQUI, depois de todas as extrações: antes disso o
   // null quebrava o `.match` da ATIVIDADE e uma resposta "SILENCIO" derrubava a chamada inteira (visto na avaliação C26b)
   if (!texto || /^silencio\W*$/i.test(texto)) texto = null;
-  return { texto, incerteza, pergunta, atualizacao, habito, audio, registro, refeicao, produto, reacao, atividade, nota, despensa };
+  return { texto, incerteza, pergunta, atualizacao, habito, audio, registro, refeicao, produto, reacao, atividade, nota, despensa, adiar };
 }
 
 // ============================================================
@@ -1440,7 +1453,7 @@ export async function cobrarRefeicao({ perfil, slot, horaAgora, horaHabitual, co
       blocoConhecimento(conhecimento) +
       blocoDossie(perfil.nome, dossie) +
       (contexto ? `${contexto}\n(Use pra acertar o tom; não leia números em voz alta. Oxigênio e temperatura, se aparecerem no dossiê, nunca entram numa cobrança.)\n\n` : '') +
-      `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem (simpática, com humor leve): pergunte onde está a refeição (foto ou descrição), lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já falou algo hoje que explique o sumiço, acolha em vez de cobrar. Curta e direta, 1 ou 2 emojis. A pessoa NÃO apareceu: nada de bordão de chegada ("Apareceu a ..."); apelido no máximo uma vez. Só o texto da mensagem, NENHUMA linha técnica (REFEICAO, ATUALIZAR, HABITO, REGISTRO). Não use "SILENCIO".`,
+      `Mande UMA mensagem no grupo cobrando ${perfil.nome} no seu personagem (simpática, com humor leve): pergunte onde está a refeição (foto ou descrição), lembre do objetivo (${perfil.objetivo}) e do que costuma acontecer quando a pessoa pula refeição. Se a pessoa já disse hoje na conversa que ESSA refeição ia atrasar ("almoço vai demorar 1h30", "vou jantar mais tarde") e a hora que ela disse ainda não passou (some o tempo dito à hora da mensagem dela), responda só SILENCIO: cobrar agora é desrespeitar o aviso. Se falou algo hoje que explique o sumiço, acolha em vez de cobrar. Curta e direta, 1 ou 2 emojis. A pessoa NÃO apareceu: nada de bordão de chegada ("Apareceu a ..."); apelido no máximo uma vez. Só o texto da mensagem, NENHUMA linha técnica (REFEICAO, ATUALIZAR, HABITO, REGISTRO). Fora do caso do aviso de atraso, não use "SILENCIO".`,
     config: { systemInstruction: montarSystem(persona, { documento: true }), pensar: false, maxOutputTokens: 400, leve: true },
   });
 }

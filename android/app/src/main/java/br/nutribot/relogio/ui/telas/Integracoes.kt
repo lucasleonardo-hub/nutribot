@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -192,6 +195,9 @@ fun TelaIntegracoes(vm: AppVM, legado: Legado, voltar: () -> Unit) {
 
     // Fase 7: as permissões opcionais (distância, calorias ativas, oxigênio e, se o aparelho tiver, temperatura da pele).
     // O botão só aparece quando falta alguma; confere de novo ao voltar para a tela (a pessoa pode mudar no Health Connect).
+    var diagnostico by remember { mutableStateOf<List<Leitor.Diagnostico>?>(null) }
+    var conferindo by remember { mutableStateOf(false) }
+    val escopoDiag = rememberCoroutineScope()
     var faltamNovas by remember { mutableStateOf<Set<String>>(emptySet()) }
     var conferir by remember { mutableStateOf(0) }
     LifecycleResumeEffect(Unit) {
@@ -265,6 +271,37 @@ fun TelaIntegracoes(vm: AppVM, legado: Legado, voltar: () -> Unit) {
                                 ". Sem isso, o resto continua indo.",
                             style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3,
                         )
+                    }
+                    // 15/10: VFC, oxigênio e temperatura não chegavam; isto mostra se é permissão ou o app do relógio que não grava
+                    Botao(if (conferindo) "Conferindo…" else "Conferir dados do relógio", Modifier.fillMaxWidth(), suave = true, habilitado = !conferindo) {
+                        escopoDiag.launch {
+                            conferindo = true
+                            diagnostico = runCatching { withContext(Dispatchers.IO) { Leitor.diagnostico(ctx) } }.getOrElse { emptyList() }
+                            conferindo = false
+                        }
+                    }
+                    diagnostico?.let { lista ->
+                        if (lista.isEmpty()) Text("Não deu pra ler o Health Connect agora.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3)
+                        lista.forEach { d ->
+                            val (texto, fundo, tinta) = when {
+                                !d.permissao -> Triple("sem permissão", Cores.AtencaoFundo, Cores.AtencaoTinta)
+                                d.registros == null -> Triple("não deu pra ler", Cores.Lavanda, Cores.Tinta3)
+                                d.registros == 0 -> Triple("nada em 7 dias", Cores.Lavanda, Cores.Tinta2)
+                                d.registros >= 1000 -> Triple("1000+ em 7 dias", Color(0xFFDDF5E8), Cores.BomTinta)
+                                else -> Triple("${d.registros} em 7 dias", Color(0xFFDDF5E8), Cores.BomTinta)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
+                                Text(d.nome, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                Pilula(texto, fundo, tinta)
+                            }
+                        }
+                        if (lista.any { it.permissao && it.registros == 0 }) {
+                            Text(
+                                "\"Nada em 7 dias\" com a permissão dada quer dizer que o app do relógio (Samsung Health) não grava esse dado no Health Connect. " +
+                                    "No Samsung Health: Configurações → Health Connect → permitir gravar tudo. Alguns dados (como a VFC) o Samsung Health não compartilha.",
+                                style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3,
+                            )
+                        }
                     }
                     Botao(stringResource(R.string.botao_sincronizar), Modifier.fillMaxWidth()) { legado.aoSincronizar() }
                     Botao(stringResource(R.string.botao_bateria), Modifier.fillMaxWidth(), suave = true) { legado.aoBateria() }

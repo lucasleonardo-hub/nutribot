@@ -228,6 +228,7 @@ function checar(cen, { texto, refeicao, usadas, r, analise = null }) {
   if (cen.maxChars && texto.length > cen.maxChars) falhas.push(`${texto.length} chars (máximo ${cen.maxChars})`);
   if (cen.semBlocoRefeicao && TEM_BLOCO.test(texto)) falhas.push('veio bloco de refeição');
   if (cen.refeicao && !cen.refeicao(refeicao || null)) falhas.push(`linha REFEICAO fora do esperado: ${refeicao ? JSON.stringify(refeicao).slice(0, 160) : 'ausente'}`);
+  if (cen.adiar && !cen.adiar(r?.adiar || null)) falhas.push(`linha ADIAR fora do esperado: ${r?.adiar ? JSON.stringify(r.adiar).slice(0, 120) : 'ausente'}`);
   if (cen.usadas) {
     if (cen.usadas.includes('nenhuma')) {
       if (usadas.length) falhas.push(`usou ferramenta sem precisar: ${usadas.join(', ')}`);

@@ -226,3 +226,41 @@ caso('C49', 'acréscimo de item não vira "erro de estimativa"; quantidade, alim
     assert.equal(ehCorrecaoDeEstimativa(t), false, String(t));
   }
 });
+
+test('adiamento: "almoço vai demorar 1h30" vira a linha ADIAR, que segura a cobrança até a hora dita + folga', async () => {
+  const { slotDoNome, registrarAdiamento, adiadoAte, FOLGA_ADIAMENTO_MIN, ADIAMENTO_PADRAO_MIN } = await import('../cobranca.js');
+  const r = separarAtualizacao('Vale forrar o estômago agora!\nADIAR: {"refeicao":"almoço","ate":"14:34"}');
+  assert.equal(r.texto, 'Vale forrar o estômago agora!');
+  assert.deepEqual(r.adiar, { refeicao: 'almoço', ate: '14:34' });
+  assert.equal(C.prepararCobranca('Cadê o almoço?\nADIAR: almoço depois').texto, 'Cadê o almoço?', 'linha técnica não sai na cobrança');
+
+  assert.deepEqual(['Almoço', 'janta', 'café da manhã', 'lanche', ''].map(slotDoNome), ['almoco', 'jantar', 'cafe', null, null]);
+  const mem = { cobrancas: { 'Lucas:almoco': true } };
+  // dito às 13:04 (784 min): "1h30" -> 14:34 (874)
+  assert.deepEqual(registrarAdiamento(mem, { nome: 'Lucas', refeicao: 'almoço', ate: '14:34', dia: '2026-10-15', agoraMin: 784 }), { slot: 'almoco', dia: '2026-10-15', ateMin: 874 });
+  assert.equal(mem.cobrancas['Lucas:almoco'], undefined, 'avisou depois da cobrança: a próxima volta a valer');
+  assert.equal(adiadoAte(mem, 'Lucas', 'almoco', '2026-10-15'), 874);
+  assert.equal(adiadoAte(mem, 'Lucas', 'almoco', '2026-10-16'), null, 'só vale no dia');
+  assert.equal(adiadoAte(mem, 'Ale', 'almoco', '2026-10-15'), null);
+  // sem hora (ou hora que já passou): 2 h a partir do aviso
+  assert.equal(registrarAdiamento(mem, { nome: 'Lucas', refeicao: 'jantar', dia: '2026-10-15', agoraMin: 1140 }).ateMin, 1140 + ADIAMENTO_PADRAO_MIN);
+  assert.equal(registrarAdiamento(mem, { nome: 'Lucas', refeicao: 'jantar', ate: '12:00', dia: '2026-10-15', agoraMin: 1140 }).ateMin, 1140 + ADIAMENTO_PADRAO_MIN);
+  assert.equal(registrarAdiamento(mem, { nome: 'Lucas', refeicao: 'lanche', dia: '2026-10-15', agoraMin: 900 }), null, 'lanche não é cobrado');
+  // o caso de 15/10: habitual 12:55 + 75 = 14:10 cobrava; com o aviso, o limite vira 14:34 + 30 = 15:04
+  assert.equal(Math.max(775 + 75, 874 + FOLGA_ADIAMENTO_MIN), 904);
+});
+
+test('adiamento em código: as frases comuns de atraso viram { refeicao, ate } mesmo sem a linha da IA', async () => {
+  const { detectarAdiamento } = await import('../cobranca.js');
+  const as = (t, agora) => detectarAdiamento(t, agora);
+  // a frase real de 15/10, às 13:04
+  assert.deepEqual(as('meu almoço vai demorar ainda 1h30 pra ficsr pronto, acha válido eu tomar um hipercalorico?', 784), { refeicao: 'almoço', ate: '14:34' });
+  assert.deepEqual(as('vou almoçar mais tarde hoje', 720), { refeicao: 'almoço', ate: null });
+  assert.deepEqual(as('hoje só vou jantar lá pelas 21h', 1100), { refeicao: 'jantar', ate: '21:00' });
+  assert.deepEqual(as('janta vai ser às 21:30', 1100), { refeicao: 'jantar', ate: '21:30' });
+  assert.deepEqual(as('almoço vai atrasar uns 40 min', 760), { refeicao: 'almoço', ate: '13:20' });
+  assert.deepEqual(as('meu almoço vai demorar meia hora', 760), { refeicao: 'almoço', ate: '13:10' });
+  assert.deepEqual(as('ainda não almocei, vou comer depois da reunião', 800), { refeicao: 'almoço', ate: null });
+  // o que NÃO é atraso
+  for (const t of ['almocei arroz e feijão', 'o almoço tava ótimo', 'amanhã cedo eu treino', 'vou jantar agora', '', null]) assert.equal(as(t, 800), null, String(t));
+});

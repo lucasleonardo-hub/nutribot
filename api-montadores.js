@@ -15,7 +15,7 @@ import { energiaDoDia } from './saude.js';
 import { analisarTreinos, grupoEmPortugues } from './treino.js';
 import { progressaoForca, conferirSugestoes, incrementoDeCarga } from './contexto.js';
 import { createHash } from 'node:crypto';
-import { SLOTS, fusoDe, diasAnteriores, diaSeguinte, horariosHabituais, minutosDe, semAcento, hhmmDe, marcaDeTempo } from './util.js';
+import { SLOTS, fusoDe, diasAnteriores, diaSeguinte, horariosHabituais, minutosDe, semAcento, hhmmDe, marcaDeTempo, vetorRateado } from './util.js';
 
 // ---------- números ----------
 const arred = (x, casas = 0) => (x == null || !Number.isFinite(Number(x)) ? null : Math.round(Number(x) * 10 ** casas) / 10 ** casas);
@@ -1233,9 +1233,11 @@ export function montarAtividade({ perfil = {}, saude = null, dia, hoje = dia, ho
   const ativ = (d) => (saude?.atividades || []).find((a) => a?.dia === d) || null;
   const at = ativ(dia);
   const x = numerosAtividade({ at, basal, fracaoDia: fracaoDoDia({ perfil, saude, dia, hoje, horaAgora }) });
-  const porHora = { passos: Array.isArray(at?.porHora?.passos) ? at.porHora.passos.map(int) : null, kcal: Array.isArray(at?.porHora?.kcal) ? at.porHora.kcal.map(int) : null };
+  // o que já está guardado também passa pelo filtro do rateio (total do dia dividido igual por 24 não é dado por hora)
+  const real = (v) => (Array.isArray(v) && !vetorRateado(v) ? v.map(int) : null);
+  const porHora = { passos: real(at?.porHora?.passos), kcal: real(at?.porHora?.kcal) };
   // fase 7: calorias ativas por hora oficiais (a chave só existe quando o relógio mandou)
-  if (Array.isArray(at?.porHora?.kcalAtivas) && at.porHora.kcalAtivas.length === 24) porHora.kcalAtivas = at.porHora.kcalAtivas.map(int);
+  if (Array.isArray(at?.porHora?.kcalAtivas) && at.porHora.kcalAtivas.length === 24 && !vetorRateado(at.porHora.kcalAtivas)) porHora.kcalAtivas = at.porHora.kcalAtivas.map(int);
   let picoHora = null;
   if (porHora.passos) {
     const max = Math.max(...porHora.passos);

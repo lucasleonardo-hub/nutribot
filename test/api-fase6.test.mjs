@@ -129,7 +129,7 @@ function saudeF7() {
   noite.spo2 = { media: 94.6, min: 88, minutosAbaixo90: 4 };
   noite.temperatura = { media: 34.1, delta: -0.62 };
   const hoje = s.atividades.find((x) => x.dia === DIA);
-  Object.assign(hoje, { distanciaM: 4812, kcalAtivas: 430, porHora: { passos: Array(24).fill(300), kcal: Array(24).fill(90), kcalAtivas: Array.from({ length: 24 }, (_, h) => (h === 18 ? 200 : 10)) } });
+  Object.assign(hoje, { distanciaM: 4812, kcalAtivas: 430, porHora: { passos: Array.from({ length: 24 }, (_, h) => 300 + h * 10), kcal: Array.from({ length: 24 }, (_, h) => 90 + h), kcalAtivas: Array.from({ length: 24 }, (_, h) => (h === 18 ? 200 : 10)) } });
   return s;
 }
 
