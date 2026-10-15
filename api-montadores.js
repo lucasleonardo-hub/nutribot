@@ -15,7 +15,7 @@ import { energiaDoDia } from './saude.js';
 import { analisarTreinos, grupoEmPortugues } from './treino.js';
 import { progressaoForca, conferirSugestoes, incrementoDeCarga } from './contexto.js';
 import { createHash } from 'node:crypto';
-import { SLOTS, fusoDe, diasAnteriores, diaSeguinte, horariosHabituais, minutosDe, semAcento } from './util.js';
+import { SLOTS, fusoDe, diasAnteriores, diaSeguinte, horariosHabituais, minutosDe, semAcento, hhmmDe, marcaDeTempo } from './util.js';
 
 // ---------- números ----------
 const arred = (x, casas = 0) => (x == null || !Number.isFinite(Number(x)) ? null : Math.round(Number(x) * 10 ** casas) / 10 ** casas);
@@ -368,6 +368,8 @@ export function montarHoje({ perfil, dia, hoje = dia, horaAgora = '00:00', refei
       proteina: { g: Math.round(tot.p), meta: metaP },
       carbo: { g: Math.round(tot.c), meta: null },
       gordura: { g: Math.round(tot.g), meta: null },
+      // fase 6: % das kcal de cada macro no que foi comido contra a recomendada pelo objetivo
+      distribuicao: distribuicaoMacros({ p: tot.p, c: tot.c, g: tot.g, objetivo: perfil.objetivo }),
     },
     refeicoes: doDia.map((r) => montarRefeicao(r, termosLocal)),
     pendentes: pendentesDoDia({ refeicoesDoDia: doDia, hab, agoraMin: dia < hoje ? 24 * 60 : minutosDe(horaAgora), atrasoMin }),
@@ -380,7 +382,17 @@ export function montarHoje({ perfil, dia, hoje = dia, horaAgora = '00:00', refei
     // fase 2: o que a pessoa registrou no app nesse dia (humor é um por dia; eventos criados por ela)
     humor: montarHumor(humor),
     eventos: (eventos || []).filter((e) => e?.dia === dia).map(montarEvento),
+    // fase 6: os anéis de atividade e o sono da noite (null sem relógio; sono null sem noite registrada)
+    atividade: saude ? anelAtividade({ perfil, saude, dia, hoje, horaAgora }) : null,
+    sono: saude ? sonoDoHoje(saude.sonos, dia) : null,
   });
+}
+/** Puro. O sono do Hoje: { nota, rotulo, dormidoMin, inicio, fim } da noite que terminou em `dia`, ou null. */
+function sonoDoHoje(sonos, dia) {
+  const a = avaliarNoite(sonos || [], dia);
+  if (!a) return null;
+  const hhmm = (v) => (minDoTexto(v) == null ? null : hhmmDe(minDoTexto(v)));
+  return { nota: a.nota, rotulo: a.rotulo, dormidoMin: a.dormidoMin, inicio: hhmm(a.noite.inicio), fim: hhmm(a.noite.fim) };
 }
 
 /** Puro. Evento criado no app: { id, dia, hora, titulo, tipo, nota, criadoEm }. */
@@ -528,7 +540,9 @@ export function montarCorpo({ perfil, dia, pesagens = [], refeicoes = [], saude 
   const ajustadas = ajustarSugestoesPeloDia(sugestoesCarga, ctx).map(({ tentativas, ...s }) => s);
   // fase 5: a rotina por dia da semana com a carga sugerida por exercício
   const rotina = temHevy ? montarRotina({ sessoes: treinos, catalogo, dia, contexto: ctx }) : [];
-  return completar({ composicao, atual: composicao[composicao.length - 1] || null, ritmo, treino, forca, sugestoesCarga: ajustadas, contextoTreino: ctx, rotina, medidas: [] });
+  // fase 6: os treinos em caixas, pelo título da sessão (a rotina fica pro app 2.5)
+  const caixas = temHevy ? treinosPorTitulo({ sessoes: treinos, catalogo, dia, contexto: ctx, fuso: fusoDe(perfil) }) : [];
+  return completar({ composicao, atual: composicao[composicao.length - 1] || null, ritmo, treino, forca, sugestoesCarga: ajustadas, contextoTreino: ctx, rotina, treinos: caixas, medidas: [] });
 }
 
 // ============================================================
@@ -545,6 +559,12 @@ function diaDaSemanaDe(iso, fuso) {
   return { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }[nome] || null;
 }
 const TZ_PADRAO = 'America/Sao_Paulo';
+/** Puro. O dia (AAAA-MM-DD) do instante ISO no fuso dado (o start_time do Hevy é UTC); inválido = os 10 primeiros caracteres. */
+export function diaLocalDe(iso, fuso = TZ_PADRAO) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso || '').slice(0, 10);
+  return d.toLocaleString('sv-SE', { timeZone: fuso || TZ_PADRAO }).slice(0, 10);
+}
 
 /**
  * Puro. A sugestão pra um exercício a partir do histórico dele (lista de { dia, kg, reps } da mais antiga pra mais recente)
@@ -627,6 +647,119 @@ export function montarRotina({ sessoes = [], catalogo = {}, dia, contexto = {}, 
   return rotina;
 }
 
+// ============================================================
+// Treinos em caixas, pelo título da sessão no Hevy (fase 6)
+// ============================================================
+const SIGLA_DIA = ['', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+/** Puro. Título do Hevy normalizado pra agrupar: caixa baixa, sem acento, sem espaço sobrando. */
+export const normalizarTitulo = (t) => semAcento(String(t || '')).replace(/\s+/g, ' ').trim();
+/** Puro. Slug do título normalizado (id estável da caixa). */
+export const slugTitulo = (t) => normalizarTitulo(t).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'treino';
+/** Maior carga da sessão e as repetições feitas nela (o mesmo critério da rotina). */
+function cargaDaSessao(validas) {
+  const kg = Math.max(...validas.map((x) => x.weight_kg || 0));
+  const reps = Math.max(...validas.filter((x) => (x.weight_kg || 0) === kg).map((x) => x.reps || 0));
+  return { kg, reps };
+}
+
+/**
+ * Puro. Os treinos da pessoa em caixas: sessões das últimas 8 semanas agrupadas pelo título (normalizarTitulo), só títulos com
+ * 2+ sessões; o título mostrado é o mais escrito. Cada caixa: dias da semana em que costuma fazer (os que aparecem 2+ vezes; sem nenhum, o da última sessão),
+ * última data, sessões, duração mediana, grupos musculares e os exercícios da sessão mais recente na ordem feita, cada um com
+ * as séries válidas, a sugestão (sugerirCargaExercicio, com o contexto do dia) e o histórico de até 8 sessões. `proxima`
+ * resume: subir se algum exercício sobe, senão repetir se algum repete, senão manter. Ordem: a próxima a acontecer pelo dia
+ * da semana a partir de `dia` (empate: a feita há mais tempo primeiro).
+ */
+export function treinosPorTitulo({ sessoes = [], catalogo = {}, dia, contexto = {}, fuso = TZ_PADRAO }) {
+  const desde8 = new Date(Date.parse(`${dia}T12:00:00Z`) - 56 * 86400_000).toISOString();
+  // o dia de cada sessão no fuso da pessoa: o treino das 22:00 é do dia em que foi feito, não do dia UTC seguinte
+  const diaDe = new Map();
+  for (const s of sessoes || []) if (s?.inicio) diaDe.set(s, diaLocalDe(s.inicio, fuso));
+  const ordenadas = [...(sessoes || [])].filter((s) => s?.inicio && String(s.inicio) >= desde8 && diaDe.get(s) <= dia).sort((a, b) => String(a.inicio).localeCompare(String(b.inicio)));
+  const historico = new Map();
+  for (const s of ordenadas) {
+    for (const e of s.exercicios || []) {
+      const validas = (e?.sets || []).filter(serieValidaRotina);
+      if (!e?.title || !validas.length) continue;
+      const l = historico.get(e.title) || [];
+      l.push({ dia: diaDe.get(s), ...cargaDaSessao(validas) });
+      historico.set(e.title, l);
+    }
+  }
+  const grupos = new Map();
+  for (const s of ordenadas) {
+    const chave = normalizarTitulo(s.titulo);
+    if (!chave) continue;
+    const l = grupos.get(chave) || [];
+    l.push(s);
+    grupos.set(chave, l);
+  }
+  const hojeDow = ((new Date(`${dia}T12:00:00Z`).getUTCDay() + 6) % 7) + 1;
+  const caixas = [];
+  for (const [chave, lista] of grupos) {
+    if (lista.length < 2) continue;
+    const ultima = lista[lista.length - 1];
+    const contagem = new Map();
+    for (const s of lista) {
+      const d = diaDaSemanaDe(s.inicio, fuso);
+      if (d) contagem.set(d, (contagem.get(d) || 0) + 1);
+    }
+    let dows = [...contagem.entries()].filter(([, c]) => c >= 2).map(([d]) => d);
+    if (!dows.length) dows = [diaDaSemanaDe(ultima.inicio, fuso)].filter(Boolean);
+    dows.sort((a, b) => a - b);
+    const duracoes = lista.map((s) => (Date.parse(s.fim) - Date.parse(s.inicio)) / 60_000).filter((m) => Number.isFinite(m) && m > 0 && m < 600);
+    const vistos = new Set();
+    const exercicios = [];
+    const seriesPorGrupo = new Map();
+    for (const e of ultima.exercicios || []) {
+      if (!e?.title || vistos.has(e.title)) continue;
+      vistos.add(e.title);
+      const validas = (e.sets || []).filter(serieValidaRotina);
+      const hist = historico.get(e.title) || [];
+      const sug = sugerirCargaExercicio({ nome: e.title, historico: hist, contexto });
+      if (!sug || !validas.length) continue;
+      const g = catalogo[e.exercise_template_id]?.primario;
+      const grupo = g ? grupoEmPortugues(g) : null;
+      if (grupo) seriesPorGrupo.set(grupo, (seriesPorGrupo.get(grupo) || 0) + validas.length);
+      exercicios.push({
+        nome: e.title,
+        grupo,
+        series: validas.map((x) => ({ kg: Number(x.weight_kg) > 0 ? r2(x.weight_kg) : null, reps: Number(x.reps) > 0 ? int(x.reps) : null })),
+        ...sug,
+        motivo: semZap(sug.motivo),
+        frase: semZap(sug.frase),
+        historico: hist.slice(-8).map((h) => ({ dia: h.dia, kg: h.kg > 0 ? r2(h.kg) : null, reps: h.reps > 0 ? int(h.reps) : null })),
+      });
+    }
+    if (!exercicios.length) continue;
+    const conta = (acao) => exercicios.filter((e) => e.acao === acao).length;
+    const plural = (n) => `${n} exercício${n > 1 ? 's' : ''}`;
+    const proxima = conta('subir') ? { acao: 'subir', resumo: `${plural(conta('subir'))} pra subir` } : conta('repetir') ? { acao: 'repetir', resumo: `${plural(conta('repetir'))} pra firmar` } : { acao: 'manter', resumo: 'Manter as cargas' };
+    const durMed = medianaDe(duracoes);
+    // o título como a pessoa mais escreve (empate: o da sessão mais recente)
+    const escritos = new Map();
+    lista.forEach((s, i) => {
+      const t = String(s.titulo).replace(/\s+/g, ' ').trim();
+      escritos.set(t, { n: (escritos.get(t)?.n || 0) + 1, ultima: i });
+    });
+    const titulo = [...escritos.entries()].sort((a, b) => b[1].n - a[1].n || b[1].ultima - a[1].ultima)[0][0];
+    caixas.push({
+      id: slugTitulo(chave),
+      titulo: semZap(titulo),
+      dias: dows.map((d) => SIGLA_DIA[d]),
+      ultimaData: diaDe.get(ultima),
+      sessoes8sem: lista.length,
+      duracaoMin: durMed == null ? null : Math.round(durMed),
+      grupos: [...seriesPorGrupo.entries()].sort((a, b) => b[1] - a[1]).map(([g]) => g).slice(0, 4),
+      proxima,
+      exercicios,
+      _ate: Math.min(...dows.map((d) => (d - hojeDow + 7) % 7)),
+    });
+  }
+  caixas.sort((a, b) => a._ate - b._ate || a.ultimaData.localeCompare(b.ultimaData) || a.titulo.localeCompare(b.titulo));
+  return caixas.map(({ _ate, ...c }) => c);
+}
+
 /**
  * Puro. O contexto do treino de hoje: energia e sono da noite (saude.energiaDoDia) e a comida dos 3 dias fechados antes
  * de hoje contra a faixa de kcal (gastoAdaptativo). comida: 'abaixo' | 'dentro' | 'acima' | null (sem registro ou sem faixa).
@@ -669,6 +802,421 @@ export function ajustarSugestoesPeloDia(sugestoes = [], { sonoMin = null, energi
     if ((s.tentativas || 0) >= 2) return { ...s, hoje: 'repetir', motivo: `fez ${s.tentativas} vezes sem bater: repete ${s.deKg != null ? `${String(s.deKg).replace('.', ',')} kg` : 'a carga'} com mais repetições` };
     return { ...s, hoje: 'subir', motivo: comida === 'dentro' ? 'dormiu e comeu bem: pode subir' : 'pode tentar subir hoje' };
   });
+}
+
+// ============================================================
+// Sono, energia e atividade no nível do relógio (fase 6, docs/app/2026-10-15-plano-fase6.md)
+// ============================================================
+// As notas são NOSSAS, com a conta aberta aqui. Nenhuma entra em conta de calorias: são leitura de como a pessoa está.
+const limitar100 = (x) => Math.max(0, Math.min(100, x));
+const hmTxt = (min) => `${Math.floor(min / 60)}h${String(Math.round(min % 60)).padStart(2, '0')}`;
+const milharTxt = (n) => Math.round(n).toLocaleString('pt-BR');
+const mediaDe = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+const desvioDe = (xs) => {
+  const m = mediaDe(xs);
+  return m == null ? null : Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / xs.length);
+};
+const medianaDe = (xs) => {
+  const a = [...xs].sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+};
+/** "AAAA-MM-DD HH:MM" ou "HH:MM" -> minutos do dia; null sem hora. */
+const minDoTexto = (v) => {
+  const m = /(\d{2}):(\d{2})/.exec(String(v ?? ''));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+/** Hora de dormir em minutos contados a partir do meio-dia (23:00 = 660, 01:00 = 780): média e mediana não quebram na meia-noite. */
+const horaDormirMin = (inicio) => {
+  const m = minDoTexto(inicio);
+  return m == null ? null : (m - 720 + 1440) % 1440;
+};
+const horaDoMeioDia = (x) => hhmmDe((Math.round(x) + 720) % 1440);
+/** Minutos entre dois "AAAA-MM-DD HH:MM" do relogio.js (horas locais, sem fuso: a diferença é a mesma). */
+const minutosEntre = (a, b) => {
+  const p = (s) => Date.parse(`${String(s).slice(0, 10)}T${String(s).slice(11, 16)}:00Z`);
+  const d = (p(b) - p(a)) / 60_000;
+  return Number.isFinite(d) ? d : null;
+};
+
+export const ROTULOS_NOTA = ['excelente', 'boa', 'razoavel', 'atencao'];
+/** Puro. Rótulo de uma nota 0-100: ≥ 85 excelente, ≥ 70 boa, ≥ 55 razoável, senão atenção; null sem nota. */
+export function rotuloNota(nota) {
+  if (nota == null || !Number.isFinite(Number(nota))) return null;
+  return nota >= 85 ? 'excelente' : nota >= 70 ? 'boa' : nota >= 55 ? 'razoavel' : 'atencao';
+}
+/** Puro. Nível de um fator pela pontuação 0-100: ≥ 90 excelente, ≥ 70 bom, ≥ 50 razoável, senão atenção; null sem dado. */
+export function nivelDosPontos(p) {
+  if (p == null || !Number.isFinite(Number(p))) return null;
+  return p >= 90 ? 'excelente' : p >= 70 ? 'bom' : p >= 50 ? 'razoavel' : 'atencao';
+}
+
+// faixas de referência de adultos (% do tempo na cama); a nota usa profundo e REM, o app desenha as quatro
+export const FASES_TIPICAS = { acordado: { min: 0, max: 10 }, rem: { min: 18, max: 25 }, leve: { min: 45, max: 60 }, profundo: { min: 13, max: 23 } };
+const PESOS_SONO = { duracao: 0.4, profundo: 0.2, rem: 0.2, acordado: 0.1, regularidade: 0.1 };
+
+/** Puro. Pontos 0-100 da duração dormida: 7–9 h = 100; de 4 h (0) a 7 h, linear; de 9 a 10 h cai até 80; acima de 10 h, 80. */
+export function pontosDuracaoSono(min) {
+  if (min == null || !Number.isFinite(Number(min))) return null;
+  if (min <= 240) return 0;
+  if (min < 420) return ((min - 240) / 180) * 100;
+  if (min <= 540) return 100;
+  if (min <= 600) return 100 - ((min - 540) / 60) * 20;
+  return 80;
+}
+/** Pontos de uma fase pela faixa: dentro = 100; abaixo, proporcional (0 % = 0); acima, perde 5 por ponto percentual. */
+const pontosFaixa = (pct, { min, max }) => (pct == null ? null : pct < min ? (pct / min) * 100 : pct <= max ? 100 : limitar100(100 - (pct - max) * 5));
+const pontosAcordado = (pct) => (pct == null ? null : pct <= 10 ? 100 : limitar100(100 - (pct - 10) * 5));
+/** Hora de dormir a até 30 min da mediana = 100; 2 h ou mais = 0; linear entre os dois. */
+const pontosRegularidade = (desvio) => (desvio == null ? null : desvio <= 30 ? 100 : desvio >= 120 ? 0 : 100 - ((desvio - 30) / 90) * 100);
+
+/**
+ * Puro. Nota de sono 0-100 (nossa): duração dormida (40 %), sono profundo (20 %, 13–23 % = 100), REM (20 %, 18–25 % = 100),
+ * acordado (10 %, até 10 % = 100) e regularidade (10 %, hora de dormir até 30 min da mediana dos 7 dias anteriores = 100,
+ * 2 h = 0). Componente sem dado sai e os pesos dos outros são redistribuídos (sem fases: só duração e regularidade). Sem
+ * duração, nota null. Percentuais sobre o tempo na cama.
+ * @returns {{ nota: number|null, rotulo: string|null, partes: { duracao, profundo, rem, acordado, regularidade } }}
+ */
+export function notaSono({ dormidoMin = null, profundoPct = null, remPct = null, acordadoPct = null, desvioHoraMin = null } = {}) {
+  const partes = {
+    duracao: pontosDuracaoSono(dormidoMin),
+    profundo: pontosFaixa(profundoPct, FASES_TIPICAS.profundo),
+    rem: pontosFaixa(remPct, FASES_TIPICAS.rem),
+    acordado: pontosAcordado(acordadoPct),
+    regularidade: pontosRegularidade(desvioHoraMin),
+  };
+  const arredPartes = Object.fromEntries(Object.entries(partes).map(([k, v]) => [k, v == null ? null : Math.round(v)]));
+  if (partes.duracao == null) return { nota: null, rotulo: null, partes: arredPartes };
+  const usadas = Object.entries(partes).filter(([, v]) => v != null);
+  const soma = usadas.reduce((a, [k]) => a + PESOS_SONO[k], 0);
+  const nota = Math.round(usadas.reduce((a, [k, v]) => a + v * PESOS_SONO[k], 0) / soma);
+  return { nota, rotulo: rotuloNota(nota), partes: arredPartes };
+}
+
+/** A noite que terminou em `dia` (sono principal + cochilos somados), como o relogio.js guarda; null sem sono. */
+const noiteDe = (sonos, dia) => (sonos || []).find((s) => s?.dia === dia && Number(s.total) > 0) || null;
+
+/**
+ * Puro. Tudo que a nota de uma noite precisa: tempo na cama (dormido + acordado), fases em minutos e %, desvio da hora de
+ * dormir contra a mediana dos 7 dias anteriores (3+ noites), a nota e o rótulo. null sem sono no dia.
+ */
+export function avaliarNoite(sonos = [], dia) {
+  const noite = noiteDe(sonos, dia);
+  if (!noite) return null;
+  const dormidoMin = Math.round(Number(noite.total));
+  const acordado = Math.max(0, Number(noite.acordado) || 0);
+  const emCamaMin = Math.round(dormidoMin + acordado);
+  const temFases = (Number(noite.profundo) || 0) + (Number(noite.rem) || 0) > 0;
+  const pct = (m) => (emCamaMin > 0 ? (m / emCamaMin) * 100 : 0);
+  const fases = temFases
+    ? Object.fromEntries(['acordado', 'rem', 'leve', 'profundo'].map((k) => [k, { min: Math.round(Number(noite[k]) || 0), pct: Math.round(pct(Number(noite[k]) || 0)) }]))
+    : null;
+  const anteriores = diasAnteriores(dia, 8).slice(0, 7).map((d) => horaDormirMin(noiteDe(sonos, d)?.inicio)).filter((x) => x != null);
+  const hora = horaDormirMin(noite.inicio);
+  const desvioHoraMin = hora != null && anteriores.length >= 3 ? Math.abs(hora - medianaDe(anteriores)) : null;
+  const n = notaSono({
+    dormidoMin,
+    profundoPct: temFases ? pct(Number(noite.profundo) || 0) : null,
+    remPct: temFases ? pct(Number(noite.rem) || 0) : null,
+    acordadoPct: temFases ? pct(acordado) : null,
+    desvioHoraMin,
+  });
+  return { noite, dormidoMin, emCamaMin, fases, temFases, desvioHoraMin, ...n };
+}
+
+/** Puro. Minutos de "acordado" do início da sessão até o primeiro estágio de sono (só com etapas); null sem isso. */
+export function latenciaDoSono(noite) {
+  const etapas = noite?.etapas || [];
+  const ini = minDoTexto(noite?.inicio);
+  const primeiro = etapas.find((e) => e?.t && e.t !== 'acordado');
+  if (!etapas.length || ini == null || !primeiro) return null;
+  const lat = (minDoTexto(primeiro.ini) - ini + 1440) % 1440;
+  return lat <= 240 ? lat : null; // mais de 4 h é estágio de outra sessão, não latência
+}
+
+/** Puro. Fator do batimento no sono: abaixo ou igual à média = excelente; até +3 bpm bom; até +6 razoável; acima, atenção. */
+function fatorFc(atual, historico) {
+  const media = historico.length >= 3 ? mediaDe(historico) : null;
+  const nivel = atual == null || media == null ? null : atual <= media ? 'excelente' : atual <= media + 3 ? 'bom' : atual <= media + 6 ? 'razoavel' : 'atencao';
+  return { id: 'fc_sono', nome: 'Batimento no sono', valor: atual == null ? 'sem dado' : `${atual} bpm`, nivel, explicacao: 'Batimento abaixo do seu normal indica descanso.' };
+}
+/** Puro. Fator da VFC no sono: na média ou acima = excelente; 90 % bom; 80 % razoável; abaixo, atenção. */
+function fatorVfc(atual, historico) {
+  const media = historico.length >= 3 ? mediaDe(historico) : null;
+  const r = atual == null || media == null ? null : atual / media;
+  const nivel = r == null ? null : r >= 1 ? 'excelente' : r >= 0.9 ? 'bom' : r >= 0.8 ? 'razoavel' : 'atencao';
+  return { id: 'vfc_sono', nome: 'VFC no sono', valor: atual == null ? 'sem dado' : `${atual} ms`, nivel, explicacao: 'Variação acima da sua média indica corpo recuperado.' };
+}
+/**
+ * FC e VFC do sono da noite (sono principal; sem eles, a FC de repouso e a VFC do dia que o Relógio 1.6 já manda) e as dos 14
+ * dias anteriores DA MESMA MEDIDA: a FC de repouso (média dos 20 % menores batimentos do sono) é sempre mais baixa que a
+ * média do sono, então misturar as duas dava "atenção" ou "excelente" sem nada ter mudado. Usa a medida do sono quando ela
+ * tem hoje e 3+ dias de histórico; senão a do dia, se tiver; senão a do sono com histórico curto (nível null).
+ */
+function fcVfcDoDia({ sonos = [], atividades = [], dia }) {
+  const pos = (v) => (Number(v) > 0 ? Number(v) : null);
+  const doDia = (d) => {
+    const s = noiteDe(sonos, d);
+    const a = (atividades || []).find((x) => x?.dia === d);
+    return { fcSono: pos(s?.fcMedia), fcDia: pos(a?.fcRepouso), hrvSono: pos(s?.hrv), hrvDia: pos(a?.hrv) };
+  };
+  const antes = diasAnteriores(dia, 15).slice(0, 14).map(doDia);
+  const hoje = doDia(dia);
+  const escolher = (kSono, kDia) => {
+    const hist = (k) => antes.map((x) => x[k]).filter((x) => x != null);
+    if (hoje[kSono] != null && hist(kSono).length >= 3) return { atual: hoje[kSono], hist: hist(kSono) };
+    if (hoje[kDia] != null) return { atual: hoje[kDia], hist: hist(kDia) };
+    return { atual: hoje[kSono], hist: hoje[kSono] != null ? hist(kSono) : [] };
+  };
+  const fc = escolher('fcSono', 'fcDia');
+  const hrv = escolher('hrvSono', 'hrvDia');
+  return { fc: fc.atual, hrv: hrv.atual, fcHist: fc.hist, hrvHist: hrv.hist };
+}
+
+/**
+ * Puro. Os fatores da nota de sono: tempo dormido, sono profundo, REM, acordado, latência, FC e VFC no sono. Cada um
+ * { id, nome, valor, nivel, explicacao }; sem dado, valor 'sem dado' e nivel null.
+ */
+export function fatoresSono({ sonos = [], atividades = [], dia }) {
+  const a = avaliarNoite(sonos, dia);
+  const f = a?.fases;
+  const fase = (k, pts) => (f ? { valor: `${f[k].pct} %`, nivel: nivelDosPontos(pts) } : { valor: 'sem dado', nivel: null });
+  const lat = latenciaDoSono(a?.noite);
+  const fv = fcVfcDoDia({ sonos, atividades, dia });
+  return [
+    { id: 'tempo', nome: 'Tempo dormido', valor: a ? hmTxt(a.dormidoMin) : 'sem dado', nivel: nivelDosPontos(a?.partes.duracao), explicacao: 'Adultos rendem melhor com 7 a 9 horas.' },
+    { id: 'profundo', nome: 'Sono profundo', ...fase('profundo', a?.partes.profundo), explicacao: 'É o sono que recupera o corpo. O normal é 13 a 23 %.' },
+    { id: 'rem', nome: 'Sono REM', ...fase('rem', a?.partes.rem), explicacao: 'Ajuda a memória e o humor. O normal é 18 a 25 %.' },
+    { id: 'acordado', nome: 'Acordado', ...(f ? { valor: `${f.acordado.min} min`, nivel: nivelDosPontos(a.partes.acordado) } : { valor: 'sem dado', nivel: null }), explicacao: 'Acordar um pouco é normal. Até 10 % da noite está bem.' },
+    { id: 'latencia', nome: 'Tempo pra dormir', valor: lat == null ? 'sem dado' : `${lat} min`, nivel: lat == null ? null : lat <= 20 ? 'excelente' : lat <= 30 ? 'bom' : lat <= 45 ? 'razoavel' : 'atencao', explicacao: 'Até 20 minutos pra pegar no sono é o ideal.' },
+    fatorFc(fv.fc, fv.fcHist),
+    fatorVfc(fv.hrv, fv.hrvHist),
+  ];
+}
+
+const TXT_ROTULO = { excelente: 'excelente', boa: 'bom', razoavel: 'razoável', atencao: 'pede atenção' };
+
+/**
+ * GET /perfis/:id/sono?dia=. A noite que terminou em `dia` (doc de saude_relogio): nota e rótulo (notaSono), variação contra
+ * a média das notas dos 7 dias anteriores, horários, fases (null sem fases), faixas típicas, estágios ao longo da noite
+ * (vazio no envio antigo), FC/VFC, fatores e a semana.
+ */
+export function montarSono({ saude = null, dia }) {
+  const sonos = saude?.sonos || [];
+  const atividades = saude?.atividades || [];
+  const a = avaliarNoite(sonos, dia);
+  const notasAntes = diasAnteriores(dia, 8).slice(0, 7).map((d) => avaliarNoite(sonos, d)?.nota).filter((x) => x != null);
+  const hhmm = (v) => {
+    const m = minDoTexto(v);
+    return m == null ? null : hhmmDe(m);
+  };
+  const noite = a?.noite;
+  return completar({
+    dia,
+    nota: a?.nota ?? null,
+    rotulo: a?.rotulo ?? null,
+    variacao: a?.nota != null && notasAntes.length ? Math.round(a.nota - mediaDe(notasAntes)) : null,
+    inicio: hhmm(noite?.inicio),
+    fim: hhmm(noite?.fim),
+    emCamaMin: a ? a.emCamaMin : null,
+    dormidoMin: a ? a.dormidoMin : null,
+    latenciaMin: latenciaDoSono(noite),
+    fases: a?.fases || null,
+    tipicas: FASES_TIPICAS,
+    etapas: (noite?.etapas || []).map((e) => ({ ini: e.ini ?? null, fim: e.fim ?? null, t: e.t ?? null })),
+    fcMedia: Number(noite?.fcMedia) > 0 ? int(noite.fcMedia) : null,
+    fcMin: Number(noite?.fcMin) > 0 ? int(noite.fcMin) : null,
+    hrv: Number(noite?.hrv) > 0 ? int(noite.hrv) : null,
+    fatores: a ? fatoresSono({ sonos, atividades, dia }) : [],
+    semana: diasAnteriores(dia, 7).map((d) => {
+      const x = avaliarNoite(sonos, d);
+      return { dia: d, nota: x?.nota ?? null, dormidoMin: x ? x.dormidoMin : null };
+    }),
+    texto: semZap(a ? `Sono ${TXT_ROTULO[a.rotulo]}: dormiu ${hmTxt(a.dormidoMin)}.` : 'Sem sono registrado nessa noite.'),
+  });
+}
+
+/** Metas de atividade: 8.000 passos, 60 min ativos e 500 kcal ativas; `perfil.metasAtividade` sobrescreve o que trouxer. */
+export const METAS_ATIVIDADE = { passos: 8000, min: 60, kcal: 500 };
+export function metasAtividadeDe(perfil) {
+  const m = perfil?.metasAtividade || {};
+  const ok = (v, padrao) => (Number(v) > 0 ? Math.round(Number(v)) : padrao);
+  return { passos: ok(m.passos, METAS_ATIVIDADE.passos), min: ok(m.min ?? m.minAtivos, METAS_ATIVIDADE.min), kcal: ok(m.kcal ?? m.kcalAtivas, METAS_ATIVIDADE.kcal) };
+}
+
+/**
+ * Puro. Fatores da energia: média de sono (7 dias), consistência do tempo de sono (desvio padrão), regularidade (desvio da
+ * hora de dormir), hora de dormir (mediana; antes de 23h30 = excelente), atividade de ontem (passos e minutos ativos),
+ * consistência da atividade (dias fechados na meta de passos), FC e VFC no sono.
+ */
+export function fatoresEnergia({ sonos = [], atividades = [], dia, metaPassos = METAS_ATIVIDADE.passos }) {
+  const sete = diasAnteriores(dia, 7).map((d) => noiteDe(sonos, d)).filter(Boolean);
+  const totais = sete.map((s) => Number(s.total));
+  const horas = sete.map((s) => horaDormirMin(s.inicio)).filter((x) => x != null);
+  const mSono = mediaDe(totais);
+  const dpSono = totais.length >= 3 ? desvioDe(totais) : null;
+  const dpHora = horas.length >= 3 ? desvioDe(horas) : null;
+  const medHora = horas.length ? medianaDe(horas) : null;
+  const nivelDesvio = (d) => (d == null ? null : d <= 30 ? 'excelente' : d <= 60 ? 'bom' : d <= 90 ? 'razoavel' : 'atencao');
+  const ontem = (atividades || []).find((a) => a?.dia === diasAnteriores(dia, 2)[0]) || null;
+  const minOntem = ontem ? (ontem.minAtivos != null ? Number(ontem.minAtivos) : (ontem.treinos || []).reduce((s, t) => s + (Number(t.min) || 0), 0)) : null;
+  const ptsOntem = ontem ? Math.max((Number(ontem.passos) || 0) / metaPassos, (minOntem || 0) / METAS_ATIVIDADE.min) : null;
+  const fechados = diasAnteriores(dia, 8).slice(0, 7).map((d) => (atividades || []).find((a) => a?.dia === d && Number(a.passos) > 0)).filter(Boolean);
+  const naMeta = fechados.filter((a) => Number(a.passos) >= metaPassos).length;
+  const fracMeta = fechados.length >= 3 ? naMeta / fechados.length : null;
+  const fv = fcVfcDoDia({ sonos, atividades, dia });
+  return [
+    { id: 'media_sono', nome: 'Média de sono', valor: mSono == null ? 'sem dado' : hmTxt(mSono), nivel: mSono == null ? null : mSono >= 420 ? 'excelente' : mSono >= 390 ? 'bom' : mSono >= 360 ? 'razoavel' : 'atencao', explicacao: 'Média das últimas 7 noites. O ideal é 7 horas ou mais.' },
+    { id: 'consistencia_sono', nome: 'Constância do sono', valor: dpSono == null ? 'sem dado' : `± ${Math.round(dpSono)} min`, nivel: nivelDesvio(dpSono), explicacao: 'Dormir quantidades parecidas toda noite ajuda a energia.' },
+    { id: 'regularidade', nome: 'Regularidade', valor: dpHora == null ? 'sem dado' : `± ${Math.round(dpHora)} min`, nivel: nivelDesvio(dpHora), explicacao: 'Deitar no mesmo horário ajuda o corpo a se preparar.' },
+    { id: 'hora_dormir', nome: 'Hora de dormir', valor: medHora == null ? 'sem dado' : horaDoMeioDia(medHora), nivel: medHora == null ? null : medHora <= 690 ? 'excelente' : medHora <= 750 ? 'bom' : medHora <= 810 ? 'razoavel' : 'atencao', explicacao: 'Deitar antes das 23h30 costuma render mais energia.' },
+    { id: 'atividade_ontem', nome: 'Atividade de ontem', valor: ontem ? `${milharTxt(Number(ontem.passos) || 0)} passos · ${Math.round(minOntem || 0)} min` : 'sem dado', nivel: ptsOntem == null ? null : ptsOntem >= 1 ? 'excelente' : ptsOntem >= 0.6 ? 'bom' : ptsOntem >= 0.3 ? 'razoavel' : 'atencao', explicacao: 'Mexer o corpo ontem ajuda o sono e a disposição de hoje.' },
+    { id: 'consistencia_atividade', nome: 'Constância da atividade', valor: fracMeta == null ? 'sem dado' : `${naMeta} de ${fechados.length} dias na meta`, nivel: fracMeta == null ? null : fracMeta >= 0.7 ? 'excelente' : fracMeta >= 0.4 ? 'bom' : fracMeta >= 0.15 ? 'razoavel' : 'atencao', explicacao: 'Dias ativos em sequência mantêm a energia estável.' },
+    fatorFc(fv.fc, fv.fcHist),
+    fatorVfc(fv.hrv, fv.hrvHist),
+  ];
+}
+
+/**
+ * GET /perfis/:id/energia?dia=. A nota é a de sempre (saude.energiaDoDia, a mesma do Hoje); aqui entram o rótulo, a variação
+ * contra a média dos 7 dias anteriores, as partes, os fatores e a semana.
+ */
+export function montarEnergia({ perfil = {}, saude = null, dia }) {
+  const sonos = saude?.sonos || [];
+  const atividades = saude?.atividades || [];
+  const energia = (d) => (saude ? energiaDoDia({ sonos, atividades, dia: d }) : null);
+  const e = energia(dia);
+  const antes = diasAnteriores(dia, 8).slice(0, 7).map((d) => energia(d)?.nota).filter((x) => x != null);
+  return completar({
+    dia,
+    nota: e?.nota ?? null,
+    rotulo: rotuloNota(e?.nota),
+    variacao: e?.nota != null && antes.length ? Math.round(e.nota - mediaDe(antes)) : null,
+    partes: { sono: e?.sono ?? null, recuperacao: e?.recuperacao ?? null, carga: e?.carga ?? null },
+    fatores: saude ? fatoresEnergia({ sonos, atividades, dia, metaPassos: metasAtividadeDe(perfil).passos }) : [],
+    semana: diasAnteriores(dia, 7).map((d) => ({ dia: d, nota: energia(d)?.nota ?? null })),
+    texto: semZap(e?.texto || 'Sem dados do relógio pra calcular a energia.'),
+  });
+}
+
+/**
+ * Puro. Taxa basal (kcal/dia) por Mifflin–St Jeor: 10 × peso + 6,25 × altura (cm) − 5 × idade + 5 (homem) ou − 161 (mulher).
+ * Sem idade usa 30 anos; sem altura, 170 cm; sem gênero, a média dos dois (−78). Qualquer valor suposto = `estimada: true`.
+ * Sem peso, null.
+ * @returns {{ kcal: number, estimada: boolean } | null}
+ */
+export function kcalBasal({ peso = null, altura = null, idade = null, genero = null } = {}) {
+  const p = Number(peso);
+  if (!(p > 25 && p < 400)) return null;
+  let a = Number(altura);
+  if (a > 0 && a < 3) a *= 100; // altura em metros (planilha do relógio)
+  const alturaOk = a > 100 && a < 250;
+  const i = Number(idade);
+  const idadeOk = i >= 10 && i <= 110;
+  const g = semAcento(genero);
+  const s = /^(masc|homem|m$)/.test(g) ? 5 : /^(fem|mulher|f$)/.test(g) ? -161 : null;
+  const kcal = 10 * p + 6.25 * (alturaOk ? a : 170) - 5 * (idadeOk ? i : 30) + (s ?? -78);
+  return { kcal: Math.round(kcal), estimada: !(alturaOk && idadeOk && s != null) };
+}
+
+/** Puro. Calorias ativas = gasto total − basal × fração do dia (dia fechado = 1); nunca negativo; null sem gasto ou sem basal. */
+export function kcalAtivasDoDia({ kcalTotal = null, basal = null, fracaoDia = 1 } = {}) {
+  if (!(Number(kcalTotal) > 0) || !(Number(basal) > 0)) return null;
+  return Math.max(0, Math.round(Number(kcalTotal) - Number(basal) * Math.max(0, Math.min(1, fracaoDia))));
+}
+
+/** Os números de atividade de um dia (anéis do Hoje e da tela Atividade). `fracaoDia` só < 1 no dia em andamento. */
+function numerosAtividade({ at = null, basal = null, fracaoDia = 1 }) {
+  const minTreinos = (at?.treinos || []).reduce((s, t) => s + (Number(t.min) || 0), 0);
+  return {
+    passos: at?.passos != null ? int(at.passos) : null,
+    minAtivos: at ? (at.minAtivos != null ? int(at.minAtivos) : int(minTreinos)) : null,
+    kcalTotal: Number(at?.calorias) > 0 ? int(at.calorias) : null,
+    kcalAtivas: kcalAtivasDoDia({ kcalTotal: at?.calorias, basal: basal?.kcal, fracaoDia }),
+  };
+}
+/** A basal da pessoa (peso do perfil; sem ele, a última pesagem do relógio). */
+const basalDe = (perfil, saude) => {
+  const pesos = saude?.pesos || [];
+  return kcalBasal({ peso: Number(perfil?.peso) || pesos[pesos.length - 1]?.peso, altura: perfil?.altura || pesos.map((p) => p.altura).filter(Boolean).pop(), idade: perfil?.idade, genero: perfil?.genero });
+};
+/**
+ * Fração do dia já passada pra basal do dia em andamento: a hora do último envio do relógio, se foi no mesmo dia (o gasto
+ * total é o daquele instante); senão a hora de agora. Dia fechado = 1.
+ */
+function fracaoDoDia({ perfil, saude, dia, hoje, horaAgora }) {
+  if (dia < hoje) return 1;
+  let hora = horaAgora;
+  if (saude?.ultimoEnvio) {
+    const t = marcaDeTempo(perfil, new Date(saude.ultimoEnvio));
+    if (t.dia === dia) hora = t.horaLocal;
+  }
+  return Math.max(1, minutosDe(hora)) / 1440;
+}
+
+/** Puro. Os anéis do Hoje: { passos, metaPassos, minAtivos, metaMin, kcalAtivas, metaKcal } (números null sem dado). */
+export function anelAtividade({ perfil = {}, saude = null, dia, hoje = dia, horaAgora = '23:59' }) {
+  const metas = metasAtividadeDe(perfil);
+  const at = (saude?.atividades || []).find((a) => a?.dia === dia) || null;
+  const x = numerosAtividade({ at, basal: basalDe(perfil, saude), fracaoDia: fracaoDoDia({ perfil, saude, dia, hoje, horaAgora }) });
+  return { passos: x.passos, metaPassos: metas.passos, minAtivos: x.minAtivos, metaMin: metas.min, kcalAtivas: x.kcalAtivas, metaKcal: metas.kcal };
+}
+
+/**
+ * GET /perfis/:id/atividade?dia=. Passos, minutos ativos (do coletor; sem ele, os minutos de exercício) e calorias ativas
+ * (gasto total − basal Mifflin–St Jeor) contra as metas, por hora (só os 14 dias mais recentes têm), a hora de pico de
+ * passos, os exercícios do dia e a semana em frações da meta.
+ */
+export function montarAtividade({ perfil = {}, saude = null, dia, hoje = dia, horaAgora = '23:59' }) {
+  const metas = metasAtividadeDe(perfil);
+  const basal = basalDe(perfil, saude);
+  const ativ = (d) => (saude?.atividades || []).find((a) => a?.dia === d) || null;
+  const at = ativ(dia);
+  const x = numerosAtividade({ at, basal, fracaoDia: fracaoDoDia({ perfil, saude, dia, hoje, horaAgora }) });
+  const porHora = { passos: Array.isArray(at?.porHora?.passos) ? at.porHora.passos.map(int) : null, kcal: Array.isArray(at?.porHora?.kcal) ? at.porHora.kcal.map(int) : null };
+  let picoHora = null;
+  if (porHora.passos) {
+    const max = Math.max(...porHora.passos);
+    const h = porHora.passos.indexOf(max);
+    if (max > 0) picoHora = `${String(h).padStart(2, '0')}:00–${String((h + 1) % 24).padStart(2, '0')}:00`;
+  }
+  const fr = (v, meta) => (v == null ? 0 : r2(v / meta));
+  return completar({
+    dia,
+    passos: x.passos,
+    metaPassos: metas.passos,
+    minAtivos: x.minAtivos,
+    metaMin: metas.min,
+    kcalAtivas: x.kcalAtivas,
+    metaKcal: metas.kcal,
+    kcalTotal: x.kcalTotal,
+    kcalAtivasEstimada: Boolean(basal?.estimada ?? true),
+    porHora,
+    picoHora,
+    exercicios: (at?.treinos || []).map((t) => ({ nome: semZap(String(t.nome || 'Exercício')), hora: t.hora ?? null, min: t.min ?? null, kcal: Number(t.kcal) > 0 ? int(t.kcal) : null, fcMedia: Number(t.fcMedia) > 0 ? int(t.fcMedia) : null })),
+    semana: diasAnteriores(dia, 7).map((d) => {
+      const y = numerosAtividade({ at: ativ(d), basal, fracaoDia: fracaoDoDia({ perfil, saude, dia: d, hoje, horaAgora }) });
+      return { dia: d, passosPct: fr(y.passos, metas.passos), minPct: fr(y.minAtivos, metas.min), kcalPct: fr(y.kcalAtivas, metas.kcal) };
+    }),
+  });
+}
+
+/** Distribuição recomendada dos macros (% das kcal) pelo objetivo: hipertrofia 50/25/25, emagrecimento 40/30/30, manutenção 50/30/20 (c/g/p). */
+export function macrosRecomendados(objetivo) {
+  const o = semAcento(objetivo);
+  if (/hipertrof|ganh|massa|bulk|engord|forca/.test(o)) return { c: 50, g: 25, p: 25 };
+  if (/emagre|perd|reduz|defin|secar|cutting|gordura/.test(o)) return { c: 40, g: 30, p: 30 };
+  return { c: 50, g: 30, p: 20 };
+}
+/** Puro. % das kcal de cada macro (4/4/9 kcal por grama) no que foi comido e a recomendada; sem comida, real zerado. */
+export function distribuicaoMacros({ p = 0, c = 0, g = 0, objetivo = null } = {}) {
+  const kp = (Number(p) || 0) * 4;
+  const kc = (Number(c) || 0) * 4;
+  const kg = (Number(g) || 0) * 9;
+  const total = kp + kc + kg;
+  const real = total > 0 ? { c: Math.round((kc / total) * 100), g: Math.round((kg / total) * 100), p: Math.round((kp / total) * 100) } : { c: 0, g: 0, p: 0 };
+  return { real, recomendada: macrosRecomendados(objetivo) };
 }
 
 // ============================================================

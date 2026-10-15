@@ -12,10 +12,10 @@
 import express from 'express';
 import { listarPerfis, refeicoesDesde, pesagensDesde, colecao, humorDe, eventosDe, comMiniaturas } from './mongo.js';
 import { authPadrao, erroApi, ipDe, criarDiagnosticoXff } from './api-auth.js';
-import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, montarPesagens, montarDias, montarPlano, montarSugestaoRefeicao, proximoSlot, horaDoSlot, termosDeLugar, tirarLocalizacao, semZap, contextoDoTreino } from './api-montadores.js';
+import { montarPerfil, montarHoje, montarRefeicao, montarRefeicoes, montarProgresso, montarCorpo, montarNutri, montarResumos, montarIntegracoes, montarPesagens, montarDias, montarPlano, montarSugestaoRefeicao, proximoSlot, horaDoSlot, termosDeLugar, tirarLocalizacao, semZap, contextoDoTreino, montarSono, montarEnergia, montarAtividade, diaLocalDe } from './api-montadores.js';
 import { rotasDeEscrita, escritaPadrao, diaValido, MAX_DIAS_PESAGENS, criarLimiteAnalises } from './api-escrita.js';
 import { estimarRefeicaoApp, sugerirRefeicao, responderApp } from './gemini.js';
-import { marcaDeTempo, diasAnteriores } from './util.js';
+import { marcaDeTempo, diasAnteriores, diaSeguinte, fusoDe } from './util.js';
 import { configGrafico, renderizar } from './graficos.js';
 import { gastoAdaptativo, padraoAlimentar, nomeDoSlot as nomeDoSlotApi } from './resumo.js';
 import { temHevy } from './treino.js';
@@ -52,7 +52,10 @@ export function dadosPadrao() {
         refeicoesDesde(perfil.jids || [], diasAnteriores(dia, 35)[0], dia),
         pesagensDesde(perfil.jids || [], diasAnteriores(dia, 120)[0], dia),
         colecao('saude_relogio').findOne({ _id: perfil.jids?.[0] }),
-        colecao('treinos').find({ jid: doJid(perfil), inicio: { $gte: isoMenos(dia, 100), $lte: `${dia}T23:59:59.999Z` } }).project(projecao).toArray(),
+        // o start_time do Hevy é UTC: a consulta vai 1 dia além e o corte é pelo dia no fuso da pessoa (o treino das 22:00
+        // de hoje já é 01:00Z de amanhã)
+        colecao('treinos').find({ jid: doJid(perfil), inicio: { $gte: isoMenos(dia, 100), $lte: `${diaSeguinte(dia)}T23:59:59.999Z` } }).project(projecao).toArray()
+          .then((l) => l.filter((t) => diaLocalDe(t.inicio, fusoDe(perfil)) <= dia)),
         humorDe(perfil.jids || [], dia, dia),
         eventosDe(perfil.jids || [], dia, dia),
       ]);
@@ -140,6 +143,9 @@ export function dadosPadrao() {
       const [refeicoes, pesagens] = await Promise.all([refeicoesDesde(perfil.jids || [], desde, dia), pesagensDesde(perfil.jids || [], desde, dia)]);
       return { refeicoes, pesagens };
     },
+
+    /** Fase 6: o doc do relógio (saude_relogio: sonos, atividades, pesos e o último envio; 90 dias) pro sono, energia e atividade. */
+    saudeDe: (perfil) => colecao('saude_relogio').findOne({ _id: perfil.jids?.[0] }, { projection: { sonos: 1, atividades: 1, pesos: 1, ultimoEnvio: 1 } }),
 
     /** Catálogo do Hevy guardado no Mongo (sem ir à API do Hevy: GET não sincroniza nada). */
     async catalogoHevy() {
@@ -393,6 +399,24 @@ export function criarApi({ auth = authPadrao(), dados = dadosPadrao(), escrita =
     const d = await dados.diasEntre(perfil, de, ate);
     const meta = gastoAdaptativo({ refeicoes: d.base?.refeicoes || [], pesagens: d.base?.pesagens || [], perfil, dia: ate, gastos: perfil.relogio?.gastos }).alvo;
     res.json(montarDias({ perfil, de, ate, refeicoes: d.refeicoes, pesagens: d.pesagens, saude: d.saude, meta }));
+  });
+
+  // ---------- fase 6: sono, energia e atividade no nível do relógio (?dia= até 90 dias atrás; o relógio guarda 90) ----------
+  const diaDoRelogio = (req, hoje) => diaValido(req.query.dia, hoje, { atras: 90, frente: 0, rotulo: 'dia' });
+  r.get('/perfis/:id/sono', async (req, res) => {
+    const { perfil, hoje } = await perfilDo(req);
+    const dia = diaDoRelogio(req, hoje);
+    res.json(montarSono({ saude: await dados.saudeDe(perfil), dia }));
+  });
+  r.get('/perfis/:id/energia', async (req, res) => {
+    const { perfil, hoje } = await perfilDo(req);
+    const dia = diaDoRelogio(req, hoje);
+    res.json(montarEnergia({ perfil, saude: await dados.saudeDe(perfil), dia }));
+  });
+  r.get('/perfis/:id/atividade', async (req, res) => {
+    const { perfil, hoje, hora } = await perfilDo(req);
+    const dia = diaDoRelogio(req, hoje);
+    res.json(montarAtividade({ perfil, saude: await dados.saudeDe(perfil), dia, hoje, horaAgora: hora }));
   });
 
   /** Fase 4: o último plano da semana que a Nutri mandou pra pessoa. */

@@ -45,10 +45,12 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -71,6 +73,7 @@ import br.nutribot.relogio.ui.AppVM
 import br.nutribot.relogio.ui.Formato
 import br.nutribot.relogio.ui.componentes.Cabecalho
 import br.nutribot.relogio.ui.componentes.Cartao
+import br.nutribot.relogio.ui.componentes.Chip
 import br.nutribot.relogio.ui.componentes.ConteudoCarga
 import br.nutribot.relogio.ui.componentes.Mascote
 import br.nutribot.relogio.ui.componentes.Pilula
@@ -144,9 +147,13 @@ fun TelaCorpo(vm: AppVM, perfil: Perfil?) {
 @Composable
 private fun ConteudoCorpo(j: JSONObject, perfil: Perfil) {
     val atual = j.obj("atual")
-    // fase 5: a rotina (um item por dia da semana com treino) vem primeiro; sem Hevy e sem rotina, o cartão não aparece
-    val rotina = remember(j) { rotinaDe(j) }
-    if (rotina.isNotEmpty() || perfil.temHevy) CartaoRotina(rotina, Formato.hojeDe(j.str("dia"), perfil.fuso))
+    // fase 6: "Seus treinos" em caixas vem primeiro (substitui "Sua rotina"); as metas da Nutri de um exercício que está
+    // numa caixa aparecem na folha dele, e só as outras ficam no cartão "Metas da Nutri"
+    val treinos = remember(j) { treinosDe(j) }
+    val sugestoes = j.arr("sugestoesCarga").objs()
+    // sem Hevy e sem caixas, o cartão some (não há caminho no app pra conectar o Hevy)
+    if (treinos.isNotEmpty() || perfil.temHevy) CartaoTreinos(treinos, perfil.temHevy, Formato.hojeDe(j.str("dia"), perfil.fuso), j.obj("contextoTreino").str("texto"), sugestoes)
+    val nasCaixas = remember(treinos) { treinos.flatMap { t -> t.exercicios.map { nomeChave(it.nome) } }.toSet() }
     val treino = j.obj("treino")
     val series = HashMap<Regiao, Double>()
     treino.arr("porGrupo").objs().forEach { g ->
@@ -179,7 +186,7 @@ private fun ConteudoCorpo(j: JSONObject, perfil: Perfil) {
     }
 
     if (treino != null) CartaoTreino(treino, j.obj("forca"))
-    CartaoSugestoes(j.arr("sugestoesCarga").objs(), j.obj("contextoTreino"))
+    CartaoSugestoes(sugestoes.filter { nomeChave(it.str("exercicio")) !in nasCaixas })
     CartaoBio(medicoesDe(j))
 }
 
@@ -339,24 +346,14 @@ private fun pilulaStatus(status: String?): Triple<String, Color, Color> = when (
 
 /**
  * sugestoesCarga: [{ exercicio, deKg, deReps, paraKg, paraReps, status, feitaEm, batidaEm, como, hoje, motivo }]
- * contextoTreino (fase 4): { energia, sonoMin, comida, texto } — como o dia de hoje pesa no próximo treino.
- * Fase 5: enxuto (a progressão detalhada mora em "Sua rotina"): só o título, o texto do dia e uma linha por sugestão.
+ * Fase 6: só as metas de exercícios que não estão em nenhuma caixa de "Seus treinos" (as outras aparecem na folha do
+ * treino). O recado do dia (contextoTreino.texto) foi para o topo de "Seus treinos". Sem nenhuma, o cartão some.
  */
 @Composable
-private fun CartaoSugestoes(lista: List<JSONObject>, contexto: JSONObject?) {
+private fun CartaoSugestoes(lista: List<JSONObject>) {
     if (lista.isEmpty()) return
     Cartao(atraso = 80) {
-        TituloSecao("Sugestões da Nutri")
-        contexto.str("texto")?.let { texto ->
-            Row(
-                Modifier.fillMaxWidth().padding(top = 10.dp).clip(Formas.Pequeno).background(Color(0xFFF3EEFF)).padding(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Mascote(Pose.CorgiHalter, 40.dp)
-                Text(texto, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta, modifier = Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
-            }
-        }
+        TituloSecao("Metas da Nutri")
         lista.forEach { s ->
             val (rot, fundo, tinta) = pilulaStatus(s.str("status"))
             Row(Modifier.fillMaxWidth().padding(top = 10.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -372,39 +369,84 @@ private fun CartaoSugestoes(lista: List<JSONObject>, contexto: JSONObject?) {
     }
 }
 
-/** Bioimpedância: gordura (%) ou massa magra (kg) por medição, com eixos, pontos tocáveis e a medição escolhida. */
+/** As séries da composição corporal: nome, unidade, cor da linha e como ler da medição. */
+private enum class SerieBio(val nome: String, val unidade: String, val variacao: String, val cor: Color, val ler: (Medicao) -> Double?) {
+    Gordura("Gordura", "%", " pt", Color(0xFFFF8A65), { it.gordura }),
+    Magra("Massa magra", " kg", " kg", Cores.Verde, { it.magra }),
+    Peso("Peso", " kg", " kg", Color(0xFF5B8DEF), { it.peso }),
+}
+
+/**
+ * Composição corporal: gordura (%), massa magra ou peso por medição, com eixos, pontos tocáveis e a medição escolhida.
+ * Fase 6: "Comparar" põe uma segunda série no mesmo gráfico, tracejada, com o eixo dela à direita.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CartaoBio(medicoes: List<Medicao>) {
     var aba by rememberSaveable { mutableIntStateOf(0) }
-    val ehGordura = aba == 0
-    val serie = medicoes.mapNotNull { m -> (if (ehGordura) m.gordura else m.magra)?.let { m to it } }
+    var comparar by rememberSaveable { mutableIntStateOf(-1) } // índice em SerieBio.entries; -1 = sem comparação
+    val principal = SerieBio.entries[aba.coerceIn(0, SerieBio.entries.size - 1)]
+    val outra = SerieBio.entries.getOrNull(comparar)?.takeIf { it != principal }
+    val serie = medicoes.mapNotNull { m -> principal.ler(m)?.let { m to it } }
+    val serie2 = outra?.let { o -> medicoes.mapNotNull { m -> o.ler(m)?.let { m.dia to it } } }.orEmpty()
     var sel by rememberSaveable(aba, serie.size) { mutableIntStateOf((serie.size - 1).coerceAtLeast(0)) }
     Cartao(atraso = 110) {
         Row(verticalAlignment = Alignment.Bottom) {
-            Text("Bioimpedância", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            Text("Composição corporal", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             Text("${medicoes.size} ${if (medicoes.size == 1) "medição" else "medições"}", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, fontSize = 12.sp)
         }
-        Segmentado(listOf("Gordura", "Massa magra"), aba, { aba = it }, Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp))
+        Segmentado(SerieBio.entries.map { it.nome }, aba, { aba = it; if (comparar == it) comparar = -1 }, Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp))
         if (serie.isEmpty()) {
-            Text("Nenhuma medição de ${if (ehGordura) "gordura" else "massa magra"} ainda.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3, modifier = Modifier.padding(vertical = 16.dp))
+            Text("Nenhuma medição de ${principal.nome.lowercase()} ainda.", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta3, modifier = Modifier.padding(vertical = 16.dp))
             return@Cartao
         }
-        val cor = if (ehGordura) Color(0xFFFF8A65) else Cores.Verde
+        val cor = principal.cor
         val (mSel, vSel) = serie[sel.coerceIn(0, serie.size - 1)]
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 4.dp)) {
             BotaoRedondo("‹", "Medição anterior", sel > 0) { sel-- }
             Column(Modifier.weight(1f)) {
-                Text(Formato.decimal(vSel) + if (ehGordura) "%" else " kg", fontFamily = Fredoka, fontWeight = FontWeight.W700, fontSize = 26.sp, color = cor)
+                Text(Formato.decimal(vSel) + principal.unidade, fontFamily = Fredoka, fontWeight = FontWeight.W700, fontSize = 26.sp, color = cor)
                 val desde = serie.first()
                 Text(
                     Formato.diaCurto(mSel.dia) + " · " + (if (mSel.fonte == "documento") "avaliação em documento" else "balança (${mSel.fonte ?: "?"})") +
-                        (if (sel > 0) " · ${Formato.sinal(vSel - desde.second, 1)}${if (ehGordura) " pt" else " kg"} desde ${Formato.diaCurto(desde.first.dia)}" else ""),
+                        (if (sel > 0) " · ${Formato.sinal(vSel - desde.second, 1)}${principal.variacao} desde ${Formato.diaCurto(desde.first.dia)}" else ""),
                     style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, fontSize = 12.sp,
                 )
+                // a série comparada no mesmo dia, quando houver
+                if (outra != null) serie2.firstOrNull { it.first == mSel.dia }?.let { (_, v2) ->
+                    Text("${outra.nome} ${Formato.decimal(v2)}${outra.unidade}", style = MaterialTheme.typography.labelMedium, color = Cores.Tinta2)
+                }
             }
             BotaoRedondo("›", "Próxima medição", sel < serie.size - 1) { sel++ }
         }
-        GraficoBio(serie.map { it.first.dia to it.second }, serie.map { it.first.fonte == "documento" }, sel, cor, if (ehGordura) "%" else " kg") { sel = it }
+        GraficoBio(
+            serie.map { it.first.dia to it.second }, serie.map { it.first.fonte == "documento" }, sel, cor, principal.unidade,
+            comp = serie2, corComp = outra?.cor, unidadeComp = outra?.unidade,
+        ) { sel = it }
+        // legenda curta: a série principal, a comparada (eixo da direita) e o ponto de documento, quando houver
+        FlowRow(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            ItemLegenda(principal.nome, cor)
+            if (outra != null && serie2.isNotEmpty()) ItemLegenda("${outra.nome}, à direita", outra.cor)
+            if (serie.any { it.first.fonte == "documento" }) ItemLegenda("documento", Cores.Acai)
+        }
+        val opcoes = SerieBio.entries.filter { s -> s != principal && medicoes.any { s.ler(it) != null } }
+        if (opcoes.isNotEmpty()) {
+            Text("Comparar", style = MaterialTheme.typography.labelMedium, color = Cores.Tinta3, modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                opcoes.forEach { s ->
+                    val ativo = outra == s
+                    Chip(if (ativo) s.nome else "+ ${s.nome}", ativo, papel = Role.Switch) { comparar = if (ativo) -1 else s.ordinal }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ItemLegenda(texto: String, cor: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Box(Modifier.size(10.dp).clip(CircleShape).background(cor))
+        Text(texto, style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, fontSize = 12.sp)
     }
 }
 
@@ -417,22 +459,40 @@ private fun BotaoRedondo(txt: String, rotulo: String, habilitado: Boolean, aoToc
 }
 
 @Composable
-private fun GraficoBio(pontos: List<Pair<LocalDate, Double>>, doc: List<Boolean>, sel: Int, cor: Color, unidade: String, aoEscolher: (Int) -> Unit) {
-    val lo0 = pontos.minOf { it.second }
-    val hi0 = pontos.maxOf { it.second }
-    val folga = maxOf((hi0 - lo0) * 0.15, 0.5)
-    val lo = lo0 - folga
-    val hi = hi0 + folga
-    val d0 = pontos.first().first
-    val total = maxOf(java.time.temporal.ChronoUnit.DAYS.between(d0, pontos.last().first).toDouble(), 1.0)
+private fun GraficoBio(
+    pontos: List<Pair<LocalDate, Double>>,
+    doc: List<Boolean>,
+    sel: Int,
+    cor: Color,
+    unidade: String,
+    comp: List<Pair<LocalDate, Double>> = emptyList(),
+    corComp: Color? = null,
+    unidadeComp: String? = null,
+    aoEscolher: (Int) -> Unit,
+) {
+    fun faixa(v: List<Double>): Pair<Double, Double> {
+        val lo0 = v.min()
+        val hi0 = v.max()
+        val folga = maxOf((hi0 - lo0) * 0.15, 0.5)
+        return (lo0 - folga) to (hi0 + folga)
+    }
+    val (lo, hi) = faixa(pontos.map { it.second })
+    val temComp = comp.isNotEmpty() && corComp != null
+    val (lo2, hi2) = if (temComp) faixa(comp.map { it.second }) else (0.0 to 1.0)
+    // o eixo x cobre as duas séries (a comparada pode começar antes ou terminar depois)
+    val d0 = if (temComp) minOf(pontos.first().first, comp.first().first) else pontos.first().first
+    val dN = if (temComp) maxOf(pontos.last().first, comp.last().first) else pontos.last().first
+    val total = maxOf(java.time.temporal.ChronoUnit.DAYS.between(d0, dN).toDouble(), 1.0)
     val prog = animaAte(1f, 1200)
-    val desc = "Gráfico de ${Formato.decimal(pontos.first().second)}$unidade em ${Formato.diaCurto(d0)} para ${Formato.decimal(pontos.last().second)}$unidade em ${Formato.diaCurto(pontos.last().first)}"
-    val xs = remember(pontos) { pontos.map { java.time.temporal.ChronoUnit.DAYS.between(d0, it.first) / total } }
+    val desc = "Gráfico de ${Formato.decimal(pontos.first().second)}$unidade em ${Formato.diaCurto(pontos.first().first)} para ${Formato.decimal(pontos.last().second)}$unidade em ${Formato.diaCurto(pontos.last().first)}" +
+        (if (temComp) ". Comparado com ${Formato.decimal(comp.first().second)}${unidadeComp.orEmpty()} para ${Formato.decimal(comp.last().second)}${unidadeComp.orEmpty()}, eixo à direita" else "")
+    val xs = remember(pontos, d0, total) { pontos.map { java.time.temporal.ChronoUnit.DAYS.between(d0, it.first) / total } }
+    val xs2 = remember(comp, d0, total) { comp.map { java.time.temporal.ChronoUnit.DAYS.between(d0, it.first) / total } }
     Canvas(
         Modifier.fillMaxWidth().aspectRatio(330f / 196f).semantics { contentDescription = desc }
-            .pointerInput(pontos) {
+            .pointerInput(xs, temComp) {
                 detectTapGestures { o ->
-                    val esq = 34.dp.toPx(); val dir = size.width - 10.dp.toPx()
+                    val esq = 34.dp.toPx(); val dir = size.width - (if (temComp) 34.dp else 10.dp).toPx()
                     val f = ((o.x - esq) / (dir - esq)).coerceIn(0f, 1f)
                     val i = xs.indices.minByOrNull { kotlin.math.abs(xs[it] - f) } ?: return@detectTapGestures
                     aoEscolher(i)
@@ -440,13 +500,15 @@ private fun GraficoBio(pontos: List<Pair<LocalDate, Double>>, doc: List<Boolean>
             },
     ) {
         val esq = 34.dp.toPx()
-        val dir = size.width - 10.dp.toPx()
+        val dir = size.width - (if (temComp) 34.dp else 10.dp).toPx()
         val topo = 10.dp.toPx()
         val base = size.height - 24.dp.toPx()
         fun px(f: Double) = (esq + f * (dir - esq)).toFloat()
         fun py(v: Double) = (base - (v - lo) / (hi - lo) * (base - topo)).toFloat()
-        val paint = android.graphics.Paint().apply { isAntiAlias = true; textSize = 10.sp.toPx(); color = android.graphics.Color.rgb(0x6E, 0x65, 0x87); textAlign = android.graphics.Paint.Align.RIGHT }
-        // eixo y com 4 marcas
+        fun py2(v: Double) = (base - (v - lo2) / (hi2 - lo2) * (base - topo)).toFloat()
+        val cinza = android.graphics.Color.rgb(0x6E, 0x65, 0x87)
+        val paint = android.graphics.Paint().apply { isAntiAlias = true; textSize = 10.sp.toPx(); color = if (temComp) cor.toArgb() else cinza; textAlign = android.graphics.Paint.Align.RIGHT }
+        // eixo y com 4 marcas (o da esquerda é da série principal; com comparação, o da direita é da outra)
         for (i in 0..3) {
             val v = lo + (hi - lo) * i / 3
             val y = py(v)
@@ -455,6 +517,25 @@ private fun GraficoBio(pontos: List<Pair<LocalDate, Double>>, doc: List<Boolean>
         }
         drawLine(Cores.LilasMedio, Offset(esq, topo), Offset(esq, base), 1.dp.toPx())
         drawLine(Cores.LilasMedio, Offset(esq, base), Offset(dir, base), 1.dp.toPx())
+        if (temComp && corComp != null) {
+            val paint2 = android.graphics.Paint().apply { isAntiAlias = true; textSize = 10.sp.toPx(); color = corComp.toArgb(); textAlign = android.graphics.Paint.Align.LEFT }
+            for (i in 0..3) {
+                val v = lo2 + (hi2 - lo2) * i / 3
+                drawContext.canvas.nativeCanvas.drawText(Formato.decimal(v), dir + 4.dp.toPx(), py2(v) + 3.dp.toPx(), paint2)
+            }
+            drawLine(Cores.LilasMedio, Offset(dir, topo), Offset(dir, base), 1.dp.toPx())
+            // a série comparada vai por baixo, tracejada, com pontos pequenos
+            if (comp.size > 1) {
+                val p2 = Path()
+                comp.forEachIndexed { i, (_, v) -> if (i == 0) p2.moveTo(px(xs2[i]), py2(v)) else p2.lineTo(px(xs2[i]), py2(v)) }
+                drawPath(p2, corComp, alpha = prog, style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(7.dp.toPx(), 5.dp.toPx()))))
+            }
+            comp.forEachIndexed { i, (_, v) ->
+                val c = Offset(px(xs2[i]), py2(v))
+                drawCircle(Color.White, 4.5.dp.toPx(), c, alpha = prog)
+                drawCircle(corComp, 3.dp.toPx(), c, alpha = prog)
+            }
+        }
         // eixo x: datas (alternadas para não encavalar)
         paint.textAlign = android.graphics.Paint.Align.CENTER
         val passo = maxOf(1, pontos.size / 5)
@@ -481,5 +562,4 @@ private fun GraficoBio(pontos: List<Pair<LocalDate, Double>>, doc: List<Boolean>
             drawCircle(if (doc[i]) Cores.Acai else cor, r, c)
         }
     }
-    Text("Toque num ponto para ver. Roxo: avaliação em documento.", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta4, fontSize = 11.sp)
 }

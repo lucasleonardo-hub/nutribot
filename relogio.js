@@ -39,11 +39,53 @@ const localDe = (iso, fuso) => {
 };
 const n = (v) => (v == null || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 const ehSamsung = (fonte) => /shealth|samsung/i.test(String(fonte || ''));
+/** Número dentro de [min, max], arredondado; senão null (valor fora da faixa é leitura errada do sensor). */
+const naFaixa = (v, min, max) => {
+  const x = n(v);
+  return x != null && x >= min && x <= max ? Math.round(x) : null;
+};
+
+// ---------- campos novos da fase 6 (opcionais: o Relógio 1.6 das outras pessoas não manda) ----------
+const TIPOS_ETAPA = new Set(['acordado', 'rem', 'leve', 'profundo']);
+export const MAX_ETAPAS = 200;
+/**
+ * Puro. Estágios do sono que vieram do Health Connect ([{ i: ISO, f: ISO, t }]) viram [{ ini: 'HH:MM', fim: 'HH:MM', t }]
+ * no fuso da pessoa, em ordem, com os vizinhos do mesmo tipo juntados (até 1 min de folga) e no máximo 200. Tipo
+ * desconhecido, instante inválido ou fim antes do início saem. Lista ausente = [].
+ */
+export function etapasDoSono(lista, fuso = 'America/Sao_Paulo') {
+  const validas = [];
+  for (const e of Array.isArray(lista) ? lista : []) {
+    const t = String(e?.t || '').toLowerCase();
+    const i = Date.parse(e?.i);
+    const f = Date.parse(e?.f);
+    if (!TIPOS_ETAPA.has(t) || !Number.isFinite(i) || !Number.isFinite(f) || f <= i) continue;
+    validas.push({ i, f, t });
+  }
+  validas.sort((a, b) => a.i - b.i);
+  const juntas = [];
+  for (const e of validas) {
+    const u = juntas[juntas.length - 1];
+    if (u && u.t === e.t && e.i <= u.f + 60_000) u.f = Math.max(u.f, e.f);
+    else juntas.push({ ...e });
+  }
+  return juntas.slice(0, MAX_ETAPAS).map((e) => ({ ini: localDe(e.i, fuso).hora, fim: localDe(e.f, fuso).hora, t: e.t }));
+}
+/** Teto por hora: acima disso é leitura duplicada ou corrompida do Health Connect. */
+export const MAX_POR_HORA = { passos: 20000, kcal: 3000 };
+/** Puro. Vetor de 24 números entre 0 e `max` (um por hora do dia), arredondados; qualquer outra coisa = null. */
+export function vetor24(v, max = Infinity) {
+  if (!Array.isArray(v) || v.length !== 24) return null;
+  if (!v.every((x) => x !== null && x !== '' && typeof x !== 'boolean' && Number.isFinite(Number(x)) && Number(x) >= 0 && Number(x) <= max)) return null;
+  return v.map((x) => Math.round(Number(x)));
+}
 
 /**
  * Converte o envio do app. Datas vêm em ISO (instante); dia e hora saem no fuso da pessoa.
  * pesos: uma por dia, a primeira da manhã (prefere Samsung Health). sonos: por noite (dia em que acordou), sessões do mesmo dia
  * somam e a mais longa define deitou/levantou. atividades: por dia, passos, calorias totais e treinos (nome, min, hora).
+ * Fase 6 (opcionais; sem eles a saída é a de antes): no sono principal `etapas` ([{ ini, fim, t }]), `fcMedia`, `fcMin`
+ * (30–150 bpm) e `hrv` (1–300 ms); no dia `porHora` ({ passos, kcal }: 24 números ≥ 0 cada, ou null) e `minAtivos` (0–1440).
  */
 export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
   const pesos = new Map();
@@ -74,6 +116,16 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
       x.principal = duracao;
       x.inicio = `${ini.dia} ${ini.hora}`;
       x.fim = `${fim.dia} ${fim.hora}`;
+      // fase 6: estágios, batimento e VFC são do sono principal (o mais longo), como inicio/fim; envio antigo não traz
+      for (const k of ['etapas', 'fcMedia', 'fcMin', 'hrv']) delete x[k];
+      const etapas = etapasDoSono(s.etapas, fuso);
+      if (etapas.length) x.etapas = etapas;
+      const fcMedia = naFaixa(s.fcMedia, 30, 150);
+      const fcMin = naFaixa(s.fcMin, 30, 150);
+      const hrv = naFaixa(s.hrv, 1, 300);
+      if (fcMedia != null) x.fcMedia = fcMedia;
+      if (fcMin != null) x.fcMin = fcMin;
+      if (hrv != null) x.hrv = hrv;
     }
     x.leve += semFases ? duracao : leve; // sem fases, tudo conta como "leve" pra manter o total
     x.profundo += profundo;
@@ -100,6 +152,11 @@ export function normalizarEnvio(corpo, fuso = 'America/Sao_Paulo') {
     if (cal && cal > 300) a.calorias = Math.round(cal); // aggregate do dia (gasto total); valores minúsculos são dia incompleto
     if (n(d.fcRepouso) && n(d.fcRepouso) >= 30 && n(d.fcRepouso) <= 120) a.fcRepouso = Math.round(n(d.fcRepouso));
     if (n(d.hrv) && n(d.hrv) > 0) a.hrv = Math.round(n(d.hrv));
+    // fase 6: passos e calorias por hora (só os últimos 14 dias vêm com isso) e minutos ativos
+    const porHora = { passos: vetor24(d.porHora?.passos, MAX_POR_HORA.passos), kcal: vetor24(d.porHora?.kcal, MAX_POR_HORA.kcal) };
+    if (porHora.passos || porHora.kcal) a.porHora = porHora;
+    const minAtivos = naFaixa(d.minAtivos, 0, 1440);
+    if (minAtivos != null) a.minAtivos = minAtivos;
   }
   for (const t of corpo?.treinos || []) {
     const ini = localDe(t.inicio, fuso);
@@ -131,8 +188,25 @@ export function fundir(guardado, novo, hoje) {
     return [...m.values()].filter((x) => x.dia >= limite).sort((x, y) => x.dia.localeCompare(y.dia));
   };
   const pesagem = (g, x) => (!g || g.hora === x.hora ? x : preferirPesagem(g, x, ehSamsung));
-  return { pesos: juntar(guardado?.pesos, novo.pesos, pesagem), sonos: juntar(guardado?.sonos, novo.sonos), atividades: juntar(guardado?.atividades, novo.atividades) };
+  // fase 6: o coletor manda `porHora` só nos últimos 14 dias, e o Relógio 1.6 não manda nada disso. O novo vence, mas o
+  // campo novo que faltar no envio fica o que já estava guardado (o sono só quando é a mesma noite: mesmo início)
+  const herdar = (campos, mesmo) => (g, x) => {
+    if (!g || !mesmo(g, x)) return x;
+    const y = { ...x };
+    for (const k of campos) if (y[k] == null && g[k] != null) y[k] = g[k];
+    return y;
+  };
+  // o envio é uma janela móvel (agora − 72 h): chega a hora em que a noite do dia já saiu dela e o cochilo da tarde ainda
+  // não. Esse lote traz o dia só com o cochilo, que começa depois do fim da noite guardada: aí o guardado (maior) fica.
+  // Sessão nova que se sobrepõe à guardada (a noite editada no Samsung Health) continua vencendo
+  const herdarSono = herdar(CAMPOS_SONO_F6, (g, x) => g.inicio === x.inicio);
+  const lotePerdeuANoite = (g, x) => g.inicio !== x.inicio && g.fim && x.inicio && x.inicio >= g.fim && (n(g.principal) ?? n(g.total) ?? 0) > (n(x.principal) ?? n(x.total) ?? 0);
+  const sono = (g, x) => (g && lotePerdeuANoite(g, x) ? g : herdarSono(g, x));
+  const atividade = herdar(CAMPOS_ATIVIDADE_F6, () => true);
+  return { pesos: juntar(guardado?.pesos, novo.pesos, pesagem), sonos: juntar(guardado?.sonos, novo.sonos, sono), atividades: juntar(guardado?.atividades, novo.atividades, atividade) };
 }
+const CAMPOS_SONO_F6 = ['etapas', 'fcMedia', 'fcMin', 'hrv'];
+const CAMPOS_ATIVIDADE_F6 = ['porHora', 'minAtivos'];
 
 // ============================================================
 // Recebimento (POST /relogio)

@@ -5,7 +5,8 @@
 name: android-app
 on:
   push:
-    branches: [app-fase1, app-fase2, app-fase3, main]
+    # só a main: a branch de trabalho e a main subindo o mesmo APK ao mesmo tempo apagavam um o arquivo do outro (404 no upload, 14/10)
+    branches: [main]
     paths: ['android/**', '.github/workflows/android-app.yml']
   workflow_dispatch:
 permissions:

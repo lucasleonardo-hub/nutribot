@@ -77,8 +77,20 @@ import br.nutribot.relogio.ui.AppVM
 import br.nutribot.relogio.ui.Carga
 import br.nutribot.relogio.ui.Formato
 import br.nutribot.relogio.ui.Rotas
+import br.nutribot.relogio.ui.componentes.AneisAtividade
 import br.nutribot.relogio.ui.componentes.AnelKcal
 import br.nutribot.relogio.ui.componentes.AnelNumero
+import br.nutribot.relogio.ui.componentes.BarrasPartes
+import br.nutribot.relogio.ui.componentes.CoresAtividade
+import br.nutribot.relogio.ui.componentes.GradeFatores
+import br.nutribot.relogio.ui.componentes.NotaGrande
+import br.nutribot.relogio.ui.componentes.NumeroMeta
+import br.nutribot.relogio.ui.componentes.SemanaAneis
+import br.nutribot.relogio.ui.componentes.TituloCartao
+import br.nutribot.relogio.ui.componentes.duracaoCurta
+import br.nutribot.relogio.ui.componentes.fracao
+import br.nutribot.relogio.ui.componentes.linhaDormiu
+import br.nutribot.relogio.ui.componentes.poseDaNota
 import br.nutribot.relogio.ui.componentes.BarraFaixa
 import br.nutribot.relogio.ui.componentes.BarraMacro
 import br.nutribot.relogio.ui.componentes.Brotinho
@@ -243,14 +255,25 @@ fun TelaHoje(vm: AppVM, perfisCarga: Carga, perfis: List<Perfil>, perfil: Perfil
 
     ConteudoCarga(
         carga,
-        aoRecarregar = { vm.carregar(rota, forcar = true) },
+        aoRecarregar = {
+            vm.carregar(rota, forcar = true)
+            // fase 6: os cartões Energia e Atividade buscam /energia e /atividade por conta própria; puxar pra atualizar
+            // refaz as duas também, senão o rótulo, os fatores e a semana ficavam da primeira busca
+            val jd = carga.dados
+            val diaIso = Formato.dia(jd.str("dia"))?.let { Formato.iso(it) }
+            if (jd != null && diaIso != null && (jd.has("sono") || jd.has("atividade"))) {
+                vm.carregar(AppVM.rotaEnergia(perfil.id, diaIso), forcar = true)
+                vm.carregar(AppVM.rotaAtividade(perfil.id, diaIso), forcar = true)
+            }
+        },
         topo = { SeletorPerfis(perfis, perfil, relogioEm, vm::escolherPerfil, nav) },
     ) { j -> ConteudoHoje(vm, j, perfil, nav) }
 }
 
 /**
- * Ordem do Hoje (fase 5): saudação → Como você está? → Calorias (o cartão-herói) → recados (carrossel) → Macros → Energia →
- * Notas → Brotinho → Refeições → Resumo da semana → Peso → relógio. Os cartões de resumo têm a mesma altura fechados.
+ * Ordem do Hoje (fase 6): saudação → Como você está? → Calorias (o cartão-herói) → recados (carrossel) → Macros → Energia →
+ * Sono → Atividade → Notas → Brotinho → Refeições → Resumo da semana → Peso (→ relógio, só com o servidor antigo).
+ * Os cartões de resumo têm a mesma altura fechados; Energia, Sono e Atividade abrem a tela de cada um.
  */
 @Composable
 private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String) -> Unit) {
@@ -297,8 +320,15 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
     // macros (cores fixas)
     CartaoMacros(j.obj("macros"))
 
-    // nota de energia
-    j.obj("energia")?.let { CartaoEnergia(it) }
+    // fase 6: energia (nota, rótulo, variação, fatores), sono e atividade (anéis); cada um abre a sua tela
+    // (servidor antigo, sem as chaves `sono`/`atividade`: ficam os três blocos do relógio lá embaixo, como antes)
+    val diaIso = Formato.iso(dia)
+    val fase6 = j.has("sono") || j.has("atividade")
+    CartaoEnergia(vm, perfil.id, diaIso, j.obj("energia"), fase6) { nav(Rotas.energia(diaIso)) }
+    if (fase6) {
+        CartaoSono(j.obj("sono"), j.obj("relogio")) { nav(Rotas.sono(diaIso)) }
+        CartaoAtividade(vm, perfil.id, diaIso, j.obj("atividade"), j.obj("relogio")) { nav(Rotas.atividade(diaIso)) }
+    }
 
     // notas do dia em anéis
     NotasDoDia(j, consumido, fMin, fMax)
@@ -358,9 +388,10 @@ private fun ConteudoHoje(vm: AppVM, j: JSONObject, perfil: Perfil, nav: (String)
     // peso com mini gráfico
     j.obj("peso")?.let { peso -> CartaoPeso(peso) { nav(Rotas.PROGRESSO) } }
 
-    // relógio: sono, passos, treino (três blocos pequenos, da mesma altura entre si); o Sono abre a folha das 14 noites (fase 4)
+    // relógio: sono, passos, treino (três blocos pequenos, da mesma altura entre si); o Sono abre a folha das 14 noites (fase 4).
+    // Fase 6: só aparece com o servidor antigo (sem `sono` nem `atividade` no /hoje); com o novo, os cartões acima tomam o lugar.
     var mostrarSono by rememberSaveable { mutableStateOf(false) }
-    j.obj("relogio")?.let { r ->
+    j.obj("relogio")?.takeIf { !fase6 }?.let { r ->
         val treinos = r.arr("treinos").objs()
         val treino = treinos.firstOrNull()?.let { t ->
             listOfNotNull(t.str("nome"), t.int("min")?.let { "$it min" }, t.str("hora")?.let { "às $it" }).joinToString(" · ")
@@ -580,51 +611,109 @@ private fun CartaoMacros(macros: JSONObject?) {
     }
 }
 
-/** energia: { nota, sono, recuperacao, carga, texto } — sono/recuperacao/carga podem vir como número (0–100) ou objeto { nota, texto }. */
+/**
+ * Energia (fase 6): número grande, rótulo em pílula, seta da variação, mascote pequeno e a grade de fatores com a pílula do
+ * nível. A nota vem do `/hoje` (energia.nota) e o resto do `/energia` do dia (rótulo, variação, fatores), buscado aqui; sem
+ * os fatores, ficam as três partes em barras. Tocar abre a tela Energia. `fase6` = o servidor já tem a rota /energia.
+ */
 @Composable
-private fun CartaoEnergia(e: JSONObject) {
-    val nota = e.num("nota")
-    fun parte(chave: String): Pair<Double?, String?> {
-        val o = e.obj(chave)
-        return if (o != null) (o.num("nota", "valor", "pct") to o.str("texto", "rotulo")) else (e.num(chave) to null)
+private fun CartaoEnergia(vm: AppVM, perfilId: String, diaIso: String, e: JSONObject?, fase6: Boolean, abrir: () -> Unit) {
+    val d: JSONObject? = if (fase6) {
+        val rota = AppVM.rotaEnergia(perfilId, diaIso)
+        val carga by vm.carga(rota).collectAsStateWithLifecycle()
+        LaunchedEffect(rota) { vm.carregar(rota) }
+        carga.dados
+    } else {
+        null
     }
-    val total = nota ?: 0.0
-    val boa = total >= 75
-    val media = total >= 60
-    val tinta = if (boa) Cores.GorduraTinta else if (media) Cores.CarboTinta else Cores.ProteinaTinta
-    val cor = if (boa) Cores.Verde else if (media) Color(0xFFFFC23D) else Cores.Proteina
-    val partes = listOf(Triple("Sono", "sono", Cores.LilasForte), Triple("Recuperação", "recuperacao", Cores.Gordura), Triple("Carga de ontem", "carga", Color(0xFFFFB59A)))
-        .map { (nome, chave, c) -> val (v, txt) = parte(chave); Triple(nome, v to txt, c) }
-        .filter { it.second.first != null || it.second.second != null }
-    val resumo = partes.joinToString(" · ") { (nome, vt, _) -> "${nome.substringBefore(" ").lowercase()} ${vt.second ?: vt.first?.let { Formato.inteiro(it) } ?: ""}" }.ifBlank { "sem detalhes hoje" }
-    val valor = nota?.let { "${Formato.inteiro(it)} de 100" + (if (boa) " · alta" else if (media) " · moderada" else " · baixa") } ?: "sem nota"
-    CartaoResumo(
-        "energia", "Energia", valor, resumo,
-        pincel = Brush.linearGradient(listOf(Color(0xFFFFF6DB), Color(0xFFFFE9F0))), atraso = 100,
-        visual = {
-            AnelNumero(
-                fracao = (total / 100).toFloat(), centro = nota?.let { Formato.inteiro(it) } ?: "—", selo = null,
-                cor = cor, trilho = Color.White.copy(alpha = 0.8f), miolo = Color.White, tinta = tinta,
-                rotulo = "Nota de energia ${nota?.let { Formato.inteiro(it) } ?: "sem dado"} de 100", tamanho = TamanhoVisual, espessuraRel = 0.14f,
-            )
-        },
+    val nota = e.num("nota") ?: d.num("nota")
+    if (e == null && nota == null) return
+    val fatores = d.arr("fatores").objs()
+    Cartao(
+        pincel = PincelEnergia, forma = Formas.Grande, padding = PaddingValues(18.dp), atraso = 100,
+        aoTocar = if (fase6) abrir else null, rotuloToque = "Abrir a energia",
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            partes.forEach { (nome, vt, c) ->
-                val (v, txt) = vt
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Row {
-                        Text(nome, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                        Text(txt ?: v?.let { Formato.inteiro(it) } ?: "", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta2, fontSize = 12.sp)
-                    }
-                    val f = animaAte(((v ?: 0.0) / 100).toFloat().coerceIn(0f, 1f), 900, 200)
-                    Box(Modifier.fillMaxWidth().height(8.dp).clip(Formas.Pilula).background(Color.White)) {
-                        Box(Modifier.fillMaxWidth(f).height(8.dp).clip(Formas.Pilula).background(c))
-                    }
-                }
+        if (fase6) TituloCartao("Energia") else Text("Energia", style = MaterialTheme.typography.titleMedium, color = Cores.Tinta3)
+        NotaGrande(nota, d.str("rotulo"), d.num("variacao"), nome = "Energia", pose = poseDaNota(nota), tamanhoNumero = 56.sp, alturaMascote = 60.dp)
+        if (fatores.isNotEmpty()) {
+            GradeFatores(fatores.take(4), "energiaHoje", Modifier.padding(top = 12.dp), comValor = false, comExplicacao = false, fundoCelula = Color.White.copy(alpha = 0.75f))
+            if (fatores.size > 4) Text("e mais ${fatores.size - 4} fatores", style = MaterialTheme.typography.bodySmall, color = Cores.Tinta3, modifier = Modifier.padding(top = 6.dp))
+        } else {
+            val partes = partesEnergia(d.obj("partes") ?: e).filter { it.second != null }
+            if (partes.isNotEmpty()) BarrasPartes(partes, Modifier.padding(top = 12.dp), trilho = Color.White)
+        }
+        (d.str("texto") ?: e.str("texto"))?.let { semZap(it) }?.takeIf { it.isNotBlank() }?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF4A3B00), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
+        }
+    }
+}
+
+/**
+ * Sono de hoje (fase 6): `hoje.sono` = { nota, rotulo, dormidoMin, inicio, fim } | null. Sem nota, fica a linha curta com o
+ * tempo dormido do relógio; sem nada, o cartão some. Tocar abre a tela Sono.
+ */
+@Composable
+private fun CartaoSono(s: JSONObject?, r: JSONObject?, abrir: () -> Unit) {
+    val dormido = s.num("dormidoMin") ?: r.num("sonoMin")
+    val nota = s.num("nota")
+    if (nota == null && (dormido ?: 0.0) <= 0) return
+    val linha = linhaDormiu(dormido, s.str("inicio"), s.str("fim"))
+    Cartao(
+        pincel = Brush.linearGradient(listOf(Cores.Trilho, Cores.Branco)), forma = Formas.Grande, padding = PaddingValues(18.dp), atraso = 110,
+        aoTocar = abrir, rotuloToque = "Abrir o sono",
+    ) {
+        TituloCartao("Sono")
+        if (nota != null) {
+            NotaGrande(nota, s.str("rotulo"), null, nome = "Sono", pose = Pose.CorgiDormindo, tamanhoNumero = 48.sp, alturaMascote = 56.dp)
+            linha?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2, modifier = Modifier.padding(top = 6.dp)) }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(linha ?: "dormiu ${duracaoCurta(dormido)}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Mascote(Pose.CorgiDormindo, 48.dp)
             }
         }
-        e.str("texto")?.let { semZap(it) }?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFF4A3B00), modifier = Modifier.padding(top = 10.dp)) }
+    }
+}
+
+/**
+ * Atividade de hoje (fase 6): três anéis concêntricos (passos, minutos ativos, kcal ativas), os três números com a meta
+ * embaixo e a semana em mini-anéis. Os números vêm do `hoje.atividade`; a semana, do `/atividade` do dia (buscado aqui).
+ * Sem nenhum número, o cartão some. Tocar abre a tela Atividade.
+ */
+@Composable
+private fun CartaoAtividade(vm: AppVM, perfilId: String, diaIso: String, a: JSONObject?, r: JSONObject?, abrir: () -> Unit) {
+    val rota = AppVM.rotaAtividade(perfilId, diaIso)
+    val carga by vm.carga(rota).collectAsStateWithLifecycle()
+    LaunchedEffect(rota) { vm.carregar(rota) }
+    val d = carga.dados
+    val passos = a.num("passos") ?: d.num("passos") ?: r.num("passos")
+    val metaP = (a.num("metaPassos") ?: d.num("metaPassos"))?.takeIf { it > 0 } ?: META_PASSOS
+    val minAtivos = a.num("minAtivos") ?: d.num("minAtivos")
+    val metaM = (a.num("metaMin") ?: d.num("metaMin"))?.takeIf { it > 0 } ?: META_MIN_ATIVOS
+    val kcalAtivas = a.num("kcalAtivas") ?: d.num("kcalAtivas")
+    val metaK = (a.num("metaKcal") ?: d.num("metaKcal"))?.takeIf { it > 0 } ?: META_KCAL_ATIVAS
+    if (passos == null && minAtivos == null && kcalAtivas == null) return
+    val semana = d.arr("semana").objs()
+    val tamanho = 150.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.2f)
+    Cartao(forma = Formas.Grande, padding = PaddingValues(18.dp), atraso = 120, aoTocar = abrir, rotuloToque = "Abrir a atividade") {
+        TituloCartao("Atividade")
+        Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) {
+            AneisAtividade(
+                fracao(passos, metaP), fracao(minAtivos, metaM), fracao(kcalAtivas, metaK), tamanho,
+                descricaoAneis(passos, metaP, minAtivos, metaM, kcalAtivas, metaK),
+            )
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NumeroMeta("Passos", passos, metaP, null, CoresAtividade.PassosTinta, Modifier.weight(1f))
+            NumeroMeta("Tempo ativo", minAtivos, metaM, "min", CoresAtividade.MinutosTinta, Modifier.weight(1f))
+            NumeroMeta("Kcal ativas", kcalAtivas, metaK, null, CoresAtividade.KcalTinta, Modifier.weight(1f))
+        }
+        // o treino do dia, que antes ficava no bloco do relógio
+        (r.arr("treinos").objs().firstOrNull() ?: d.arr("exercicios").objs().firstOrNull())?.let { t ->
+            listOfNotNull(t.str("nome"), t.num("min")?.takeIf { it > 0 }?.let { "${Formato.inteiro(it)} min" }, t.str("hora")?.let { "às $it" })
+                .joinToString(" · ").takeIf { it.isNotBlank() }
+        }?.let { Text("Treino: $it", style = MaterialTheme.typography.bodyMedium, color = Cores.Tinta2, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp)) }
+        if (semana.isNotEmpty()) SemanaAneis(semana, diaIso, Modifier.padding(top = 12.dp))
     }
 }
 

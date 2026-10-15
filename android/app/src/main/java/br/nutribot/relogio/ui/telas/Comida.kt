@@ -79,7 +79,11 @@ import br.nutribot.relogio.ui.componentes.Vazio
 import br.nutribot.relogio.ui.componentes.animaAte
 import br.nutribot.relogio.ui.componentes.tracejado
 import br.nutribot.relogio.ui.icone
+import br.nutribot.relogio.ui.telas.comida.DistribuicaoMacros
 import br.nutribot.relogio.ui.telas.comida.FolhaAjustar
+import br.nutribot.relogio.ui.telas.comida.distribuicaoDeGramas
+import br.nutribot.relogio.ui.telas.comida.distribuicaoDeJson
+import br.nutribot.relogio.ui.telas.comida.distribuicaoDoObjetivo
 import br.nutribot.relogio.ui.telas.comida.FolhaRegistrar
 import br.nutribot.relogio.ui.telas.comida.Imagens
 import br.nutribot.relogio.ui.tema.Cores
@@ -158,6 +162,13 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
         val kcalHoje = hojeCarga.dados.obj("kcal")
         val faixa = if (ehHoje) kcalHoje.obj("faixa") else null
         val total = d?.kcal ?: d?.refeicoes?.sumOf { it.kcal ?: 0.0 }
+        val gP = d?.p ?: d?.refeicoes?.sumOf { it.p ?: 0.0 }
+        val gC = d?.c ?: d?.refeicoes?.sumOf { it.c ?: 0.0 }
+        val gG = d?.g ?: d?.refeicoes?.sumOf { it.g ?: 0.0 }
+        // fase 6: a distribuição real sai dos gramas do dia mostrado; no dia de hoje, sem gramas, a do /hoje
+        val distHoje = hojeCarga.dados.obj("macros").obj("distribuicao")
+        val distReal = distribuicaoDeGramas(gP, gC, gG) ?: (if (ehHoje) distribuicaoDeJson(distHoje.obj("real")) else null)
+        val distRec = distribuicaoDeJson(distHoje.obj("recomendada")) ?: distribuicaoDoObjetivo(perfil.objetivo)
         Cartao(forma = Formas.Medio, padding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(if (ehHoje) "Hoje" else Formato.diaLongo(sel).replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
@@ -188,9 +199,9 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(
-                    Triple("Proteína", d?.p ?: d?.refeicoes?.sumOf { it.p ?: 0.0 }, Cores.ProteinaTrilho to Cores.ProteinaTinta),
-                    Triple("Carboidrato", d?.c ?: d?.refeicoes?.sumOf { it.c ?: 0.0 }, Cores.CarboTrilho to Cores.CarboTinta),
-                    Triple("Gordura", d?.g ?: d?.refeicoes?.sumOf { it.g ?: 0.0 }, Cores.GorduraTrilho to Cores.GorduraTinta),
+                    Triple("Proteína", gP, Cores.ProteinaTrilho to Cores.ProteinaTinta),
+                    Triple("Carboidrato", gC, Cores.CarboTrilho to Cores.CarboTinta),
+                    Triple("Gordura", gG, Cores.GorduraTrilho to Cores.GorduraTinta),
                 ).forEach { (nome, g, cores) ->
                     Column(Modifier.weight(1f).clip(Formas.Pequeno).background(cores.first).padding(horizontal = 10.dp, vertical = 8.dp)) {
                         Text(nome, style = MaterialTheme.typography.labelSmall, color = cores.second)
@@ -198,6 +209,7 @@ fun TelaComida(vm: AppVM, perfil: Perfil?, diaInicial: String?, refeicaoAberta: 
                     }
                 }
             }
+            if (distReal != null) DistribuicaoMacros(distReal, distRec, Modifier.padding(top = 12.dp))
             Botao("Registrar refeição", Modifier.fillMaxWidth().padding(top = 12.dp)) { slotRegistrar = null; registrar = true }
         }
         // fase 4: a sugestão da IA para a próxima refeição, só no dia de hoje

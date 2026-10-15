@@ -9,11 +9,13 @@ import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.LeanBodyMassRecord
+import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.WeightRecord
+import androidx.health.connect.client.request.AggregateGroupByDurationRequest
 import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
@@ -28,6 +30,9 @@ import java.time.LocalTime
 import java.time.Period
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.reflect.KClass
 
 /** Lê o Health Connect e monta o JSON que o bot espera em POST /relogio. */
 object Leitor {
@@ -44,6 +49,15 @@ object Leitor {
         HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class),
         HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND,
     )
+
+    /** Máximo de etapas por sessão de sono no envio (o contrato da fase 6 fixa 200). */
+    private const val MAX_ETAPAS = 200
+
+    /** Dias mais recentes que levam o detalhe por hora e os minutos ativos (hoje e os 13 anteriores). */
+    private const val DIAS_DETALHE = 14L
+
+    /** Cadência mínima (passos por minuto) para o minuto contar como ativo. */
+    private const val CADENCIA_ATIVA = 60f
 
     fun disponivel(context: Context): Boolean =
         HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE
@@ -80,8 +94,25 @@ object Leitor {
             })
         }
 
+        // Leituras feitas uma vez só e usadas em mais de um lugar (sono, repouso, dias, minutos ativos).
+        val sessoesSono = client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, faixa)).records
+        val sessoesExercicio = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, faixa)).records
+        val amostrasPorDia = HashMap<LocalDate, MutableList<Pair<Instant, Long>>>()
+        for (r in lerTodos(client, HeartRateRecord::class, faixa)) {
+            for (s in r.samples) amostrasPorDia.getOrPut(s.time.atZone(zona).toLocalDate()) { ArrayList() }.add(s.time to s.beatsPerMinute)
+        }
+        val registrosHrv = lerTodos(client, HeartRateVariabilityRmssdRecord::class, faixa)
+        // séries ordenadas uma vez, para recortar por sessão de sono com busca binária
+        val serieFc = amostrasPorDia.values.flatten().let { l ->
+            Serie(LongArray(l.size) { l[it].first.toEpochMilli() }, DoubleArray(l.size) { l[it].second.toDouble() })
+        }
+        val serieHrv = Serie(
+            LongArray(registrosHrv.size) { registrosHrv[it].time.toEpochMilli() },
+            DoubleArray(registrosHrv.size) { registrosHrv[it].heartRateVariabilityMillis },
+        )
+
         val sonos = JSONArray()
-        for (r in client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, faixa)).records) {
+        for (r in sessoesSono) {
             var leve = 0L; var profundo = 0L; var rem = 0L; var acordado = 0L
             for (s in r.stages) {
                 val min = Duration.between(s.startTime, s.endTime).toMinutes()
@@ -98,6 +129,28 @@ object Leitor {
                 put("fim", iso.format(r.endTime))
                 put("leve", leve); put("profundo", profundo); put("rem", rem); put("acordado", acordado)
                 put("fonte", r.metadata.dataOrigin.packageName)
+                // fase 6 (opcionais): estágios ao longo da noite, batimento e VFC dentro da sessão
+                opcional { etapasDaSessao(r) }?.takeIf { it.isNotEmpty() }?.let { lista ->
+                    put("etapas", JSONArray().apply {
+                        for (e in lista) put(JSONObject().apply {
+                            put("i", iso.format(e.ini.truncatedTo(ChronoUnit.SECONDS)))
+                            put("f", iso.format(e.fim.truncatedTo(ChronoUnit.SECONDS)))
+                            put("t", e.t)
+                        })
+                    })
+                }
+                // batimento e VFC só lidos a partir de `inicio`: sessão que começou antes da faixa daria a média só
+                // da cauda da noite, e o servidor trocaria o valor certo guardado por ele (mesmo início)
+                if (!r.startTime.isBefore(inicio)) {
+                    val fc = serieFc.entre(r.startTime, r.endTime).filter { it in 30.0..200.0 }
+                    if (fc.size >= 10) {
+                        put("fcMedia", Math.round(fc.average()))
+                        put("fcMin", Math.round(fc.min()))
+                    }
+                    serieHrv.entre(r.startTime, r.endTime).filter { it in 1.0..300.0 }.takeIf { it.isNotEmpty() }?.let {
+                        put("hrv", Math.round(it.average()))
+                    }
+                }
             })
         }
 
@@ -120,11 +173,6 @@ object Leitor {
         for (r in client.readRecords(ReadRecordsRequest(RestingHeartRateRecord::class, faixa)).records) {
             fcPorDia[r.time.atZone(zona).toLocalDate()] = r.beatsPerMinute
         }
-        val amostrasPorDia = HashMap<LocalDate, MutableList<Pair<Instant, Long>>>()
-        for (r in client.readRecords(ReadRecordsRequest(HeartRateRecord::class, faixa)).records) {
-            for (s in r.samples) amostrasPorDia.getOrPut(s.time.atZone(zona).toLocalDate()) { ArrayList() }.add(s.time to s.beatsPerMinute)
-        }
-        val sessoesSono = client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, faixa)).records
         for ((dia, amostras) in amostrasPorDia) {
             if (fcPorDia.containsKey(dia) || amostras.size < 10) continue
             val noite = sessoesSono.filter { it.endTime.atZone(zona).toLocalDate() == dia }.maxByOrNull { Duration.between(it.startTime, it.endTime) }
@@ -137,9 +185,26 @@ object Leitor {
             if (repouso in 30..120) fcPorDia[dia] = repouso
         }
         val hrvPorDia = HashMap<LocalDate, MutableList<Double>>()
-        for (r in client.readRecords(ReadRecordsRequest(HeartRateVariabilityRmssdRecord::class, faixa)).records) {
+        for (r in registrosHrv) {
             hrvPorDia.getOrPut(r.time.atZone(zona).toLocalDate()) { ArrayList() }.add(r.heartRateVariabilityMillis)
         }
+
+        // fase 6 (opcionais): passos e gasto por hora e minutos ativos, só nos dias mais recentes.
+        // Uma falha aqui não derruba o envio: os campos antigos saem do mesmo jeito.
+        val primeiroDetalhe = hoje.minusDays(minOf(dias, DIAS_DETALHE - 1))
+        val porHora: Map<LocalDate, JSONObject> = opcional {
+            lerPorHora(client, zona, primeiroDetalhe.atStartOfDay(zona).toInstant(), hoje.plusDays(1).atStartOfDay(zona).toInstant())
+        } ?: emptyMap()
+        // minutos ativos só nos dias inteiros dentro da faixa lida (os exercícios vêm de `faixa`); um dia cortado
+        // mandaria um número menor e o servidor, que funde por dia, trocaria o valor certo pelo errado
+        var primeiroMinutos = primeiroDetalhe
+        while (primeiroMinutos.atStartOfDay(zona).toInstant().isBefore(inicio)) primeiroMinutos = primeiroMinutos.plusDays(1)
+        val minAtivos: Map<LocalDate, Int> = opcional {
+            val ini = primeiroMinutos.atStartOfDay(zona).toInstant()
+            if (!ini.isBefore(agora)) emptyMap()
+            else minutosAtivosPorDia(lerTodos(client, StepsRecord::class, TimeRangeFilter.between(ini, agora)), sessoesExercicio, primeiroMinutos, hoje, zona)
+        } ?: emptyMap()
+
         for (g in porDia) {
             val dia = g.startTime.toLocalDate()
             val passos = g.result[StepsRecord.COUNT_TOTAL]
@@ -152,11 +217,13 @@ object Leitor {
                 kcal?.let { put("calorias", arred(it, 0)) }
                 fcPorDia[dia]?.let { put("fcRepouso", it) }
                 hrv?.let { put("hrv", arred(it, 0)) }
+                porHora[dia]?.let { put("porHora", it) }
+                minAtivos[dia]?.let { put("minAtivos", it) }
             })
         }
 
         val treinos = JSONArray()
-        for (r in client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, faixa)).records) {
+        for (r in sessoesExercicio) {
             // média de batimentos na sessão (passeio ou esforço de verdade?), pelo agregado do próprio Health Connect
             val fcMedia = runCatching {
                 client.aggregate(AggregateRequest(setOf(HeartRateRecord.BPM_AVG), TimeRangeFilter.between(r.startTime, r.endTime)))[HeartRateRecord.BPM_AVG]
@@ -176,6 +243,192 @@ object Leitor {
             put("fuso", zona.id)
             put("enviadoEm", iso.format(agora))
             put("pesos", pesos); put("sonos", sonos); put("dias", diasJson); put("treinos", treinos)
+        }
+    }
+
+    /** Lê todas as páginas (o padrão do Health Connect devolve só as 1.000 primeiras). Teto de páginas por segurança. */
+    private suspend fun <T : Record> lerTodos(client: HealthConnectClient, tipo: KClass<T>, faixa: TimeRangeFilter, maxPaginas: Int = 20): List<T> {
+        val tudo = ArrayList<T>()
+        var token: String? = null
+        var paginas = 0
+        do {
+            val resp = client.readRecords(ReadRecordsRequest(recordType = tipo, timeRangeFilter = faixa, pageSize = 5000, pageToken = token))
+            tudo.addAll(resp.records)
+            token = resp.pageToken?.takeIf { it.isNotEmpty() }
+            paginas++
+        } while (token != null && paginas < maxPaginas)
+        return tudo
+    }
+
+    /** Executa um trecho opcional: qualquer erro vira null (o cancelamento da corrotina continua subindo). */
+    private inline fun <T> opcional(bloco: () -> T): T? = try {
+        bloco()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Passos e gasto total em fatias de 1 hora, no fuso do celular: { dia: { passos: [24], kcal: [24] } }. */
+    private suspend fun lerPorHora(client: HealthConnectClient, zona: ZoneId, ini: Instant, fim: Instant): Map<LocalDate, JSONObject> {
+        val grupos = client.aggregateGroupByDuration(
+            AggregateGroupByDurationRequest(
+                metrics = setOf(StepsRecord.COUNT_TOTAL, TotalCaloriesBurnedRecord.ENERGY_TOTAL),
+                timeRangeFilter = TimeRangeFilter.between(ini, fim),
+                timeRangeSlicer = Duration.ofHours(1),
+            )
+        )
+        val passos = HashMap<LocalDate, LongArray>()
+        val kcal = HashMap<LocalDate, DoubleArray>()
+        for (g in grupos) {
+            // hora local de início da fatia; na troca de horário de verão duas fatias caem na mesma hora e somam
+            val local = g.startTime.atZone(zona)
+            val dia = local.toLocalDate()
+            val h = local.hour
+            g.result[StepsRecord.COUNT_TOTAL]?.let { passos.getOrPut(dia) { LongArray(24) }[h] += it }
+            g.result[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories?.let { kcal.getOrPut(dia) { DoubleArray(24) }[h] += it }
+        }
+        val saida = HashMap<LocalDate, JSONObject>()
+        for (dia in passos.keys + kcal.keys) {
+            val p = passos[dia] ?: LongArray(24)
+            val k = kcal[dia] ?: DoubleArray(24)
+            saida[dia] = JSONObject().apply {
+                put("passos", JSONArray().apply { for (v in p) put(maxOf(0L, v)) })
+                put("kcal", JSONArray().apply { for (v in k) put(maxOf(0L, Math.round(v))) })
+            }
+        }
+        return saida
+    }
+
+    /**
+     * Minutos ativos por dia: minutos com cadência >= 60 passos/min (dos registros brutos de passos) unidos aos minutos
+     * dentro de exercícios. Grade de 1 posição por minuto, de `primeiro` 00:00 até o fim de `ultimo`; custo linear.
+     * Cada registro de passos espalha a contagem igualmente pelos minutos que cobre. Com mais de uma fonte (relógio e
+     * celular), vale a maior por minuto, para não contar o mesmo passo duas vezes.
+     */
+    private fun minutosAtivosPorDia(
+        registros: List<StepsRecord>,
+        exercicios: List<ExerciseSessionRecord>,
+        primeiro: LocalDate,
+        ultimo: LocalDate,
+        zona: ZoneId,
+    ): Map<LocalDate, Int> {
+        val base = primeiro.atStartOfDay(zona).toInstant().epochSecond / 60
+        val n = (ultimo.plusDays(1).atStartOfDay(zona).toInstant().epochSecond / 60 - base).toInt()
+        if (n <= 0) return emptyMap()
+        val porFonte = HashMap<String, FloatArray>()
+        for (r in registros) {
+            val s = r.startTime.epochSecond
+            val e = r.endTime.epochSecond
+            val grade = porFonte.getOrPut(r.metadata.dataOrigin.packageName) { FloatArray(n) }
+            if (e <= s) {
+                val m = (s / 60 - base).toInt()
+                if (m in 0 until n) grade[m] += r.count.toFloat()
+                continue
+            }
+            val total = (e - s).toFloat()
+            val m0 = maxOf(s / 60, base)
+            val m1 = minOf((e - 1) / 60, base + n - 1)
+            var m = m0
+            while (m <= m1) {
+                val sobre = minOf(e, (m + 1) * 60) - maxOf(s, m * 60)
+                if (sobre > 0) grade[(m - base).toInt()] += r.count * (sobre / total)
+                m++
+            }
+        }
+        val ativo = BooleanArray(n)
+        for (grade in porFonte.values) {
+            for (i in 0 until n) if (grade[i] >= CADENCIA_ATIVA - 0.01f) ativo[i] = true
+        }
+        for (x in exercicios) {
+            val m0 = maxOf(x.startTime.epochSecond / 60, base)
+            val m1 = minOf((x.endTime.epochSecond - 1) / 60, base + n - 1)
+            var m = m0
+            while (m <= m1) { ativo[(m - base).toInt()] = true; m++ }
+        }
+        val saida = HashMap<LocalDate, Int>()
+        var dia = primeiro
+        while (!dia.isAfter(ultimo)) {
+            val a = (dia.atStartOfDay(zona).toInstant().epochSecond / 60 - base).toInt().coerceIn(0, n)
+            val b = (dia.plusDays(1).atStartOfDay(zona).toInstant().epochSecond / 60 - base).toInt().coerceIn(0, n)
+            var c = 0
+            for (i in a until b) if (ativo[i]) c++
+            saida[dia] = c.coerceAtMost(1440)
+            dia = dia.plusDays(1)
+        }
+        return saida
+    }
+
+    private class Etapa(val ini: Instant, var fim: Instant, var t: String)
+
+    private fun tipoEtapa(estagio: Int): String? = when (estagio) {
+        SleepSessionRecord.STAGE_TYPE_LIGHT, SleepSessionRecord.STAGE_TYPE_SLEEPING -> "leve"
+        SleepSessionRecord.STAGE_TYPE_DEEP -> "profundo"
+        SleepSessionRecord.STAGE_TYPE_REM -> "rem"
+        SleepSessionRecord.STAGE_TYPE_AWAKE, SleepSessionRecord.STAGE_TYPE_AWAKE_IN_BED, SleepSessionRecord.STAGE_TYPE_OUT_OF_BED -> "acordado"
+        else -> null
+    }
+
+    /**
+     * Estágios da sessão em ordem, com vizinhos do mesmo tipo juntados. Se passar de MAX_ETAPAS, estágios curtos
+     * (2, 4, 8, 16 min) viram o tipo do anterior e juntam de novo; no fim, corta em MAX_ETAPAS.
+     */
+    private fun etapasDaSessao(r: SleepSessionRecord): List<Etapa> {
+        var lista = juntarVizinhas(
+            r.stages.sortedBy { it.startTime }.mapNotNull { s ->
+                tipoEtapa(s.stage)?.takeIf { s.endTime.isAfter(s.startTime) }?.let { Etapa(s.startTime, s.endTime, it) }
+            }
+        )
+        var limiar = Duration.ofMinutes(2)
+        while (lista.size > MAX_ETAPAS && limiar <= Duration.ofMinutes(16)) {
+            for (k in 1 until lista.size) {
+                if (Duration.between(lista[k].ini, lista[k].fim) < limiar) lista[k].t = lista[k - 1].t
+            }
+            lista = juntarVizinhas(lista)
+            limiar = limiar.multipliedBy(2)
+        }
+        return lista.take(MAX_ETAPAS)
+    }
+
+    /** Junta estágios seguidos do mesmo tipo (tolera 1 min de buraco entre eles). */
+    private fun juntarVizinhas(lista: List<Etapa>): List<Etapa> {
+        val saida = ArrayList<Etapa>(lista.size)
+        for (e in lista) {
+            val u = saida.lastOrNull()
+            if (u != null && u.t == e.t && !e.ini.isAfter(u.fim.plusSeconds(60))) {
+                if (e.fim.isAfter(u.fim)) u.fim = e.fim
+            } else {
+                saida.add(Etapa(e.ini, e.fim, e.t))
+            }
+        }
+        return saida
+    }
+
+    /** Série de valores no tempo, ordenada uma vez; `entre` recorta um intervalo fechado por busca binária. */
+    private class Serie(tempos: LongArray, valores: DoubleArray) {
+        private val t: LongArray
+        private val v: DoubleArray
+
+        init {
+            val ordem = tempos.indices.sortedBy { tempos[it] }
+            t = LongArray(ordem.size) { tempos[ordem[it]] }
+            v = DoubleArray(ordem.size) { valores[ordem[it]] }
+        }
+
+        fun entre(ini: Instant, fim: Instant): List<Double> {
+            val a = primeiroMaiorOuIgual(ini.toEpochMilli())
+            val b = primeiroMaiorOuIgual(fim.toEpochMilli() + 1)
+            return if (b > a) v.copyOfRange(a, b).asList() else emptyList()
+        }
+
+        private fun primeiroMaiorOuIgual(x: Long): Int {
+            var lo = 0
+            var hi = t.size
+            while (lo < hi) {
+                val m = (lo + hi) ushr 1
+                if (t[m] < x) lo = m + 1 else hi = m
+            }
+            return lo
         }
     }
 

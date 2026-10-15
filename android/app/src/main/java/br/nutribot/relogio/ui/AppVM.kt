@@ -304,6 +304,12 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         fun rotaDias(id: String, de: String, ate: String) = "/perfis/$id/dias?de=$de&ate=$ate"
         /** Fase 4: o último plano da semana que a Nutri mandou. */
         fun rotaPlano(id: String) = "/perfis/$id/plano"
+        /** Fase 6: sono de uma noite (nota, fases, etapas, fatores, semana). */
+        fun rotaSono(id: String, dia: String? = null) = "/perfis/$id/sono" + (dia?.let { "?dia=$it" } ?: "")
+        /** Fase 6: energia do dia (nota, partes, fatores, semana). */
+        fun rotaEnergia(id: String, dia: String? = null) = "/perfis/$id/energia" + (dia?.let { "?dia=$it" } ?: "")
+        /** Fase 6: atividade do dia (anéis, por hora, exercícios, semana). */
+        fun rotaAtividade(id: String, dia: String? = null) = "/perfis/$id/atividade" + (dia?.let { "?dia=$it" } ?: "")
         /** Fase 5: pergunta rápida à Nutri: POST { texto, anteriores } -> { resposta, geradaEm }. */
         fun rotaPerguntar(id: String) = "/perfis/$id/perguntar"
         /** Fase 4: sugestão da IA para a próxima refeição (slot opcional). */

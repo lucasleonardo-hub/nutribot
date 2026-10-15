@@ -56,6 +56,9 @@ import br.nutribot.relogio.ui.telas.FolhaPerguntar
 import br.nutribot.relogio.ui.telas.Legado
 import br.nutribot.relogio.ui.telas.rememberTrocas
 import br.nutribot.relogio.ui.telas.TelaAgenda
+import br.nutribot.relogio.ui.telas.TelaAtividade
+import br.nutribot.relogio.ui.telas.TelaEnergia
+import br.nutribot.relogio.ui.telas.TelaSono
 import br.nutribot.relogio.ui.telas.TelaComida
 import br.nutribot.relogio.ui.telas.TelaCorpo
 import br.nutribot.relogio.ui.telas.TelaHoje
@@ -79,6 +82,11 @@ object Rotas {
     const val INTEGRACOES = "integracoes"
     /** Comida aberta num dia e numa refeição (vinda do Hoje). */
     fun comida(dia: String? = null, refeicao: String? = null) = "comida?dia=${dia ?: ""}&ref=${refeicao ?: ""}"
+
+    /** Fase 6: telas de detalhe abertas do Hoje; `dia` = o hoje da pessoa (o limite das setas), vazio = hoje no fuso dela. */
+    fun sono(dia: String? = null) = "sono?dia=${dia ?: ""}"
+    fun energia(dia: String? = null) = "energia?dia=${dia ?: ""}"
+    fun atividade(dia: String? = null) = "atividade?dia=${dia ?: ""}"
 }
 
 /** Ícone a partir de um "d" de SVG 24x24 com traço (os mesmos da barra do protótipo). */
@@ -160,6 +168,15 @@ fun NutriApp(vm: AppVM, legado: Legado, rotaInicial: String?) {
             composable(Rotas.AGENDA) { TelaAgenda(vm, perfil, voltar = { nav.popBackStack() }) }
             composable(Rotas.RESUMOS) { TelaResumos(vm, perfil, voltar = { nav.popBackStack() }) }
             composable(Rotas.INTEGRACOES) { TelaIntegracoes(vm, legado, voltar = { nav.popBackStack() }) }
+            composable("sono?dia={dia}", arguments = listOf(navArgument("dia") { defaultValue = "" })) { e ->
+                TelaSono(vm, perfil, e.arguments?.getString("dia")?.takeIf { it.isNotBlank() }, voltar = { nav.popBackStack() })
+            }
+            composable("energia?dia={dia}", arguments = listOf(navArgument("dia") { defaultValue = "" })) { e ->
+                TelaEnergia(vm, perfil, e.arguments?.getString("dia")?.takeIf { it.isNotBlank() }, voltar = { nav.popBackStack() }, nav = { nav.navigate(it) })
+            }
+            composable("atividade?dia={dia}", arguments = listOf(navArgument("dia") { defaultValue = "" })) { e ->
+                TelaAtividade(vm, perfil, e.arguments?.getString("dia")?.takeIf { it.isNotBlank() }, voltar = { nav.popBackStack() })
+            }
         }
         AnimatedVisibility(
             mostrarAbas,

@@ -167,8 +167,16 @@ test('hoje: os números batem com o !progresso e a visão do !hoje (mesmos dados
   const pes = pesagens();
   const s = saude();
   const h = M.montarHoje({ perfil, dia: DIA, hoje: DIA, horaAgora: '13:50', refeicoes: refs, pesagens: pes, saude: s, treinos: [], termosLocal: M.termosDeLugar([perfil]) });
-  assert.deepEqual(Object.keys(h), ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana', 'humor', 'eventos']);
+  assert.deepEqual(Object.keys(h), ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana', 'humor', 'eventos', 'atividade', 'sono']);
   assert.deepEqual(ida(h), h, 'só JSON puro');
+
+  // fase 6: anéis, sono e distribuição dos macros. Basal Mifflin (75 kg, 178 cm, sem idade = 30, sem gênero = −78) = 1635;
+  // o último envio foi às 13:40 locais, então a basal conta 820 de 1440 minutos: 2600 − 1635 × 820/1440 = 1669
+  assert.deepEqual(h.atividade, { passos: 7000, metaPassos: 8000, minAtivos: 0, metaMin: 60, kcalAtivas: 1669, metaKcal: 500 });
+  assert.deepEqual(h.sono, { nota: 100, rotulo: 'excelente', dormidoMin: 455, inicio: '23:30', fim: '07:05' });
+  // café de hoje: 32 g de proteína, 75 de carbo e 20 de gordura = 128 + 300 + 180 kcal
+  assert.deepEqual(h.macros.distribuicao, { real: { c: 49, g: 30, p: 21 }, recomendada: { c: 50, g: 25, p: 25 } });
+  confereHojeF6(h);
 
   // a mesma análise que o !progresso e o !hoje montam (acompanhamento.progressoDe com os dados de 31 dias)
   const a = await progressoDe(perfil, DIA, { refeicoes: janela31(refs), pesagens: janela31(pes) });
@@ -220,6 +228,8 @@ test('hoje sem relógio e sem dados: tudo null/vazio onde não há base, brotinh
   assert.equal(h.peso, null);
   assert.equal(h.relogio, null);
   assert.equal(h.energia, null);
+  assert.deepEqual([h.atividade, h.sono], [null, null]); // fase 6: sem relógio, sem anéis nem sono
+  assert.deepEqual(h.macros.distribuicao, { real: { c: 0, g: 0, p: 0 }, recomendada: { c: 50, g: 30, p: 20 } }); // manter = manutenção
   assert.deepEqual(h.brotinho, { dias: 0, murcho: true });
   assert.equal(h.resumoSemana, null);
   assert.deepEqual(h.pendentes, []); // 09:00: o café padrão (08:30) + 75 min ainda não passou
@@ -311,9 +321,13 @@ test('corpo: composição das pesagens com gordura (+ documento que não virou p
     sugestoesCarga: [{ id: 's1', exercicio: 'Agachamento', deKg: 80, deReps: 8, paraKg: 82.5, paraReps: 10, feitaEm: somarDias(DIA, -9), status: 'aberta', tentativas: 0 }],
   });
   const c = M.montarCorpo({ perfil, dia: DIA, pesagens: pesagens(), refeicoes: refeicoes(), saude: saude(), treinos, catalogo, temHevy: true });
-  assert.deepEqual(Object.keys(c), ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'rotina', 'medidas']);
+  assert.deepEqual(Object.keys(c), ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'rotina', 'treinos', 'medidas']);
   assert.ok(Array.isArray(c.rotina));
   c.rotina.forEach((d) => { confere(d, 'DiaRotina'); d.exercicios.forEach((e) => confere(e, 'ExercicioRotina')); });
+  // fase 6: as 7 sessões "Treino A" viram uma caixa
+  assert.equal(c.treinos.length, 1);
+  confereTreino(c.treinos[0]);
+  assert.deepEqual([c.treinos[0].id, c.treinos[0].titulo, c.treinos[0].sessoes8sem], ['treino-a', 'Treino A', 7]);
   assert.deepEqual(ida(c), c);
   const doc = c.composicao.find((x) => x.fonte === 'documento');
   assert.deepEqual(doc, { dia: '2029-11-20', hora: null, fonte: 'documento', peso: 70, gordura: 17, magra: 58.1, confianca: 'alta' });
@@ -339,7 +353,7 @@ test('corpo: composição das pesagens com gordura (+ documento que não virou p
 
 test('corpo sem Hevy: treino e força null, sem sugestões', () => {
   const c = M.montarCorpo({ perfil: perfilBase(), dia: DIA, pesagens: [], refeicoes: [], temHevy: false });
-  assert.deepEqual(c, { composicao: [], atual: null, ritmo: null, treino: null, forca: null, sugestoesCarga: [], contextoTreino: { energia: null, sonoMin: null, comida: null, texto: 'Sem dados do relógio hoje: siga as sugestões como estão.' }, rotina: [], medidas: [] });
+  assert.deepEqual(c, { composicao: [], atual: null, ritmo: null, treino: null, forca: null, sugestoesCarga: [], contextoTreino: { energia: null, sonoMin: null, comida: null, texto: 'Sem dados do relógio hoje: siga as sugestões como estão.' }, rotina: [], treinos: [], medidas: [] });
 });
 
 test('semZap: tira a marcação do WhatsApp e os emojis; com markdown o negrito vira **; listas com • viram -', () => {
@@ -586,7 +600,34 @@ test('avisos: rótulo em caixa alta sai; rápido demais = cuidado; sono e treino
 // ---------- I4: todas as chaves do contrato, sempre (com null quando falta), em dados mínimos ----------
 const ESQUEMA = {
   Perfil: ['id', 'nome', 'primeiroNome', 'apelido', 'fuso', 'objetivo', 'metaPeso', 'metaPrazo', 'temRelogio', 'temHevy', 'ehDono', 'altura', 'ritmo'],
-  Hoje: ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana', 'humor', 'eventos'],
+  // fase 6: atividade (anéis) e sono no Hoje; distribuição dos macros dentro de macros
+  Hoje: ['dia', 'fuso', 'agora', 'kcal', 'macros', 'refeicoes', 'pendentes', 'peso', 'relogio', 'energia', 'avisos', 'brotinho', 'resumoSemana', 'humor', 'eventos', 'atividade', 'sono'],
+  Macros: ['proteina', 'carbo', 'gordura', 'distribuicao'],
+  Distribuicao: ['real', 'recomendada'],
+  MacrosPct: ['c', 'g', 'p'],
+  AnelAtividade: ['passos', 'metaPassos', 'minAtivos', 'metaMin', 'kcalAtivas', 'metaKcal'],
+  SonoHoje: ['nota', 'rotulo', 'dormidoMin', 'inicio', 'fim'],
+  // fase 6: GET /sono, /energia, /atividade
+  Sono: ['dia', 'nota', 'rotulo', 'variacao', 'inicio', 'fim', 'emCamaMin', 'dormidoMin', 'latenciaMin', 'fases', 'tipicas', 'etapas', 'fcMedia', 'fcMin', 'hrv', 'fatores', 'semana', 'texto'],
+  Fases: ['acordado', 'rem', 'leve', 'profundo'],
+  FaseSono: ['min', 'pct'],
+  FaixaTipica: ['min', 'max'],
+  EtapaSono: ['ini', 'fim', 't'],
+  Fator: ['id', 'nome', 'valor', 'nivel', 'explicacao'],
+  DiaSono: ['dia', 'nota', 'dormidoMin'],
+  EnergiaDetalhe: ['dia', 'nota', 'rotulo', 'variacao', 'partes', 'fatores', 'semana', 'texto'],
+  PartesEnergia: ['sono', 'recuperacao', 'carga'],
+  DiaEnergia: ['dia', 'nota'],
+  Atividade: ['dia', 'passos', 'metaPassos', 'minAtivos', 'metaMin', 'kcalAtivas', 'metaKcal', 'kcalTotal', 'kcalAtivasEstimada', 'porHora', 'picoHora', 'exercicios', 'semana'],
+  PorHora: ['passos', 'kcal'],
+  ExercicioAtividade: ['nome', 'hora', 'min', 'kcal', 'fcMedia'],
+  DiaAtividade: ['dia', 'passosPct', 'minPct', 'kcalPct'],
+  // fase 6: Corpo.treinos (caixas por título)
+  TreinoCaixa: ['id', 'titulo', 'dias', 'ultimaData', 'sessoes8sem', 'duracaoMin', 'grupos', 'proxima', 'exercicios'],
+  Proxima: ['acao', 'resumo'],
+  ExercicioTreino: ['nome', 'grupo', 'series', 'ultimoKg', 'ultimasReps', 'sugeridoKg', 'deltaKg', 'sugeridasReps', 'acao', 'motivo', 'frase', 'historico'],
+  SerieTreino: ['kg', 'reps'],
+  HistoricoTreino: ['dia', 'kg', 'reps'],
   Kcal: ['consumido', 'faixa', 'err', 'situacao'],
   Macro: ['g', 'meta'],
   // fase 2: dia, incerteza, miniatura e itens com macros (o ajuste por gramas parte deles)
@@ -604,7 +645,7 @@ const ESQUEMA = {
   DiaRefeicoes: ['dia', 'completo', 'kcal', 'p', 'c', 'g', 'refeicoes', 'eventos'],
   Progresso: ['pesagens', 'tendencia', 'veredito', 'meta', 'alertas', 'texto'],
   Pesagem: ['dia', 'peso', 'gordura', 'fonte', 'hora', 'descartada', 'motivo'],
-  Corpo: ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'rotina', 'medidas'],
+  Corpo: ['composicao', 'atual', 'ritmo', 'treino', 'forca', 'sugestoesCarga', 'contextoTreino', 'rotina', 'treinos', 'medidas'],
   DiaRotina: ['diaSemana', 'nome', 'titulo', 'ultimaData', 'sessoes', 'exercicios'],
   ExercicioRotina: ['nome', 'grupo', 'series', 'ultimoKg', 'ultimasReps', 'sugeridoKg', 'deltaKg', 'sugeridasReps', 'acao', 'motivo', 'frase'],
   ContextoTreino: ['energia', 'sonoMin', 'comida', 'texto'],
@@ -636,6 +677,50 @@ const confereRefeicao = (r) => {
   confere(r, 'Refeicao');
   r.itens.forEach((i) => confere(i, 'Item'));
 };
+/** Fase 6: uma caixa de treino inteira (caixa, próxima, exercícios, séries e histórico). */
+function confereTreino(t) {
+  confere(t, 'TreinoCaixa');
+  confere(t.proxima, 'Proxima');
+  for (const e of t.exercicios) {
+    confere(e, 'ExercicioTreino');
+    e.series.forEach((s) => confere(s, 'SerieTreino'));
+    e.historico.forEach((h) => confere(h, 'HistoricoTreino'));
+  }
+}
+/** Fase 6: o Hoje com os campos novos (macros, distribuição, anéis e sono). */
+function confereHojeF6(h) {
+  confere(h.macros, 'Macros');
+  confere(h.macros.distribuicao, 'Distribuicao');
+  confere(h.macros.distribuicao.real, 'MacrosPct');
+  confere(h.macros.distribuicao.recomendada, 'MacrosPct');
+  if (h.atividade) confere(h.atividade, 'AnelAtividade');
+  if (h.sono) confere(h.sono, 'SonoHoje');
+}
+/** Fase 6: as três telas do relógio. */
+function confereSono(s) {
+  confere(s, 'Sono');
+  if (s.fases) {
+    confere(s.fases, 'Fases');
+    Object.values(s.fases).forEach((f) => confere(f, 'FaseSono'));
+  }
+  confere(s.tipicas, 'Fases');
+  Object.values(s.tipicas).forEach((f) => confere(f, 'FaixaTipica'));
+  s.etapas.forEach((e) => confere(e, 'EtapaSono'));
+  s.fatores.forEach((f) => confere(f, 'Fator'));
+  s.semana.forEach((d) => confere(d, 'DiaSono'));
+}
+function confereEnergia(e) {
+  confere(e, 'EnergiaDetalhe');
+  confere(e.partes, 'PartesEnergia');
+  e.fatores.forEach((f) => confere(f, 'Fator'));
+  e.semana.forEach((d) => confere(d, 'DiaEnergia'));
+}
+function confereAtividade(a) {
+  confere(a, 'Atividade');
+  confere(a.porHora, 'PorHora');
+  a.exercicios.forEach((x) => confere(x, 'ExercicioAtividade'));
+  a.semana.forEach((d) => confere(d, 'DiaAtividade'));
+}
 
 test('I4: chaves do contrato sempre presentes com dados mínimos (sem relógio, sem pesagem, refeição sem estimativa)', () => {
   const minima = { _id: 'm', nome: 'Pessoa Mínima', jids: ['m@x'] };
@@ -652,6 +737,7 @@ test('I4: chaves do contrato sempre presentes com dados mínimos (sem relógio, 
 
   const h = M.montarHoje({ perfil: minima, dia: DIA, hoje: DIA, horaAgora: '23:00', refeicoes: refs });
   confere(h, 'Hoje');
+  confereHojeF6(h);
   confere(h.kcal, 'Kcal');
   for (const k of ['proteina', 'carbo', 'gordura']) confere(h.macros[k], 'Macro');
   h.refeicoes.forEach(confereRefeicao);
@@ -722,6 +808,9 @@ test('I4: dados parciais (uma pesagem, treino do relógio sem nome, Hevy com sug
   confere(h.relogio.treinos[0], 'TreinoRelogio');
   assert.deepEqual(h.relogio.treinos[0], { nome: null, min: null, hora: null });
   assert.equal(h.relogio.atualizadoEm, null);
+  confereHojeF6(h);
+  assert.deepEqual(h.atividade, { passos: null, metaPassos: 8000, minAtivos: 0, metaMin: 60, kcalAtivas: null, metaKcal: 500 });
+  assert.equal(h.sono, null);
 
   const p = M.montarProgresso({ perfil, dia: DIA, pesagens: [{ jid: 'p@x', dia: DIA, peso: 70.2 }] });
   p.pesagens.forEach((x) => confere(x, 'Pesagem'));
@@ -748,4 +837,231 @@ test('M4: descrição e itens da refeição passam pelo filtro de lugares', () =
   const r = M.montarRefeicao({ _id: 'x', slot: 'almoco', horaLocal: '12:30', descricao: 'arroz, feijão e bife. Comido no restaurante da Deltópolis.', estimativa: { kcal: 700 } }, termos);
   assert.equal(r.descricao, 'arroz, feijão e bife.');
   assert.deepEqual(r.itens.map((i) => i.nome), ['arroz', 'feijão', 'bife']);
+});
+
+// ============================================================
+// Fase 6: sono, energia, atividade e treinos em caixas
+// ============================================================
+/**
+ * 8 noites com fases (23:00 e 23:30 alternando; a de hoje com pouco sono profundo e estágios), FC e VFC no sono, e 14 dias
+ * de atividade (um terço com 4 mil passos), com por hora e uma corrida hoje.
+ */
+function saudeF6() {
+  const sonos = [];
+  for (let i = 7; i >= 0; i--) {
+    const d = somarDias(DIA, -i);
+    const hora = i % 2 ? '23:30' : '23:00';
+    const hoje = i === 0;
+    sonos.push({
+      dia: d,
+      inicio: `${somarDias(d, -1)} ${hora}`,
+      fim: `${d} 07:00`,
+      leve: hoje ? 285 : 240,
+      profundo: hoje ? 45 : 90,
+      rem: 100,
+      acordado: 20,
+      sessoes: 1,
+      principal: 430,
+      total: 430,
+      fcMedia: hoje ? 52 : 55,
+      fcMin: hoje ? 47 : 50,
+      hrv: hoje ? 45 : 40,
+      ...(hoje
+        ? {
+            etapas: [
+              { ini: '23:00', fim: '23:12', t: 'acordado' },
+              { ini: '23:12', fim: '01:00', t: 'leve' },
+              { ini: '01:00', fim: '01:45', t: 'profundo' },
+              { ini: '01:45', fim: '03:25', t: 'rem' },
+              { ini: '03:25', fim: '07:00', t: 'leve' },
+            ],
+          }
+        : {}),
+    });
+  }
+  const atividades = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = somarDias(DIA, -i);
+    const a = { dia: d, passos: i % 3 === 0 ? 4000 : 9000, calorias: 2700, fcRepouso: 56, minAtivos: 50, treinos: [] };
+    if (i === 0) {
+      a.porHora = { passos: Array.from({ length: 24 }, (_, h) => (h === 18 ? 3000 : h >= 7 && h <= 20 ? 400 : 0)), kcal: Array.from({ length: 24 }, (_, h) => (h === 18 ? 350 : 70)) };
+      a.treinos = [{ nome: 'Corrida', min: 30, hora: '07:30', kcal: 300, fcMedia: 140, fonte: 'relogio' }];
+    }
+    atividades.push(a);
+  }
+  return { _id: JID, sonos, atividades, pesos: [], ultimoEnvio: new Date('2030-03-29T22:00:00Z') }; // 19:00 em São Paulo
+}
+
+test('fase 6 notaSono: pesos 40/20/20/10/10, faixas, reponderação sem fases e rótulos', () => {
+  assert.deepEqual(M.notaSono({ dormidoMin: 450, profundoPct: 18, remPct: 21, acordadoPct: 5, desvioHoraMin: 10 }), { nota: 100, rotulo: 'excelente', partes: { duracao: 100, profundo: 100, rem: 100, acordado: 100, regularidade: 100 } });
+  // 5h30 = 50 pontos de duração; profundo 6,5 % = metade de 13; REM 30 % perde 25; acordado 20 % perde 50; 75 min da mediana = 50
+  const n = M.notaSono({ dormidoMin: 330, profundoPct: 6.5, remPct: 30, acordadoPct: 20, desvioHoraMin: 75 });
+  assert.deepEqual(n.partes, { duracao: 50, profundo: 50, rem: 75, acordado: 50, regularidade: 50 });
+  assert.equal(n.nota, Math.round(50 * 0.4 + 50 * 0.2 + 75 * 0.2 + 50 * 0.1 + 50 * 0.1)); // 55
+  assert.equal(n.rotulo, 'razoavel');
+  // sem fases: só duração e regularidade, reponderadas (40 e 10 de 50)
+  assert.equal(M.notaSono({ dormidoMin: 330, desvioHoraMin: 120 }).nota, Math.round((50 * 0.4 + 0 * 0.1) / 0.5)); // 40
+  assert.equal(M.notaSono({ dormidoMin: 330 }).nota, 50);
+  assert.deepEqual(M.notaSono({}), { nota: null, rotulo: null, partes: { duracao: null, profundo: null, rem: null, acordado: null, regularidade: null } });
+  // duração: 4 h = 0; 7 a 9 h = 100; 9h30 = 90; 10 h ou mais = 80
+  assert.deepEqual([240, 420, 540, 570, 600, 720].map(M.pontosDuracaoSono), [0, 100, 100, 90, 80, 80]);
+  assert.deepEqual([85, 84, 70, 69, 55, 54, null].map(M.rotuloNota), ['excelente', 'boa', 'boa', 'razoavel', 'razoavel', 'atencao', null]);
+});
+
+test('fase 6 kcalBasal (Mifflin–St Jeor) e kcalAtivasDoDia: suposições marcam estimada; basal proporcional à hora', () => {
+  assert.deepEqual(M.kcalBasal({ peso: 80, altura: 180, idade: 30, genero: 'masculino' }), { kcal: 1780, estimada: false }); // 800 + 1125 − 150 + 5
+  assert.deepEqual(M.kcalBasal({ peso: 60, altura: 165, idade: 40, genero: 'feminino' }), { kcal: 1270, estimada: false }); // 600 + 1031,25 − 200 − 161
+  assert.deepEqual(M.kcalBasal({ peso: 80, altura: 1.8, idade: 30, genero: 'masculino' }), { kcal: 1780, estimada: false }); // altura em metros
+  assert.deepEqual(M.kcalBasal({ peso: 80, altura: 180, genero: 'masculino' }), { kcal: 1780, estimada: true }); // sem idade: 30 anos
+  assert.deepEqual(M.kcalBasal({ peso: 80 }), { kcal: 1635, estimada: true }); // 800 + 1062,5 − 150 − 78 (170 cm, 30 anos, média dos gêneros)
+  assert.equal(M.kcalBasal({ altura: 180 }), null);
+  assert.equal(M.kcalAtivasDoDia({ kcalTotal: 2700, basal: 1800 }), 900);
+  assert.equal(M.kcalAtivasDoDia({ kcalTotal: 1200, basal: 1800, fracaoDia: 0.5 }), 300);
+  assert.equal(M.kcalAtivasDoDia({ kcalTotal: 1000, basal: 1800 }), 0); // nunca negativo
+  assert.equal(M.kcalAtivasDoDia({ kcalTotal: null, basal: 1800 }), null);
+});
+
+test('fase 6 distribuicaoMacros: % das kcal (4/4/9) e a recomendada pelo objetivo', () => {
+  assert.deepEqual(M.distribuicaoMacros({ p: 100, c: 200, g: 50, objetivo: 'emagrecer' }), { real: { c: 48, g: 27, p: 24 }, recomendada: { c: 40, g: 30, p: 30 } }); // 800, 450 e 400 de 1650 kcal
+  assert.deepEqual(M.macrosRecomendados('Hipertrofia'), { c: 50, g: 25, p: 25 });
+  assert.deepEqual(M.macrosRecomendados(null), { c: 50, g: 30, p: 20 });
+});
+
+test('fase 6 montarSono: nota com fases e regularidade, variação, latência, fatores e semana', () => {
+  const s = M.montarSono({ saude: saudeF6(), dia: DIA });
+  confereSono(s);
+  assert.deepEqual(ida(s), s);
+  // profundo 45/450 = 10 % (76,9 pontos); o resto 100: 40 + 15,4 + 20 + 10 + 10 = 95
+  assert.deepEqual([s.nota, s.rotulo, s.variacao], [95, 'excelente', -5]);
+  assert.deepEqual([s.inicio, s.fim, s.emCamaMin, s.dormidoMin, s.latenciaMin], ['23:00', '07:00', 450, 430, 12]);
+  assert.deepEqual(s.fases, { acordado: { min: 20, pct: 4 }, rem: { min: 100, pct: 22 }, leve: { min: 285, pct: 63 }, profundo: { min: 45, pct: 10 } });
+  assert.deepEqual(s.tipicas.profundo, { min: 13, max: 23 });
+  assert.equal(s.etapas.length, 5);
+  assert.deepEqual(s.etapas[0], { ini: '23:00', fim: '23:12', t: 'acordado' });
+  assert.deepEqual([s.fcMedia, s.fcMin, s.hrv], [52, 47, 45]);
+  assert.deepEqual(s.fatores.map((f) => [f.id, f.valor, f.nivel]), [
+    ['tempo', '7h10', 'excelente'],
+    ['profundo', '10 %', 'bom'],
+    ['rem', '22 %', 'excelente'],
+    ['acordado', '20 min', 'excelente'],
+    ['latencia', '12 min', 'excelente'],
+    ['fc_sono', '52 bpm', 'excelente'],
+    ['vfc_sono', '45 ms', 'excelente'],
+  ]);
+  assert.ok(s.fatores.every((f) => f.explicacao.length > 10 && f.explicacao.length < 70 && !/[*_~]/.test(f.explicacao)));
+  assert.deepEqual(s.semana.map((d) => d.dia), diasAnteriores(DIA, 7));
+  assert.deepEqual(s.semana[6], { dia: DIA, nota: 95, dormidoMin: 430 });
+  assert.equal(s.texto, 'Sono excelente: dormiu 7h10.');
+});
+
+test('fase 6 montarSono: envio antigo (sem fases nem estágios) e dia sem sono não quebram', () => {
+  const antigo = M.montarSono({ saude: saude(), dia: DIA });
+  confereSono(antigo);
+  assert.deepEqual([antigo.nota, antigo.fases, antigo.etapas, antigo.latenciaMin, antigo.fcMedia, antigo.hrv], [100, null, [], null, null, null]);
+  assert.deepEqual(antigo.fatores.filter((f) => f.nivel == null).map((f) => f.id), ['profundo', 'rem', 'acordado', 'latencia', 'vfc_sono']);
+  // sem FC do sono, o fator usa a FC de repouso do dia (que o Relógio 1.6 já mede no sono)
+  assert.deepEqual(antigo.fatores.find((f) => f.id === 'fc_sono'), { id: 'fc_sono', nome: 'Batimento no sono', valor: '58 bpm', nivel: 'excelente', explicacao: 'Batimento abaixo do seu normal indica descanso.' });
+  assert.equal(antigo.fatores.find((f) => f.id === 'profundo').valor, 'sem dado');
+  const vazio = M.montarSono({ saude: null, dia: DIA });
+  confereSono(vazio);
+  assert.deepEqual([vazio.nota, vazio.rotulo, vazio.inicio, vazio.fases, vazio.fatores, vazio.texto], [null, null, null, null, [], 'Sem sono registrado nessa noite.']);
+  assert.equal(vazio.semana.length, 7);
+});
+
+test('fase 6 montarEnergia: a nota é a do energiaDoDia; fatores com nível e semana', () => {
+  const sd = saudeF6();
+  const e = M.montarEnergia({ perfil: perfilBase(), saude: sd, dia: DIA });
+  confereEnergia(e);
+  const ref = energiaDoDia({ sonos: sd.sonos, atividades: sd.atividades, dia: DIA });
+  assert.equal(e.nota, ref.nota);
+  assert.deepEqual(e.partes, { sono: ref.sono, recuperacao: ref.recuperacao, carga: ref.carga });
+  assert.equal(e.rotulo, M.rotuloNota(ref.nota));
+  assert.deepEqual(e.fatores.map((f) => [f.id, f.valor, f.nivel]), [
+    ['media_sono', '7h10', 'excelente'],
+    ['consistencia_sono', '± 0 min', 'excelente'],
+    ['regularidade', '± 15 min', 'excelente'],
+    ['hora_dormir', '23:00', 'excelente'],
+    ['atividade_ontem', '9.000 passos · 50 min', 'excelente'],
+    ['consistencia_atividade', '5 de 7 dias na meta', 'excelente'],
+    ['fc_sono', '52 bpm', 'excelente'],
+    ['vfc_sono', '45 ms', 'excelente'],
+  ]);
+  assert.deepEqual(e.semana.map((d) => d.dia), diasAnteriores(DIA, 7));
+  assert.equal(e.semana[6].nota, ref.nota);
+  assert.equal(typeof e.texto, 'string');
+  const sem = M.montarEnergia({ perfil: perfilBase(), saude: null, dia: DIA });
+  confereEnergia(sem);
+  assert.deepEqual([sem.nota, sem.rotulo, sem.variacao, sem.fatores], [null, null, null, []]);
+  // envio antigo: FC e VFC caem pra FC de repouso e VFC do dia que o Relógio 1.6 já manda
+  const antigo = M.montarEnergia({ perfil: perfilBase(), saude: saude(), dia: DIA });
+  confereEnergia(antigo);
+  assert.equal(antigo.fatores.find((f) => f.id === 'fc_sono').valor, '58 bpm');
+});
+
+test('fase 6 montarAtividade: anéis com basal proporcional ao último envio, por hora, pico, exercícios e semana', () => {
+  const perfil = perfilBase({ idade: 35, genero: 'masculino' });
+  const a = M.montarAtividade({ perfil, saude: saudeF6(), dia: DIA, hoje: DIA, horaAgora: '20:00' });
+  confereAtividade(a);
+  // basal 750 + 1112,5 − 175 + 5 = 1693 (arredondada); o último envio foi às 19:00: 2700 − 1693 × 1140/1440 = 1360
+  assert.deepEqual([a.passos, a.metaPassos, a.minAtivos, a.metaMin, a.kcalAtivas, a.metaKcal, a.kcalTotal, a.kcalAtivasEstimada], [4000, 8000, 50, 60, 1360, 500, 2700, false]);
+  assert.equal(a.porHora.passos.length, 24);
+  assert.equal(a.picoHora, '18:00–19:00');
+  assert.deepEqual(a.exercicios, [{ nome: 'Corrida', hora: '07:30', min: 30, kcal: 300, fcMedia: 140 }]);
+  assert.deepEqual(a.semana.map((d) => d.dia), diasAnteriores(DIA, 7));
+  // ontem (dia fechado): 9.000/8.000; 50/60; (2700 − 1693)/500
+  assert.deepEqual(a.semana[5], { dia: somarDias(DIA, -1), passosPct: 1.13, minPct: 0.83, kcalPct: 2.01 });
+  // metas do perfil sobrescrevem; sem idade, estimada
+  const b = M.montarAtividade({ perfil: perfilBase({ metasAtividade: { passos: 10000 } }), saude: saudeF6(), dia: somarDias(DIA, -1), hoje: DIA });
+  assert.deepEqual([b.metaPassos, b.metaMin, b.kcalAtivasEstimada, b.porHora, b.picoHora], [10000, 60, true, { passos: null, kcal: null }, null]);
+  // envio antigo (sem minAtivos): os minutos de exercício
+  const antigo = M.montarAtividade({ perfil, saude: saude(), dia: somarDias(DIA, -1), hoje: DIA });
+  confereAtividade(antigo);
+  assert.equal(antigo.minAtivos, 70);
+  const vazio = M.montarAtividade({ perfil: {}, saude: null, dia: DIA });
+  confereAtividade(vazio);
+  assert.deepEqual([vazio.passos, vazio.kcalAtivas, vazio.kcalAtivasEstimada, vazio.exercicios], [null, null, true, []]);
+});
+
+test('fase 6 treinosPorTitulo: caixas pelo título normalizado, dias habituais, exercícios com sugestão e histórico, ordem da próxima', () => {
+  const sessao = (inicio, titulo, exercicios, minutos = 60) => ({
+    inicio,
+    fim: new Date(Date.parse(inicio) + minutos * 60_000).toISOString(),
+    titulo,
+    exercicios: exercicios.map(([title, kg, reps, id]) => ({ title, exercise_template_id: id, sets: [{ type: 'warmup', weight_kg: 20, reps: 10 }, { weight_kg: kg, reps }, { weight_kg: kg, reps }] })),
+  });
+  // segundas 15:00Z = 12:00 em São Paulo; a última "peito" foi numa quarta, escrita diferente; quintas de perna; costas uma vez só
+  const sessoes = [
+    sessao('2030-03-04T15:00:00Z', 'Peito e Tríceps', [['Supino reto', 50, 8, 's1'], ['Tríceps corda', 25, 12, 't1']], 60),
+    sessao('2030-03-11T15:00:00Z', 'Peito e Tríceps', [['Supino reto', 50, 10, 's1'], ['Tríceps corda', 25, 12, 't1']], 70),
+    sessao('2030-03-14T15:00:00Z', 'Pernas', [['Agachamento', 80, 6, 'a1']]),
+    sessao('2030-03-18T15:00:00Z', 'Peito e Tríceps', [['Supino reto', 50, 10, 's1'], ['Tríceps corda', 25, 12, 't1']], 65),
+    sessao('2030-03-21T15:00:00Z', 'Pernas', [['Agachamento', 80, 6, 'a1']]),
+    sessao('2030-03-23T15:00:00Z', 'Costas', [['Remada', 40, 10, 'r1']]),
+    sessao('2030-03-25T15:00:00Z', 'Peito e Tríceps', [['Supino reto', 50, 10, 's1'], ['Tríceps corda', 25, 12, 't1']], 62),
+    sessao('2030-03-27T15:00:00Z', 'peito e  triceps ', [['Supino reto', 52.5, 6, 's1'], ['Tríceps corda', 25, 12, 't1']], 90),
+    sessao('2030-03-28T15:00:00Z', 'Pernas', [['Agachamento', 80, 6, 'a1']]),
+  ];
+  const catalogo = { s1: { primario: 'chest' }, t1: { primario: 'triceps' }, a1: { primario: 'quadriceps' } };
+  const t = M.treinosPorTitulo({ sessoes, catalogo, dia: DIA, contexto: {} }); // DIA = sexta
+  t.forEach(confereTreino);
+  assert.deepEqual(ida(t), t);
+  // segunda (daqui a 3 dias) antes de quinta (6); costas (1 sessão) fica de fora
+  assert.deepEqual(t.map((x) => [x.id, x.titulo, x.dias, x.ultimaData, x.sessoes8sem, x.duracaoMin]), [
+    ['peito-e-triceps', 'Peito e Tríceps', ['Seg'], '2030-03-27', 5, 65],
+    ['pernas', 'Pernas', ['Qui'], '2030-03-28', 3, 60],
+  ]);
+  const peito = t[0];
+  assert.deepEqual(peito.grupos, ['peito', 'tríceps']);
+  assert.deepEqual(peito.proxima, { acao: 'subir', resumo: '1 exercício pra subir' });
+  const [supino, triceps] = peito.exercicios;
+  assert.deepEqual(supino.series, [{ kg: 52.5, reps: 6 }, { kg: 52.5, reps: 6 }]);
+  assert.deepEqual([supino.acao, supino.ultimoKg, supino.sugeridoKg, supino.sugeridasReps], ['repetir', 52.5, 52.5, 7]);
+  assert.deepEqual(supino.historico.map((h) => [h.dia, h.kg, h.reps]), [['2030-03-04', 50, 8], ['2030-03-11', 50, 10], ['2030-03-18', 50, 10], ['2030-03-25', 50, 10], ['2030-03-27', 52.5, 6]]);
+  assert.deepEqual([triceps.acao, triceps.sugeridoKg, triceps.grupo], ['subir', 27.5, 'tríceps']);
+  assert.deepEqual(t[1].proxima, { acao: 'repetir', resumo: '1 exercício pra firmar' });
+  // dormiu pouco: tudo mantém
+  const cansado = M.treinosPorTitulo({ sessoes, catalogo, dia: DIA, contexto: { sonoMin: 300 } });
+  assert.deepEqual(cansado.map((x) => x.proxima), [{ acao: 'manter', resumo: 'Manter as cargas' }, { acao: 'manter', resumo: 'Manter as cargas' }]);
+  assert.deepEqual(M.treinosPorTitulo({ sessoes: [], dia: DIA }), []);
+  assert.equal(M.slugTitulo('  Treino   Á/B '), 'treino-a-b');
 });
