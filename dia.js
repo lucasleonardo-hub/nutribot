@@ -29,7 +29,7 @@ import { agora, semanaISO, diaSeguinte, diasAnteriores, ehDomingo, minutosDe, fu
 import { estado } from './estado.js';
 import { enviar, enviarImagem, enviarAudio } from './whatsapp.js';
 import { enriquecerPerfis } from './perfis.js';
-import { avisarErro } from './avisos.js';
+import { avisarErro, avisarAdmin } from './avisos.js';
 
 // ============================================================
 // Memória do dia (RAM + backup no Mongo) e daily note
@@ -44,6 +44,8 @@ export async function lembrar(entrada) {
 
 // Daily note no Drive (Diario/YYYY-MM-DD.md): regerada a partir da memória do dia, no máximo uma escrita a cada 30 s.
 const DIARIO_DEBOUNCE_MS = 30_000;
+const MAX_TENTATIVAS_DIARIO = 3;
+let falhasDiario = 0;
 let diarioTimer = null;
 let diarioSujo = false;
 export function agendarDiario() {
@@ -51,10 +53,22 @@ export function agendarDiario() {
   if (diarioTimer) return;
   diarioTimer = setTimeout(() => {
     diarioTimer = null;
-    gravarDiario().catch((e) => {
-      console.error('[drive] falha ao salvar diário:', e.message);
-      if (estado.memoria.grupo) avisarErro(estado.memoria.grupo, 'drive', e.message);
-    });
+    gravarDiario()
+      .then(() => {
+        falhasDiario = 0;
+      })
+      .catch((e) => {
+        // 16/10: um timeout só ("The operation was aborted", logo depois de um deploy) virava aviso NO GRUPO. O diário é
+        // regerado inteiro a partir da memória, então tenta de novo em 1 min; só depois de 3 falhas seguidas avisa o
+        // administrador no privado (aviso de sistema não é assunto do grupo).
+        falhasDiario++;
+        diarioSujo = true;
+        console.error(`[drive] falha ao salvar diário (${falhasDiario}ª seguida):`, e.message);
+        if (falhasDiario <= MAX_TENTATIVAS_DIARIO) setTimeout(agendarDiario, 60_000).unref?.();
+        if (falhasDiario === MAX_TENTATIVAS_DIARIO) {
+          avisarAdmin('drive', `o Drive falhou ${falhasDiario} vezes seguidas ao salvar o diário (${String(e.message).slice(0, 80)}). As mensagens continuam no Mongo; o diário é refeito quando o Drive voltar.`).catch(() => {});
+        }
+      });
   }, DIARIO_DEBOUNCE_MS);
   diarioTimer.unref?.();
 }

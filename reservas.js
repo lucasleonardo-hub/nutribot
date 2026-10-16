@@ -183,3 +183,28 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
   }
   throw ultimoErro;
 }
+
+/**
+ * No boot: uma chamada mínima ao GitHub Models (só com GITHUB_MODELS_TOKEN) e o resultado no log, pra saber se a reserva de
+ * foto funciona antes de precisar dela. Nunca lança; não imprime o token.
+ */
+export async function conferirGithubModels() {
+  const p = PROVEDORES.find((x) => x.id === 'github');
+  if (!p?.chave()) return null;
+  const t0 = Date.now();
+  try {
+    const r = await fetch(p.url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${p.chave()}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: p.texto, messages: [{ role: 'user', content: 'Responda só: ok' }], max_tokens: 5 }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const corpo = await r.json().catch(() => null);
+    const ok = r.ok && typeof corpo?.choices?.[0]?.message?.content === 'string';
+    console.log(`[reserva] GitHub Models (${p.texto}): ${ok ? `ok em ${Date.now() - t0} ms` : `falhou: HTTP ${r.status} ${String(corpo?.error?.message || corpo?.message || '').slice(0, 120)}`}`);
+    return ok;
+  } catch (e) {
+    console.log(`[reserva] GitHub Models: falhou (${e.message})`);
+    return false;
+  }
+}

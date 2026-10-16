@@ -23,7 +23,7 @@ import * as ia from './gemini.js';
 import { carregarConhecimento } from './conhecimento.js';
 import { dossieDe, pastaDe } from './pessoas.js';
 import { receberEnvio } from './relogio.js';
-import { reservasDisponiveis } from './reservas.js';
+import { reservasDisponiveis, conferirGithubModels } from './reservas.js';
 import { TZ, agora, comTempo, diasAnteriores, diaSeguinte, registroDaConversa } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca, vigiarConexao, meusJids } from './whatsapp.js';
@@ -231,6 +231,7 @@ async function checarDrive() {
     await garantirIndicesApp(); // aparelhos e códigos de pareamento do app (API v1)
     await garantirIndiceVetorial(); // memória de longo prazo por significado (Atlas Vector Search, grátis no M0)
     iniciarDrive();
+    conferirGithubModels().catch(() => {}); // reserva de foto: confirma no log se o token funciona (1 chamada por boot)
     await carregarConhecimento().catch((e) => console.error('[conhecimento] falha ao carregar:', e.message));
     // Pré-carrega a pasta de cada pessoa (transcreve PDFs novos agora, não na primeira mensagem do dia)
     listarPerfis()
