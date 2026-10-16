@@ -31,18 +31,6 @@ const PROVEDORES = [
     visao: process.env.COHERE_MODEL_VISAO || 'command-a-vision-07-2025',
     timeoutMs: 45_000,
   },
-  // GitHub Models (15/10): grátis com limite diário curto (~150 pedidos/dia no gpt-4o-mini) e entrada de ~8 mil tokens; lê
-  // foto. Só liga com GITHUB_MODELS_TOKEN: um token fine-grained com SÓ a permissão "Models: read" (o token do `gh`, com
-  // repo e workflow, não vai pro servidor).
-  {
-    id: 'github',
-    url: 'https://models.github.ai/inference/chat/completions',
-    chave: () => process.env.GITHUB_MODELS_TOKEN,
-    texto: process.env.GITHUB_MODELS_MODEL || 'openai/gpt-4o-mini',
-    visao: process.env.GITHUB_MODELS_MODEL_VISAO || 'openai/gpt-4o-mini',
-    maxChars: Number(process.env.RESERVA_MAX_CHARS_GITHUB) || 20_000,
-    timeoutMs: 45_000,
-  },
   {
     id: 'openrouter',
     url: 'https://openrouter.ai/api/v1/chat/completions',
@@ -83,7 +71,8 @@ const PROVEDORES = [
     url: 'https://openrouter.ai/api/v1/chat/completions',
     chave: () => process.env.OPENROUTER_API_KEY,
     texto: null,
-    visao: process.env.OPENROUTER_MODEL_VISAO || 'qwen/qwen3.8-27b:free',
+    // 16/10: o qwen3.8-27b:free virou pago (404). Nemotron 3.5 Super VL é grátis, lê foto e responde em ~2 s (testado)
+    visao: process.env.OPENROUTER_MODEL_VISAO || 'nvidia/nemotron-3.5-super-vl:free',
     timeoutMs: 60_000, // a fila gratuita do OpenRouter às vezes leva 45 s pra responder
     headers: OPENROUTER_HEADERS,
     extra: { reasoning: { enabled: false } },
@@ -130,7 +119,7 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
   // Foto: os modelos de visão maiores primeiro. Em 28/09 o command-a-vision inventou abacate e queijo num prato e repetiu
   // itens já negados; o Qwen3.8 27B e o Qwen3-VL leem prato melhor (quando não estão em 429, e aí a lista segue).
   if (precisaVisao) {
-    const ordem = (process.env.RESERVA_VISAO_ORDEM || 'openrouter-visao,github,huggingface-2,huggingface,cohere').split(',').map((s) => s.trim());
+    const ordem = (process.env.RESERVA_VISAO_ORDEM || 'openrouter-visao,huggingface-2,huggingface,cohere').split(',').map((s) => s.trim());
     candidatos.sort((a, b) => (ordem.indexOf(a.id) === -1 ? 99 : ordem.indexOf(a.id)) - (ordem.indexOf(b.id) === -1 ? 99 : ordem.indexOf(b.id)));
   }
 
@@ -182,29 +171,4 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
     }
   }
   throw ultimoErro;
-}
-
-/**
- * No boot: uma chamada mínima ao GitHub Models (só com GITHUB_MODELS_TOKEN) e o resultado no log, pra saber se a reserva de
- * foto funciona antes de precisar dela. Nunca lança; não imprime o token.
- */
-export async function conferirGithubModels() {
-  const p = PROVEDORES.find((x) => x.id === 'github');
-  if (!p?.chave()) return null;
-  const t0 = Date.now();
-  try {
-    const r = await fetch(p.url, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${p.chave()}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: p.texto, messages: [{ role: 'user', content: 'Responda só: ok' }], max_tokens: 5 }),
-      signal: AbortSignal.timeout(20_000),
-    });
-    const corpo = await r.json().catch(() => null);
-    const ok = r.ok && typeof corpo?.choices?.[0]?.message?.content === 'string';
-    console.log(`[reserva] GitHub Models (${p.texto}): ${ok ? `ok em ${Date.now() - t0} ms` : `falhou: HTTP ${r.status} ${String(corpo?.error?.message || corpo?.message || '').slice(0, 120)}`}`);
-    return ok;
-  } catch (e) {
-    console.log(`[reserva] GitHub Models: falhou (${e.message})`);
-    return false;
-  }
 }
