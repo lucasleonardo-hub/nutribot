@@ -15,6 +15,7 @@ import { energiaDoDia } from './saude.js';
 import { analisarTreinos, grupoEmPortugues } from './treino.js';
 import { progressaoForca, conferirSugestoes, incrementoDeCarga } from './contexto.js';
 import { createHash } from 'node:crypto';
+import { saltoDeCarga } from './auditoria.js';
 import { SLOTS, fusoDe, diasAnteriores, diaSeguinte, horariosHabituais, minutosDe, semAcento, hhmmDe, marcaDeTempo, vetorRateado } from './util.js';
 
 // ---------- números ----------
@@ -583,6 +584,21 @@ export function sugerirCargaExercicio({ nome, historico = [], contexto = {} }) {
   const kg = Number(ultimo.kg) || 0;
   const reps = Number(ultimo.reps) || 0;
   const base = { ultimoKg: kg || null, ultimasReps: reps || null, sugeridoKg: kg || null, deltaKg: 0, sugeridasReps: reps || null };
+  // desconfiômetro (auditoria.js): a última sessão passou muito das anteriores (30 -> 80 kg). Não vira base de "+2,5 kg":
+  // a sugestão fica na carga de referência e a frase pergunta (erro no Hevy, peso total x cada lado, outro aparelho?)
+  const salto = saltoDeCarga(historico.map((h) => h.kg));
+  if (salto) {
+    return {
+      ...base,
+      sugeridoKg: salto.referencia,
+      sugeridasReps: reps || null,
+      acao: 'manter',
+      conferir: true,
+      salto,
+      motivo: `a última carga (${fmtKg(kg)} kg) passou muito das anteriores (~${fmtKg(salto.referencia)} kg)`,
+      frase: `Pegou ${fmtKg(kg)} kg da última vez, bem acima das anteriores (~${fmtKg(salto.referencia)} kg). Foi isso mesmo? Pode ter sido erro no Hevy, peso total x cada lado ou outro aparelho.`,
+    };
+  }
   const pouco = (contexto.sonoMin != null && contexto.sonoMin < SONO_CURTO_MIN) || (contexto.energia != null && contexto.energia < 45);
   if (!kg) return { ...base, acao: 'manter', motivo: 'exercício sem carga: mantém', frase: `Fez ${reps || '?'} repetições. Próximo treino: repete.` };
   if (pouco) return { ...base, acao: 'manter', motivo: 'dormiu pouco ou energia baixa', frase: `Dormiu pouco: mantém ${fmtKg(kg)} kg × ${reps}.` };

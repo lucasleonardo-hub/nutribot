@@ -306,6 +306,20 @@ export const CENARIOS = [
     adiar: (a) => Boolean(a && /almo/i.test(a.refeicao || '') && /^14:(2\d|3\d|4\d)$/.test(String(a.ate || ''))),
   },
   {
+    // 15/10 (desconfiômetro): número absurdo não é aceito passivamente; a resposta pergunta e nada é gravado
+    id: 'C49', categoria: 'senso crítico', titulo: '"400 g de whey" vira pergunta (40 g?) e não é gravado', quem: 'lucas', hora: '16:30',
+    texto: 'tomei um shake com 400g de whey e 300ml de leite',
+    deve: [/40\s*g|mesmo|certeza|confere|foi isso/i],
+    naoDeve: [/anotad[oa]|registrad[oa]|registrei/i],
+    refeicao: (r) => r === null,
+  },
+  {
+    id: 'C50', categoria: 'senso crítico', titulo: 'refeição normal não vira interrogatório nem é segurada', quem: 'lucas', hora: '16:30',
+    texto: 'lanche: shake com 40g de whey e 300ml de leite integral',
+    naoDeve: [/antes de eu anotar|foi isso mesmo|tem certeza/i],
+    refeicao: (r) => Boolean(r && r.kcal > 200 && r.kcal < 600),
+  },
+  {
     id: 'C47', categoria: 'incerteza', titulo: 'quantidade invisível pede UMA pergunta e marca incerteza', quem: 'ale', hora: '08:40',
     texto: 'café da manhã: pão com queijo e café',
     perguntaOuIncerteza: true,

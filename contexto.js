@@ -353,6 +353,8 @@ export function blocoTreinosDoDia(caixas = [], { dia, contexto = null, nome = ''
   const kg = (n) => (n == null ? '?' : `${String(Math.round(n * 100) / 100).replace('.', ',')} kg`);
   const linhaEx = (e) => {
     if (!e.ultimoKg) return `${e.nome}: ${e.ultimasReps || '?'} repetições, repete`;
+    // desconfiômetro: salto irreal no Hevy (auditoria.saltoDeCarga) não vira "sobe mais": a Nutri pergunta antes
+    if (e.conferir) return `${e.nome}: a última carga (${kg(e.ultimoKg)}) passou muito das anteriores (~${kg(e.salto?.referencia)}); SE o assunto for treino, pergunte (uma vez) se foi erro no Hevy, peso total x cada lado ou outro aparelho, antes de sugerir carga`;
     const alvo = e.acao === 'subir' ? `sobe pra ${kg(e.sugeridoKg)} × ${e.sugeridasReps}` : e.acao === 'repetir' ? `fica em ${kg(e.ultimoKg)}, tenta ${e.sugeridasReps} repetições` : `mantém ${kg(e.ultimoKg)} × ${e.ultimasReps}`;
     return `${e.nome}: pegou ${kg(e.ultimoKg)} × ${e.ultimasReps} → hoje ${alvo}`;
   };
@@ -412,10 +414,12 @@ export function gerarSugestoesCarga(parados = [], { dia, max = 3 } = {}) {
       const inc = incrementoDeCarga(e.title, e.melhor);
       const base = { id: `s${String(dia).replace(/-/g, '')}${i + 1}`, exercicio: e.title, deKg: e.melhor, deReps: e.reps, feitaEm: dia, status: 'aberta', tentativas: 0 };
       const sug = Array.isArray(e.historico) && e.historico.length ? sugerirCargaExercicio({ nome: e.title, historico: e.historico, contexto: {} }) : null;
+      if (sug?.conferir) return null; // salto irreal na última sessão: meta da semana não parte de um número suspeito
       if (sug?.acao === 'subir') return { ...base, paraKg: sug.sugeridoKg, paraReps: Math.max(1, (e.reps || 8) + 2), origem: 'dia' };
       if (sug?.acao === 'repetir') return { ...base, paraKg: Math.round((e.melhor + inc) * 100) / 100, paraReps: Math.max(1, sug.sugeridasReps || (e.reps || 8) + 1), origem: 'dia' };
       return { ...base, paraKg: Math.round((e.melhor + inc) * 100) / 100, paraReps: Math.max(1, (e.reps || 8) + 2) };
-    });
+    })
+    .filter(Boolean);
 }
 /**
  * Puro. Confere sugestões abertas contra as sessões do Hevy feitas depois de feitaEm: bateu (carga >= paraKg, ou reps >= paraReps

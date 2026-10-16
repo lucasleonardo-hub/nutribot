@@ -43,6 +43,7 @@ const { ferramentasPara } = await import('../ferramentas.js');
 const { parecePedidoOuPlano, agora } = await import('../util.js');
 const { rotaPerguntaProgresso, conferirTextoProgresso, problemaDeProgresso, tirarFrases } = await import('../progresso.js');
 const { semConfidencias } = await import('../contexto-app.js');
+const { auditarRefeicao } = await import('../auditoria.js');
 
 const modelo = flag('modelo') || (chaveDedicada ? 'flash' : 'lite');
 const leve = modelo !== 'flash';
@@ -204,6 +205,15 @@ async function aplicarGuardas({ r, base, cen, perfil, perfis, texto, historico, 
     if (c.removidas.length) {
       resposta = c.texto;
       guardas.push(`confidência do app retirada (${c.removidas.length})`);
+    }
+  }
+  // (7) desconfiômetro (auditoria.js), como no mensagens.js: número absurdo não grava; a resposta vira a pergunta
+  if (refeicao && Number(refeicao.kcal) > 0) {
+    const aud = auditarRefeicao(refeicao, texto);
+    if (aud.suspeito) {
+      resposta = `${perfil?.nome?.split(' ')[0] || ''}, antes de eu anotar: ${aud.pergunta}`;
+      refeicao = null;
+      guardas.push(`desconfiômetro: ${aud.motivos.join('; ')}`);
     }
   }
   return { final: resposta, refeicao, guardas };

@@ -31,6 +31,18 @@ const PROVEDORES = [
     visao: process.env.COHERE_MODEL_VISAO || 'command-a-vision-07-2025',
     timeoutMs: 45_000,
   },
+  // GitHub Models (15/10): grátis com limite diário curto (~150 pedidos/dia no gpt-4o-mini) e entrada de ~8 mil tokens; lê
+  // foto. Só liga com GITHUB_MODELS_TOKEN: um token fine-grained com SÓ a permissão "Models: read" (o token do `gh`, com
+  // repo e workflow, não vai pro servidor).
+  {
+    id: 'github',
+    url: 'https://models.github.ai/inference/chat/completions',
+    chave: () => process.env.GITHUB_MODELS_TOKEN,
+    texto: process.env.GITHUB_MODELS_MODEL || 'openai/gpt-4o-mini',
+    visao: process.env.GITHUB_MODELS_MODEL_VISAO || 'openai/gpt-4o-mini',
+    maxChars: Number(process.env.RESERVA_MAX_CHARS_GITHUB) || 20_000,
+    timeoutMs: 45_000,
+  },
   {
     id: 'openrouter',
     url: 'https://openrouter.ai/api/v1/chat/completions',
@@ -118,7 +130,7 @@ export async function gerarReserva({ system, usuario, imagens = [], json = false
   // Foto: os modelos de visão maiores primeiro. Em 28/09 o command-a-vision inventou abacate e queijo num prato e repetiu
   // itens já negados; o Qwen3.8 27B e o Qwen3-VL leem prato melhor (quando não estão em 429, e aí a lista segue).
   if (precisaVisao) {
-    const ordem = (process.env.RESERVA_VISAO_ORDEM || 'openrouter-visao,huggingface-2,huggingface,cohere').split(',').map((s) => s.trim());
+    const ordem = (process.env.RESERVA_VISAO_ORDEM || 'openrouter-visao,github,huggingface-2,huggingface,cohere').split(',').map((s) => s.trim());
     candidatos.sort((a, b) => (ordem.indexOf(a.id) === -1 ? 99 : ordem.indexOf(a.id)) - (ordem.indexOf(b.id) === -1 ? 99 : ordem.indexOf(b.id)));
   }
 

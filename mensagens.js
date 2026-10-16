@@ -11,7 +11,7 @@ import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
 import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot, acharRegistro } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
-import { agora, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores, ultimaDoChat, marcaDeTempo, registrosDaVirada, ultimaRefeicao, destinoDaRefeicao, JANELA_VIRADA_MIN } from './util.js';
+import { agora, dataExtenso, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores, ultimaDoChat, marcaDeTempo, registrosDaVirada, ultimaRefeicao, destinoDaRefeicao, JANELA_VIRADA_MIN } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir, estaDigitando } from './whatsapp.js';
 import { sintetizar } from './voz.js';
@@ -42,6 +42,7 @@ import { comandoApp } from './api-auth.js';
 import { blocoApp, somarDias } from './api-escrita.js';
 import { humorDe, eventosDe } from './mongo.js';
 import { registrarAdiamento, detectarAdiamento } from './cobranca.js';
+import { auditarRefeicao, confirmaSemNumero, negaSemNumero } from './auditoria.js';
 import { blocoAppConversa, perguntasRecentes, moduloDePerguntas, confidenciasDe, semConfidencias, protegerFerramentas } from './contexto-app.js';
 
 /**
@@ -193,6 +194,31 @@ function perguntaRecenteDe(jid, hora) {
   const dt = minutosDe(hora) - minutosDe(p.hora);
   if (dt < 0 || dt > 45) return '';
   return `VOCÊ JÁ FEZ UMA PERGUNTA SOBRE A REFEIÇÃO DESSA PESSOA ÀS ${p.hora} ("${p.pergunta}"): não pergunte de novo. Se a resposta veio nesta mensagem, é correção do registro; se não veio, registre com a melhor estimativa e siga.`;
+}
+/**
+ * Puro. Mensagem que é só reação: risada ("kkkk", "rsrs", "hahaha"), emoji, ou "ok", "top", "show", "valeu", "tmj", "blz".
+ * Não inclui "sim", "não" e "isso" (podem responder uma pergunta da Nutri) nem "bom dia" (a Nutri cumprimenta de volta).
+ */
+export function soReacao(texto) {
+  const t = String(texto || '').trim().toLowerCase();
+  if (!t || t.length > 25) return false;
+  const semEmoji = t.replace(/[\p{Extended_Pictographic}‍️\s!.?,]+/gu, ' ').trim();
+  if (!semEmoji) return true; // só emoji/pontuação
+  return semEmoji.split(/\s+/).every((p) => /^(k{2,}|(rs)+|(ha){2,}h?|(he){2,}|(hu){2,}|ok+|okay|top|show|massa|boa|valeu|vlw|tmj|blz|beleza|fechou|demais|aff|eita|opa|uau|nossa)$/.test(p));
+}
+
+/** Refeição que o desconfiômetro (auditoria.js) segurou esperando a confirmação da pessoa: vale por 60 min. */
+const PENDENTE_REFEICAO_MIN = 60;
+function refeicaoPendenteDe(jid) {
+  const p = estado.memoria?.refeicoesPendentes?.[jid];
+  if (!p?.em || Date.now() - p.em > PENDENTE_REFEICAO_MIN * 60_000) return null;
+  return p;
+}
+/** Nota pro prompt enquanto a refeição espera confirmação: corrigiu = linha REFEICAO nova; "isso" = o sistema grava. */
+function notaRefeicaoPendente(jid) {
+  const p = refeicaoPendenteDe(jid);
+  if (!p) return '';
+  return `REFEIÇÃO ESPERANDO CONFIRMAÇÃO (ainda NÃO gravada): você perguntou "${p.pergunta}" sobre ${p.refeicao?.itens || 'a refeição'} (~${Math.round(Number(p.refeicao?.kcal) || 0)} kcal). Se nesta mensagem a pessoa corrigiu a quantidade, mande a linha REFEICAO com os números corrigidos e "correcao": false (é o primeiro registro). Se ela só confirmou, o sistema grava o que estava: diga que anotou, sem perguntar de novo.`;
 }
 const imagemMsg = (m) => Boolean(extractMessageContent(m?.message)?.imageMessage);
 /** Bloco FORÇA x RECUPERAÇÃO com a faixa e a massa magra da pessoa (pesagens de 60 dias). */
@@ -841,6 +867,11 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   }
   marcarResposta(jids, dia, hora).catch(() => {}); // havia intervenção proativa pra essa pessoa hoje? conta como respondida
   const papoLiberado = Date.now() - ultimoPapoEm >= PAPO_INTERVALO_MIN * 60_000;
+  // só risada, emoji ou "ok/top/valeu" sem chamar a Nutri: ela ouve (histórico) e não gasta IA nem a vez do papo
+  if (!motivo && !atrasadas && soReacao(texto) && !refeicaoPendenteDe(jids[0])) {
+    await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
+    return;
+  }
   if (!motivo && !papoLiberado && !atrasadas) {
     // Papo entre eles dentro do intervalo: só guarda no histórico (ela "ouviu"), sem gastar IA nem responder
     await lembrar({ hora, jid: jids[0], nome: perfil.nome, texto, tipo: 'texto' });
@@ -867,7 +898,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     console.log(`[retomada] ${perfil.nome}: mensagem de ${Math.round(atrasoMin)} min atrás${msg._resgatada ? ` (resgatada do histórico: ${msg._motivoResgate})` : ''}; ${primeira ? 'pedindo desculpas pela demora' : 'desculpas já pedidas'}`);
   }
   const contextoHorario =
-    `hora local de ${perfil.nome}: ${horaLocal}${eu.cidade ? ` em ${eu.cidade}` : ' (cidade/fuso ainda não informados, pode estar errada)'}; ` +
+    // dia da semana e data NO FUSO DELA (o "DATA E HORA" do topo é o do grupo; quem mora fora pode já estar no dia seguinte)
+    `para ${perfil.nome} agora é ${dataExtenso(diaPessoa)}, ${horaLocal}${eu.cidade ? ` em ${eu.cidade}` : ' (cidade/fuso ainda não informados, pode estar errada)'}; ` +
     `horário de ${slot.nome}; ${perfil.nome} costuma mandar ${slot.nome} ~${habitual}` +
     (clima ? `; ${clima}` : '') +
     (atrasadas
@@ -957,7 +989,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const perguntaProgresso = rotaPerguntaProgresso({ texto, temImagem, temAudio, metaConversa, contestacao, emAndamento });
   // fase 7: o bloco PELO APP e as confidências (pergunta do app, texto do humor) que a guarda tira da resposta do grupo
   const doApp = motivo ? await blocoAppDe(eu, diaPessoa, texto).catch(() => ({ texto: '', confidencias: [] })) : { texto: '', confidencias: [] };
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', app: doApp.texto, lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora)].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', app: doApp.texto, lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora), notaRefeicaoPendente(jids[0])].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -1194,6 +1226,20 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // Linha REFEICAO da IA (estruturada): números e tipo vêm dela, não de regex no texto. O texto continua como reserva
   // (modelo externo que não escreveu a linha).
   const TIPOS = new Set(['cafe', 'lanche_manha', 'almoco', 'lanche', 'jantar', 'ceia']);
+  // desconfiômetro (auditoria.js): "isso" sem número confirma a refeição que ficou esperando e ela é gravada com os números
+  // e a hora de quando foi contada; "não, errei" descarta; número novo chega na linha REFEICAO e passa pela auditoria de novo
+  const pendenteRef = refeicaoPendenteDe(jids[0]);
+  let confirmouPendente = false;
+  if (pendenteRef && !temImagem && confirmaSemNumero(texto)) {
+    refeicao = { ...pendenteRef.refeicao, correcao: false };
+    confirmouPendente = true;
+    console.log(`[auditoria] ${perfil.nome} confirmou a refeição pendente (${pendenteRef.motivos.join('; ')}); gravo`);
+  }
+  if (pendenteRef && (confirmouPendente || negaSemNumero(texto) || (refeicao && Number(refeicao.kcal) > 0))) {
+    if (!confirmouPendente && negaSemNumero(texto)) console.log(`[auditoria] ${perfil.nome} desfez a refeição pendente; não gravo`);
+    delete estado.memoria.refeicoesPendentes[jids[0]];
+    persistirMemoria(estado.memoria).catch(() => {});
+  }
   const estruturada = refeicao && Number(refeicao.kcal) > 0 && Number(refeicao.kcal) < 8000 ? refeicao : null;
   // a pessoa disse QUANDO comeu ("esqueci de informar meu café da manhã, foi às 8h20"): a refeição é retroativa, com a
   // hora dita, e não é correção nem parte da última refeição registrada
@@ -1202,7 +1248,28 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const correcaoEstruturada = !retroativa && Boolean(estruturada?.correcao) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 45;
   // parte da mesma refeição (mensagem parcelada) com números novos também é correção do registro anterior, não refeição nova
   const correcaoRecente = !retroativa && (correcaoEstruturada || ((parteDaMesma || (!temAudio && !metaConversa && pareceCorrecao(texto) && minhaUltima && minutosDe(horaLocal) - minhaUltima.minutos <= 30)) && Boolean(estruturada || lerEstimativa(resposta))));
-  const foiRefeicao = !ehPedido && !metaConversa && !blocoDeSugestao && (Boolean(estruturada) || temBloco || correcaoRecente || (temImagem && Boolean(resposta) && !naoEhComida));
+  let foiRefeicao = !ehPedido && !metaConversa && !blocoDeSugestao && (Boolean(estruturada) || temBloco || correcaoRecente || (temImagem && Boolean(resposta) && !naoEhComida));
+  // desconfiômetro: número impossível ou muito improvável ("400 g de whey", 3 kg de arroz, 3500 kcal numa refeição) não
+  // grava agora; a bot pergunta e a refeição espera a confirmação (60 min). Correção de registro já gravado não passa aqui.
+  if (foiRefeicao && !confirmouPendente && !correcaoRecente) {
+    const lida = estruturada ? null : lerEstimativa(resposta);
+    const est = estruturada || (lida ? { kcal: lida.kcal, proteina: lida.p, carbo: lida.c, gordura: lida.g } : null);
+    const aud = est ? auditarRefeicao(est, texto) : null;
+    if (aud?.motivos.length) console.log(`[auditoria] ${perfil.nome}: ${aud.motivos.join('; ')}${aud.suspeito ? '; pergunto antes de gravar' : ''}`);
+    if (aud?.suspeito) {
+      estado.memoria.refeicoesPendentes ||= {};
+      estado.memoria.refeicoesPendentes[jids[0]] = {
+        refeicao: { ...est, itens: est.itens || descricaoDaAnalise(resposta, texto || (temImagem ? '[foto]' : '')), hora: est.hora || horaLocal },
+        em: Date.now(),
+        pergunta: aud.pergunta,
+        motivos: aud.motivos,
+      };
+      persistirMemoria(estado.memoria).catch(() => {});
+      resposta = `${perfil.nome.split(' ')[0]}, antes de eu anotar: ${aud.pergunta}`;
+      foiRefeicao = false;
+    }
+  }
+  if (confirmouPendente && !resposta) resposta = `Anotado ✅ ${refeicao.itens || 'a refeição'} (~${Math.round(Number(refeicao.kcal) || 0)} kcal).`;
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
   if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
