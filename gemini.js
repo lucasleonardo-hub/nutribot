@@ -324,12 +324,15 @@ function blocoMomentos(momentos) {
 // Respostas longas da bot entram resumidas no histórico (primeiros caracteres + a linha de estimativa, se houver):
 // o que importa pra continuidade é o que foi dito, não a análise inteira de novo. Corta ~40% dos tokens por mensagem.
 const HISTORICO_MAX_CHARS_BOT = Number(process.env.HISTORICO_MAX_CHARS_BOT) || 350;
-function encurtarFala(m) {
+export function encurtarFala(m) {
   const t = String(m.texto || '');
   if (m.tipo !== 'bot' || t.length <= HISTORICO_MAX_CHARS_BOT) return t;
   const estimativa = t.match(/🔥\s*\*?Estimativa[^\n]*/)?.[0];
+  // a dica do fim é onde ficam as propostas dela ("tenta subir o agachamento pra 52,5 kg"): sem isso, na resposta seguinte
+  // ela não lembrava o que tinha sugerido (16/10: "vou subir a carga" -> "subir é o plano, mas só se estiver recuperado")
+  const dica = t.match(/💡\s*\*{0,2}Dica[^\n]*/)?.[0]?.slice(0, 240);
   const cabeca = t.slice(0, HISTORICO_MAX_CHARS_BOT).replace(/\s+\S*$/, '');
-  return `${cabeca} […]${estimativa && !cabeca.includes(estimativa) ? `\n${estimativa}` : ''}`;
+  return `${cabeca} […]${estimativa && !cabeca.includes(estimativa) ? `\n${estimativa}` : ''}${dica && !cabeca.includes(dica) ? `\n${dica}` : ''}`;
 }
 function blocoHistorico(mensagens, limite = 60) {
   if (!mensagens?.length) return '(nenhuma mensagem ainda hoje)';
@@ -753,7 +756,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
         `A mensagem atual chegou poucos minutos depois e é PARTE DA MESMA refeição (mais um item na foto, "tem X", "não tem Y", "pra substituir Z", "uma porção"). NÃO refaça a análise do zero e NÃO repita item que ela negou: parta da lista acima, aplique a mudança, e responda CURTO com "🔥 *Estimativa corrigida:*" do TOTAL da refeição inteira e a linha REFEICAO com "correcao": true e "itens" = a lista COMPLETA e correta depois da mudança. Se for claramente uma refeição nova e diferente (outro horário de comer, outro tipo), aí sim analise como nova. Se NÃO der pra saber se é parte dela ou coisa nova (fora do habitual), NÃO analise: pergunte em UMA linha, no seu tom ("isso aí é parte do almoço de agora ou outra coisa?"), sem bloco e sem linha REFEICAO.\n\n`
       : '') +
     (contestacao
-      ? `A PESSOA ESTÁ CONTESTANDO O QUE VOCÊ DISSE. Antes de responder: (1) confira o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" e os dados do perfil; (2) NÃO defenda número, horário ou fato que não esteja nesses blocos, mesmo que você tenha dito antes na conversa: se você disse e não está lá, você errou; (3) se ela tiver razão, ceda de primeira, corrija (linha REGISTRO quando for registro) e agradeça, sem ironia e sem "bug do sistema"; (4) se os registros confirmarem você, mostre o registro com hora e valor, em uma linha, com calma. Nunca insista duas vezes sem evidência.\n\n`
+      ? `A PESSOA ESTÁ CONTESTANDO O QUE VOCÊ DISSE. Antes de responder: (1) confira o bloco "REFEIÇÕES JÁ REGISTRADAS HOJE" e os dados do perfil; (2) NÃO defenda número, horário ou fato que não esteja nesses blocos, mesmo que você tenha dito antes na conversa: se você disse e não está lá, você errou; (3) se ela tiver razão, COMECE pedindo desculpas de verdade, curto e no seu jeito ("Desculpa, ${perfil.nome.split(' ')[0]}, eu viajei feio aqui"), diga o certo e corrija (linha REGISTRO quando for registro), sem ironia e sem jogar a culpa em "sistema", "painel" ou "histórico"; (4) se os registros confirmarem você, mostre o registro com hora e valor, em uma linha, com calma. Nunca insista duas vezes sem evidência.\n\n`
       : '') +
     `MENSAGEM ATUAL DE ${perfil.nome}${
       fotos.length > 1

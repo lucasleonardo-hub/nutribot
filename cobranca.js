@@ -1,6 +1,6 @@
 // cobranca.js - "Cadê a refeição de hoje?": cobra quem passou do horário habitual (aprendido) sem mandar a refeição.
 
-import { listarPerfis, refeicoesDosDias, persistirMemoria } from './mongo.js';
+import { listarPerfis, refeicoesDosDias, persistirMemoria, colecao } from './mongo.js';
 import * as ia from './gemini.js';
 import { docsPara } from './conhecimento.js';
 import { dossieDe } from './pessoas.js';
@@ -92,6 +92,24 @@ export function detectarAdiamento(texto, agoraMin) {
   return { refeicao, ate };
 }
 
+/**
+ * Puro. Horário habitual de um slot NESTE dia da semana: a mediana dos minutos dos registros desse slot em dias com o mesmo
+ * dia da semana de `dia` (as refeições recentes, `_refs`); null com menos de 2.
+ */
+export function habitualDoDiaDaSemana(refs, slot, dia) {
+  const dow = new Date(`${dia}T12:00:00Z`).getUTCDay();
+  const mins = (refs || [])
+    .filter((r) => r?.slot === slot && r.dia && r.dia !== dia && new Date(`${r.dia}T12:00:00Z`).getUTCDay() === dow && Number.isFinite(Number(r.minutos)))
+    .map((r) => Number(r.minutos))
+    .sort((a, b) => a - b);
+  if (mins.length < 2) return null;
+  const m = Math.floor(mins.length / 2);
+  return mins.length % 2 ? mins[m] : Math.round((mins[m - 1] + mins[m]) / 2);
+}
+
+/** Minutos depois de uma mensagem espontânea da Nutri pra pessoa em que a cobrança não sai (seria a mesma pergunta). */
+export const INTERVENCAO_RECENTE_MIN = 60;
+
 /** Puro. Até quando (minutos do dia) a refeição está adiada hoje, ou null. */
 export function adiadoAte(memoria, nome, slot, dia) {
   const a = memoria?.adiamentos?.[`${nome}:${slot}`];
@@ -134,7 +152,10 @@ export async function verificarCobrancas() {
       if (!h.aprendido) return false; // só cobra horário que ela JÁ aprendeu (3+ refeições registradas nesse slot)
       // avisou que vai atrasar: o limite passa a ser a hora dita + folga (a janela de cobrança anda junto)
       const adiado = adiadoAte(estado.memoria, p.nome, s.id, diaP);
-      const limite = Math.max(h.minutos + ATRASO_COBRANCA_MIN, adiado != null ? adiado + FOLGA_ADIAMENTO_MIN : 0);
+      // dia da semana com rotina própria (16/10: a Ale tem inglês na sexta até as 10h e o café sai mais tarde): com 2+
+      // registros desse slot nesse dia da semana, vale o mais tarde entre o habitual geral e o desse dia
+      const doDia = habitualDoDiaDaSemana(p._refs || [], s.id, diaP);
+      const limite = Math.max(Math.max(h.minutos, doDia ?? 0) + ATRASO_COBRANCA_MIN, adiado != null ? adiado + FOLGA_ADIAMENTO_MIN : 0);
       if (agoraMin < limite || agoraMin > limite + JANELA_COBRANCA_MIN) return false; // passou da janela: fica pro resumo do dia
       const jaMandou = hoje.some((r) => r.dia === diaP && r.slot === s.id && p.jids.includes(r.jid));
       return !jaMandou && !estado.memoria.cobrancas[`${p.nome}:${s.id}`];
@@ -161,6 +182,15 @@ export async function verificarCobrancas() {
       const lugarAgora = p._lugares?.situacao?.estado === 'lugar' ? p._lugares.situacao.lugar : null;
       if (lugarAgora && ['restaurante', 'bar', 'café', 'padaria', 'academia'].includes(lugarAgora.tipo)) {
         console.log(`[cobranca] ${p.nome} está em ${lugarAgora.tipo} desde ${p._lugares.situacao.desde}; não cobro agora`);
+        continue;
+      }
+      // a Nutri acabou de falar espontaneamente com a pessoa (proatividade: "cadê você?" às 11:30, 16/10): a cobrança das
+      // 11:40 era a mesma pergunta de novo. Fica marcada como feita e não sai.
+      const recente = await colecao('intervencoes')
+        .findOne({ jid: { $in: p.jids || [] }, criadoEm: { $gte: new Date(Date.now() - INTERVENCAO_RECENTE_MIN * 60_000) } })
+        .catch(() => null);
+      if (recente) {
+        console.log(`[cobranca] ${p.nome}: a Nutri falou com ela às ${recente.hora} (mensagem espontânea); não cobro ${slot.nome} de novo`);
         continue;
       }
       const msg = await ia.cobrarRefeicao({

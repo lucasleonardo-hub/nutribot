@@ -191,6 +191,16 @@ export const CENARIOS = [
     deve: [/2\.?738/],
   },
   {
+    // 16/10: com o Gemini fora, a reserva disse pra Ale "ontem você não registrou nada" (ela registrou 3 refeições) e, no
+    // "tá doida?", culpou "o painel". Agora: desculpas de verdade, sem culpar sistema.
+    id: 'C51', categoria: 'contestação', titulo: '"tá doida?" depois de um erro da Nutri vira desculpas de verdade, sem culpar o sistema', quem: 'lucas', hora: '11:53',
+    historico: [bot('11:50', 'Bom dia, Lu! Ontem você não registrou nada e hoje só apareceu agora. Tudo bem por aí?')],
+    texto: 'Ontem não registrei nada? Tá doida? Registrei tudo ontem',
+    extras: { contestacao: true },
+    deve: [/desculp|foi mal|perd[ãa]o/i],
+    naoDeve: [/painel|sistema (me|que)|bug/i],
+  },
+  {
     id: 'C36', categoria: 'papo', titulo: 'papo curto recebe resposta curta', quem: 'lucas', hora: '21:50',
     texto: 'hehe',
     maxChars: 260,

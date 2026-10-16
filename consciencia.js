@@ -3,7 +3,7 @@
 // nos registros; 3) juntar as contestações do dia pro caderno de aprendizado; 4) montar o bloco de lições pro prompt.
 
 const RE_CONTESTACAO =
-  /t[áa] errad|est[áa] errad|errad[oa]s?\b|corrig|conserta|n[ãa]o foi isso|n[ãa]o (é|era) isso|voc[êe] errou|errou\b|n[ãa]o bate|isso n[ãa]o (existe|aconteceu|rolou)|de onde (tirou|veio)|inventou|n[ãa]o (comi|tomei|registrei) isso|remove|apaga|tira (esse|essa|isso)|dnv|de novo/i;
+  /t[áa] errad|est[áa] errad|errad[oa]s?\b|corrig|conserta|n[ãa]o foi isso|n[ãa]o (é|era) isso|voc[êe] errou|errou\b|n[ãa]o bate|isso n[ãa]o (existe|aconteceu|rolou)|de onde (tirou|veio)|inventou|n[ãa]o (comi|tomei|registrei) isso|remove|apaga|tira (esse|essa|isso)|dnv|de novo|t[áa] doid[oa]|ficou doid[oa]|doid[oa]\?|pirou|maluc[oa]\?|viajou|t[áa] viajando|como assim|nada a ver|que hist[óo]ria [ée] essa|n[ãa]o registrei nada\?|eu n[ãa]o (disse|falei) isso/i;
 
 /** A mensagem contesta o que a bot disse? (o chamador ainda confere se é resposta a ela / menção / logo depois de fala dela) */
 export const pareceContestacao = (texto) => RE_CONTESTACAO.test(String(texto || ''));

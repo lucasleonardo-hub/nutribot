@@ -207,6 +207,28 @@ export function soReacao(texto) {
   return semEmoji.split(/\s+/).every((p) => /^(k{2,}|(rs)+|(ha){2,}h?|(he){2,}|(hu){2,}|ok+|okay|top|show|massa|boa|valeu|vlw|tmj|blz|beleza|fechou|demais|aff|eita|opa|uau|nossa)$/.test(p));
 }
 
+/**
+ * Puro. Texto curto que continua a refeição anterior ("tem também um suco", "sem açúcar", "era integral", "200 g"): fala
+ * de comida, de quantidade ou de "tem/sem/com/faltou". 16/10: "N é reunião é academia as 7h" e "Beleza vou subir a carga"
+ * viraram parte do shake das 06:37 e a Nutri reimprimiu a estimativa.
+ */
+export function pareceContinuacaoDeRefeicao(texto) {
+  const t = String(texto || '').toLowerCase();
+  if (!t.trim()) return false;
+  if (/\d+([.,]\d+)?\s*(g|gr|gramas?|ml|kg|l|litros?|un|unidades?|fatias?|colher\w*|copos?|x[ií]caras?|scoops?|potes?|latas?)\b/.test(t)) return true;
+  if (/\b(tem|tinha|n[aã]o tem|n[aã]o tinha|sem|com|tamb[eé]m|e mais|faltou|esqueci|metade|meio|meia|inteir[oa]|por[cç][aã]o|era|eram)\b/.test(t) && !/\b(reuni[aã]o|academia|treino|carga|aula|trabalho)\b/.test(t)) return true;
+  return /(arroz|feij|carne|frango|ovo|p[aã]o|queijo|leite|suco|caf[eé]|fruta|banana|ma[cç][aã]|salada|molho|integral|batata|macarr|whey|iogurte|a[cç][uú]car|ado[cç]ante|doce|bolo|refri|cerveja|azeite|manteiga|requeij|presunto|peixe|porco|tapioca|cuscuz|aveia|granola|\bmel\b|chocolate|pasta de amendoim|sorvete|biscoito|bolacha|torrada|wrap|lanche|sobremesa)/.test(t);
+}
+
+/** A última resposta pra essa pessoa (até 60 min atrás) saiu de uma IA reserva externa? Nota pro prompt da contestação. */
+function notaReservaRecente(jid, hora) {
+  const h = estado.memoria?.reservaPara?.[jid];
+  if (!h) return '';
+  const dt = minutosDe(hora) - minutosDe(h);
+  if (dt < 0 || dt > 60) return '';
+  return `SUA RESPOSTA DAS ${h} PRA ESSA PESSOA SAIU DE UMA IA RESERVA, MAIS FRACA (o Gemini estava fora): é bem provável que ela esteja certa em contestar. Peça desculpas de verdade e corrija, sem culpar sistema nem painel.`;
+}
+
 /** Refeição que o desconfiômetro (auditoria.js) segurou esperando a confirmação da pessoa: vale por 60 min. */
 const PENDENTE_REFEICAO_MIN = 60;
 function refeicaoPendenteDe(jid) {
@@ -504,7 +526,9 @@ export function citacaoDe(conteudo, perfis) {
   else if (jid) autor = (perfis || []).find((p) => p.jids?.includes(jid))?.nome || autor;
   else if (ctx.stanzaId && enviadosPeloBot.has(ctx.stanzaId)) autor = ia.nomeDaBot();
   const trecho = `${tipo}${tipo && texto ? ' ' : ''}${texto}`.trim();
-  return trecho ? { autor, texto: trecho.slice(0, 300) } : null;
+  // começo e fim: a dica/proposta costuma vir no fim da mensagem citada (16/10: "subir o agachamento pra 52,5 kg")
+  const curto = trecho.length <= 520 ? trecho : `${trecho.slice(0, 220).replace(/\s+\S*$/, '')} […] ${trecho.slice(-280).replace(/^\S*\s+/, '')}`;
+  return trecho ? { autor, texto: curto } : null;
 }
 
 /**
@@ -981,7 +1005,8 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   // não é parte da mesma: conversa sobre o sistema, ou mensagem que nomeia OUTRA refeição ("o café da tarde eu tomei agora")
   const parteDaMesma =
     minhaUltima && minutosDesdeUltima >= 0 && minutosDesdeUltima <= 30 && !temAudio && !metaConversa && !contestacao && !mencionaOutraRefeicao(texto, minhaUltima.slot) &&
-    ((temImagem && String(texto || '').trim().length <= 60) || (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(textoDecisao)));
+    ((temImagem && String(texto || '').trim().length <= 60) ||
+      (!temImagem && String(texto || '').trim().length <= 80 && !parecePedidoOuPlano(textoDecisao) && (pareceContinuacaoDeRefeicao(texto) || Boolean(perguntaRecenteDe(jids[0], hora)))));
   const emAndamento = parteDaMesma ? { hora: minhaUltima.horaLocal || minhaUltima.hora, kcal: minhaUltima.estimativa?.kcal ? Math.round(minhaUltima.estimativa.kcal) : null, descricao: minhaUltima.descricao || minhaUltima.resumo || '' } : null;
   if (emAndamento) console.log(`[refeicoes] ${perfil.nome}: mensagem tratada como parte da refeição das ${emAndamento.hora}`);
   // pergunta de progresso (responde com o bloco PROGRESSO DE PESO, sem registrar nada): a regra está em progresso.js, a mesma
@@ -989,7 +1014,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const perguntaProgresso = rotaPerguntaProgresso({ texto, temImagem, temAudio, metaConversa, contestacao, emAndamento });
   // fase 7: o bloco PELO APP e as confidências (pergunta do app, texto do humor) que a guarda tira da resposta do grupo
   const doApp = motivo ? await blocoAppDe(eu, diaPessoa, texto).catch(() => ({ texto: '', confidencias: [] })) : { texto: '', confidencias: [] };
-  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', app: doApp.texto, lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora), notaRefeicaoPendente(jids[0])].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', app: doApp.texto, lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora), notaRefeicaoPendente(jids[0]), contestacao ? notaReservaRecente(jids[0], hora) : ''].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -1216,7 +1241,11 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
   const RE_NAO_COMIDA = pareceConsumo(texto)
     ? /não (é|foi) (uma )?refei|comeu isso ou|é (só )?(pra|para) avaliar/i
     : /receita|r[óo]tulo|tabela nutricional|card[áa]pio|produto|embalagem|print|suplemento novo|não (é|foi) (uma )?refei|comeu isso ou/i;
-  const naoEhComida = RE_NAO_COMIDA.test(resposta || '');
+  // foto da balança ou print de pesos ("Peso anterior 74.200 / Peso atual 73.800", 16/10) não é refeição: virava um
+  // "almoço" sem estimativa no banco (e a cobrança do almoço achava que ela já tinha mandado)
+  const fotoDePeso = temImagem && !temBloco && /\bpesos?\b|balan[cç]a|bioimped|pesagem/i.test(texto || '') && !pareceContinuacaoDeRefeicao(texto);
+  if (fotoDePeso) console.log(`[refeicoes] ${perfil.nome}: foto com peso/balança, não é refeição`);
+  const naoEhComida = fotoDePeso || RE_NAO_COMIDA.test(resposta || '');
   const blocoDeSugestao = /O que eu vi:\*?[^\n]*sugest|Estimativa[^:\n]*:[^\n]*sugest/i.test(resposta || '');
   // Texto sem foto que é pedido de sugestão ou plano futuro NUNCA vira refeição, mesmo que a IA tenha posto o bloco
   const ehPedido = !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao);
@@ -1269,12 +1298,25 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
       foiRefeicao = false;
     }
   }
+  // foto respondida por uma reserva externa sem o bloco da refeição (16/10: com todo o Gemini em 503, a Cohere inventou
+  // "ontem você não registrou nada" e "maçãs depois" para o café da Ale): não inventa nem grava; pede pra contar o prato
+  if (origemExterna && temImagem && !temBloco && !estruturada && !naoEhComida && !ehPedido && !metaConversa && !correcaoRecente) {
+    console.log(`[reserva] ${perfil.nome}: foto respondida pela reserva sem análise; peço pra descrever em vez de gravar`);
+    resposta = `${perfil.nome.split(' ')[0]}, recebi a foto, mas agora não tô conseguindo enxergar direito 😅 Me conta o que tem no prato que eu anoto certinho?`;
+    foiRefeicao = false;
+  }
   if (confirmouPendente && !resposta) resposta = `Anotado ✅ ${refeicao.itens || 'a refeição'} (~${Math.round(Number(refeicao.kcal) || 0)} kcal).`;
 
   // Papo aleatório avaliado pela IA (respondendo ou não): o próximo só daqui a PAPO_INTERVALO_MIN
   if (!motivo && !foiRefeicao) ultimoPapoEm = Date.now();
 
   // A pessoa contou um dado novo (peso, cidade, dieta...): sobrescreve o perfil agora, com a data, e a ficha no Drive
+  // biotipo só quando a própria pessoa falou disso (16/10: a reserva externa gravou "mesomorfo" na Ale a partir de uma foto
+  // da balança). É conduta que muda a dica de comida: não pode ser chute do modelo.
+  if (atualizacao && typeof atualizacao === 'object' && atualizacao.biotipo && !/biotipo|ectomorf|mesomorf|endomorf|magr[oa] de ruim|falso magro|ganho peso f[aá]cil|dif[ií]cil (de )?(ganhar|engordar)/i.test(texto || '')) {
+    console.log(`[perfil] ${perfil.nome}: biotipo "${atualizacao.biotipo}" ignorado (a pessoa não falou disso)`);
+    delete atualizacao.biotipo;
+  }
   if (atualizacao && typeof atualizacao === 'object') {
     const novo = aplicarAtualizacao(perfil, atualizacao, diaPessoa);
     if (novo) {
@@ -1438,6 +1480,11 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
 
   // Resposta saiu por reserva externa (Gemini em alta demanda): fica anotada pra ela mesma revisar quando o Gemini voltar.
   // Se estava errada, ela corrige no grupo citando a mensagem e conserta o registro da refeição (revisao.js, cron de 10 min).
+  // lembra que a última resposta pra essa pessoa saiu de uma reserva (se ela contestar, é provável que tenha razão)
+  if (origemExterna && enviado?.key) {
+    estado.memoria.reservaPara ||= {};
+    estado.memoria.reservaPara[jids[0]] = hora;
+  }
   if (origemExterna && enviado?.key && resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     registrarParaRevisao({ jidGrupo, jid: jids[0], perfil, texto, imagem, mimeType, resposta, dia: diaRegistrado, hora, horaLocal, enviado, refeicao: refeicaoRegistrada })
       .catch((e) => console.error('[revisao] falha ao anotar pra revisão:', e.message));
