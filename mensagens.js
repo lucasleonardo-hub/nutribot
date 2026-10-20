@@ -231,7 +231,7 @@ async function executarResgate() {
   if (!p?.desdeMs || !p?.ateMs || !grupo || !estado.retomada) return 'Não tenho guardado nenhum período fora do ar pra resgatar.';
   estado.retomada.abrirManual({ desdeMs: p.desdeMs, ateMs: p.ateMs });
   try {
-    await pedirHistoricoDoGrupo(grupo, 100);
+    await pedirHistoricoDoGrupo(grupo, 50, { desdeMs: p.desdeMs });
     return `Pedi ao celular o histórico do grupo de ${hhmm(p.desdeMs)} a ${hhmm(p.ateMs)}. Em até 1 min eu respondo as refeições e as chamadas desse período 🙏`;
   } catch (e) {
     await estado.retomada.concluir('pedido de histórico falhou').catch(() => {});

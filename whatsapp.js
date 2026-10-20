@@ -183,12 +183,45 @@ const ancorasGrupo = new Map(); // jid do grupo -> { key, ts } da mensagem mais 
  * Pede ao celular da bot as `quantas` mensagens do grupo ANTERIORES à mais recente vista (a âncora). O celular precisa
  * estar online; a resposta chega pelo messaging-history.set (tipo ON_DEMAND) e passa pelo aoHistorico de sempre.
  */
-export async function pedirHistoricoDoGrupo(jidGrupo, quantas = 100) {
+export async function pedirHistoricoDoGrupo(jidGrupo, quantas = 50, { desdeMs = 0 } = {}) {
   const ancora = ancorasGrupo.get(jidGrupo);
   if (!ancora) throw new Error('ainda não vi nenhuma mensagem do grupo desde que liguei: mande qualquer mensagem no grupo e tente de novo');
   if (!estado.sock?.fetchMessageHistory) throw new Error('WhatsApp não conectado');
+  // o celular responde em páginas (20/10: veio 1 página de 3 mensagens): cada lote do grupo faz pedir a página anterior,
+  // a partir da mais antiga recebida, até passar de `desdeMs` ou chegar no teto de páginas
+  paginacao = { jid: jidGrupo, desdeMs, quantas, paginas: 1, ultimaId: ancora.key.id };
   await estado.sock.fetchMessageHistory(quantas, ancora.key, ancora.ts);
   return ancora;
+}
+const MAX_PAGINAS_HISTORICO = 15;
+let paginacao = null; // { jid, desdeMs, quantas, paginas, ultimaId }
+const HISTORICO_SOB_PEDIDO = 6; // proto.HistorySync.HistorySyncType.ON_DEMAND
+
+/** Lote do histórico sob pedido: pede a página anterior se ainda não chegou no começo do período. */
+function continuarPaginacao(messages) {
+  const p = paginacao;
+  if (!p || !estado.sock?.fetchMessageHistory) return;
+  const doGrupo = (messages || []).filter((m) => m?.key?.remoteJid === p.jid && m.key.id && Number(m.messageTimestamp) > 0);
+  if (!doGrupo.length) {
+    console.log(`[wa] histórico sob pedido, página ${p.paginas}: nenhuma mensagem do grupo nesse lote`);
+    paginacao = null;
+    return;
+  }
+  const maisAntiga = doGrupo.reduce((a, b) => (Number(b.messageTimestamp) < Number(a.messageTimestamp) ? b : a));
+  const ts = Number(maisAntiga.messageTimestamp) * 1000;
+  console.log(`[wa] histórico sob pedido, página ${p.paginas}: ${doGrupo.length} do grupo, a mais antiga de ${new Date(ts).toISOString()}`);
+  if (ts <= p.desdeMs || p.paginas >= MAX_PAGINAS_HISTORICO || maisAntiga.key.id === p.ultimaId) {
+    paginacao = null;
+    return;
+  }
+  p.paginas++;
+  p.ultimaId = maisAntiga.key.id;
+  estado.sock
+    .fetchMessageHistory(p.quantas, { remoteJid: p.jid, id: maisAntiga.key.id, fromMe: Boolean(maisAntiga.key.fromMe) }, ts)
+    .catch((e) => {
+      console.warn('[wa] página seguinte do histórico falhou:', e.message);
+      paginacao = null;
+    });
 }
 
 /**
@@ -389,6 +422,7 @@ export async function iniciarWhatsApp(handlers) {
   sock.ev.on('messaging-history.set', ({ messages, syncType, progress, isLatest }) => {
     const n = messages?.length || 0;
     if (n) console.log(`[wa] histórico recebido: ${n} mensagem(ns) (tipo ${syncType ?? '?'}, progresso ${progress ?? '?'}${isLatest ? ', mais recente' : ''})`);
+    if (n && syncType === HISTORICO_SOB_PEDIDO) continuarPaginacao(messages);
     if (n && aoHistorico) {
       try {
         aoHistorico({ messages, syncType, progress, isLatest });
