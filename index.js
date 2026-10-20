@@ -27,7 +27,7 @@ import { reservasDisponiveis } from './reservas.js';
 import { TZ, agora, comTempo, diasAnteriores, diaSeguinte, registroDaConversa } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca, vigiarConexao, meusJids, pedirCodigoPareamento, temNumeroParaParear } from './whatsapp.js';
-import { criarRetomada } from './retomada.js';
+import { criarRetomada, AVISO_VOLTA_MIN } from './retomada.js';
 import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes, falaProgramada, repetirPendentesDrive } from './dia.js';
 import { avisarAdmin } from './avisos.js';
 import { paginaInicial, paginaPrivacidade } from './paginas.js';
@@ -313,6 +313,8 @@ async function checarDrive() {
       // o período coberto fica guardado: o !resgatar (privado do admin) pede de novo o histórico desse intervalo
       aoConcluir: async ({ desdeMs, ateMs, manual }) => {
         if (manual) return;
+        // religamento rápido (parear de novo de propósito pra buscar o histórico) não apaga o período guardado da queda
+        if (ateMs - desdeMs < AVISO_VOLTA_MIN * 60_000 && estado.config?.ultimaRetomada?.desdeMs) return;
         estado.config = await salvarConfig({ ultimaRetomada: { desdeMs, ateMs } });
         estado.config.apresentadoEm ||= {};
       },

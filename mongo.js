@@ -571,7 +571,9 @@ export async function guardarHistoricoGrupo(jid, mensagens = []) {
   const ops = doGrupo.map((m) => {
     const t = m.messageTimestamp;
     const s = typeof t === 'object' && t ? ('toNumber' in t ? t.toNumber() : t.low) : Number(t) || 0;
-    return { updateOne: { filter: { _id: `${jid}:${m.key.id}` }, update: { $set: { jid, ts: new Date(s * 1000), em, dados: JSON.stringify(m, BufferJSON.replacer) } }, upsert: true } };
+    // messageTimestamp vira número antes de guardar: o Long do proto não sobrevive ao JSON (voltaria { low, high } e
+    // Number() daria NaN; a mensagem seria descartada por "idade")
+    return { updateOne: { filter: { _id: `${jid}:${m.key.id}` }, update: { $set: { jid, ts: new Date(s * 1000), em, dados: JSON.stringify({ ...m, messageTimestamp: s }, BufferJSON.replacer) } }, upsert: true } };
   });
   try {
     await colecao('historico_grupo').bulkWrite(ops, { ordered: false });

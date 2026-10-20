@@ -11,7 +11,7 @@ import { pesquisar, formatarFontes } from './pesquisa.js';
 import { dossieDe, salvarFicha } from './pessoas.js';
 import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojeParaPrompt, lerRotuloRefeicao, nomeDoSlot, acharRegistro } from './resumo.js';
 import { visaoDe } from './acompanhamento.js';
-import { agora, dataExtenso, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores, ultimaDoChat, marcaDeTempo, registrosDaVirada, ultimaRefeicao, destinoDaRefeicao, JANELA_VIRADA_MIN } from './util.js';
+import { agora, dataExtenso, TZ, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores, ultimaDoChat, marcaDeTempo, registrosDaVirada, ultimaRefeicao, destinoDaRefeicao, JANELA_VIRADA_MIN } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
 import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir, estaDigitando, pedirHistoricoDoGrupo } from './whatsapp.js';
 import { sintetizar } from './voz.js';
@@ -37,7 +37,7 @@ const RE_TREINO = /\b(treino|treinei|treinar|academia|carga|peso (no|na|do) (sup
 export const falaDeTreino = (t) => RE_TREINO.test(String(t || ''));
 import { avisarErro } from './avisos.js';
 import { registrarParaRevisao } from './revisao.js';
-import { notaDeAtraso, atrasoEmMinutos, ATRASO_DESCULPAS_MIN, RESGATE_IDADE_MAX_H } from './retomada.js';
+import { notaDeAtraso, atrasoEmMinutos, ATRASO_DESCULPAS_MIN, RESGATE_IDADE_MAX_H, periodoDoComando } from './retomada.js';
 import { comandoApp } from './api-auth.js';
 import { blocoApp, somarDias } from './api-escrita.js';
 import { humorDe, eventosDe, historicoGrupoGuardado } from './mongo.js';
@@ -109,7 +109,13 @@ const JANELA_FOTOS_S = Number(process.env.JANELA_FOTOS_S) || 300; // fotos a mai
 
 const ehFoto = (m) => Boolean(extractMessageContent(m?.message)?.imageMessage);
 const remetenteDe = (m) => (jidsDoRemetente(m?.key || {})[0] || '');
-const segundosDe = (m) => Number(m?.messageTimestamp) || 0;
+// o messageTimestamp pode ser número, Long do proto ({ low, high, toNumber }) ou o Long já passado por JSON ({ low, high })
+const segundosDe = (m) => {
+  const t = m?.messageTimestamp;
+  if (t == null) return 0;
+  if (typeof t === 'object') return Number(typeof t.toNumber === 'function' ? t.toNumber() : t.low) || 0;
+  return Number(t) || 0;
+};
 
 /**
  * Fotos seguidas da MESMA pessoa (ex.: 3 fotos do mesmo prato, ou prato + copo + sobremesa) viram UMA análise:
@@ -224,11 +230,14 @@ export function pareceContinuacaoDeRefeicao(texto) {
  * !resgatar (privado ou grupo, só o admin): pede ao celular o histórico do grupo do último período fora do ar
  * (config.ultimaRetomada) e responde o que ficou sem resposta, pelas regras do resgate. Devolve o texto da resposta.
  */
-async function executarResgate() {
-  const p = estado.config?.ultimaRetomada;
+async function executarResgate(textoComando = '') {
   const grupo = estado.memoria.grupo;
-  const hhmm = (ms) => new Date(ms).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-  if (!p?.desdeMs || !p?.ateMs || !grupo || !estado.retomada) return 'Não tenho guardado nenhum período fora do ar pra resgatar.';
+  const hhmm = (ms) => new Date(ms).toLocaleString('pt-BR', { timeZone: TZ, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  // período dito no comando ("!resgatar 20/10 01:59 19:01") ou o último período fora do ar
+  const pedido = periodoDoComando(textoComando, { diaHoje: agora().dia, fuso: TZ, agoraMs: Date.now() });
+  if (pedido?.erro) return pedido.erro;
+  const p = pedido || estado.config?.ultimaRetomada;
+  if (!p?.desdeMs || !p?.ateMs || !grupo || !estado.retomada) return 'Não tenho guardado nenhum período fora do ar pra resgatar. Diga o período: "!resgatar 01:59 19:01".';
   estado.retomada.abrirManual({ desdeMs: p.desdeMs, ateMs: p.ateMs });
   // primeiro a cópia do histórico que o celular mandou ao religar (guardada por 3 dias): não depende do celular
   const guardadas = await historicoGrupoGuardado(grupo, p.desdeMs, p.ateMs).catch(() => []);
@@ -664,7 +673,7 @@ async function tratarPrivado(msg) {
     // "!resgatar": pede de novo ao celular o histórico do grupo do último período fora do ar e responde o que ficou sem
     // resposta (20/10: o resgate automático fechou antes do histórico chegar). Só no privado do administrador.
     if (cmd === '!resgatar') {
-      const resposta = await executarResgate();
+      const resposta = await executarResgate(texto);
       console.log(`[privado] !resgatar do administrador: ${resposta.slice(0, 80)}`);
       await enviar(jidPrivado, resposta, msg, { rapido: true });
       return;
@@ -752,7 +761,7 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
 
   // "!resgatar" também no grupo (20/10: o dono mandou lá, não no privado), só do administrador
   if (/^!resgatar\b/i.test(String(texto || '').trim())) {
-    const resposta = (await remetenteEhAdmin(jids)) ? await executarResgate() : RESPOSTA_SO_ADMIN;
+    const resposta = (await remetenteEhAdmin(jids)) ? await executarResgate(texto) : RESPOSTA_SO_ADMIN;
     console.log(`[grupo] !resgatar: ${resposta.slice(0, 80)}`);
     await enviar(jidGrupo, resposta, msg, { rapido: true });
     return;

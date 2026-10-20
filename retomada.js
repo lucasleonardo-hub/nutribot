@@ -14,6 +14,7 @@ import { extractMessageContent, jidNormalizedUser, toNumber } from '@whiskeysock
 import { mencionaNome, pareceConsumo } from './util.js';
 
 export const RESGATE_MAX = Number(process.env.RESGATE_MAX) || 20; // teto de mensagens respondidas de uma vez ao voltar (20/10: era 6; agora cabe um dia de refeições das 3 pessoas)
+export const RESGATE_MAX_MANUAL = Number(process.env.RESGATE_MAX_MANUAL) || 40; // no "!resgatar" o dono pediu de propósito: cabe mais
 export const RESGATE_IDADE_MAX_H = Number(process.env.RESGATE_IDADE_MAX_H) || 48; // mais velho que isso nem no resgate
 export const ATRASO_DESCULPAS_MIN = Number(process.env.ATRASO_DESCULPAS_MIN) || 15; // responder depois disso = pedir desculpas
 
@@ -172,6 +173,37 @@ export function avisoDeVolta(minutosFora) {
   return `Voltei! 🙋‍♀️ Fiquei fora do ar por ${quanto} (meu WhatsApp caiu e precisou ser religado), desculpa a demora. Se alguém me chamou ou mandou foto nesse meio tempo, manda de novo que eu respondo agora. 🙏`;
 }
 
+/** Puro. Instante (ms UTC) de "dia + HH:MM" no fuso dado (ex.: 2026-10-20 + 01:59 em America/Sao_Paulo = 04:59Z). */
+export function msDeHoraLocal(dia, hhmm, fuso) {
+  const [h, m] = String(hhmm).split(':').map(Number);
+  const alvo = Date.UTC(Number(dia.slice(0, 4)), Number(dia.slice(5, 7)) - 1, Number(dia.slice(8, 10)), h, m);
+  const partes = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', { timeZone: fuso, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      .formatToParts(new Date(alvo))
+      .map((p) => [p.type, p.value])
+  );
+  const local = Date.UTC(Number(partes.year), Number(partes.month) - 1, Number(partes.day), Number(partes.hour), Number(partes.minute));
+  return alvo - (local - alvo);
+}
+
+/**
+ * Puro. O período pedido no "!resgatar": sem nada = null (quem chama usa o último período fora do ar); "01:59 19:01" =
+ * hoje; "20/10 01:59 19:01" = nesse dia (ano atual). Devolve { desdeMs, ateMs } ou { erro }.
+ */
+export function periodoDoComando(texto, { diaHoje, fuso, agoraMs }) {
+  const t = String(texto || '').replace(/^!resgatar\b/i, '').trim();
+  if (!t) return null;
+  const m = t.match(/^(?:(\d{1,2})\/(\d{1,2})\s+)?(\d{1,2}:\d{2})\s+(\d{1,2}:\d{2})$/);
+  if (!m) return { erro: 'Assim: "!resgatar" (último período fora do ar), "!resgatar 01:59 19:01" (hoje) ou "!resgatar 20/10 01:59 19:01".' };
+  const dia = m[1] ? `${diaHoje.slice(0, 4)}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : diaHoje;
+  if (m[1] && Number.isNaN(Date.parse(`${dia}T12:00:00Z`))) return { erro: 'dia inválido' };
+  const desdeMs = msDeHoraLocal(dia, m[3].padStart(5, '0'), fuso);
+  const ateMs = msDeHoraLocal(dia, m[4].padStart(5, '0'), fuso);
+  if (!(ateMs > desdeMs)) return { erro: 'a hora final precisa ser depois da inicial' };
+  if (desdeMs > agoraMs) return { erro: 'esse período ainda não aconteceu' };
+  return { desdeMs, ateMs: Math.min(ateMs, agoraMs) };
+}
+
 export const RESGATE_ESPERA_MS = Number(process.env.RESGATE_ESPERA_MS) || 60_000; // quanto esperar o histórico depois de religar
 export const RESGATE_FOLGA_MS = Number(process.env.RESGATE_FOLGA_MS) || 15_000; // depois do "complete" (ou de um lote), espera mais lotes
 export const AVISO_VOLTA_MIN = Number(process.env.AVISO_VOLTA_MIN) || 30; // fora por menos que isso: volta em silêncio
@@ -194,13 +226,13 @@ export function criarRetomada({ grupo, meusJids, nomeBot, enfileirar, enviar, li
 
   async function concluir(porque) {
     if (!janela) return null;
-    const { desdeMs, ateMs, buffer, timer, manual } = janela;
+    const { desdeMs, ateMs, buffer, timer, manual, max: janelaMax } = janela;
     janela = null;
     clearTimeout(timer);
     const agoraMs = agora();
     const minutosFora = Math.max(0, (ateMs - desdeMs) / 60_000);
     const jidGrupo = grupo();
-    const r = selecionarResgate(buffer, { desdeMs, ateMs, agoraMs, grupo: jidGrupo, meusJids: meusJids(), nomeBot: nomeBot() });
+    const r = selecionarResgate(buffer, { desdeMs, ateMs, agoraMs, grupo: jidGrupo, meusJids: meusJids(), nomeBot: nomeBot(), max: janelaMax || RESGATE_MAX });
     console.log(`[retomada] fechando (${porque}): fora por ${descreverAtraso(minutosFora).replace(/^há /, '')}, ${buffer.length} mensagem(ns) no histórico, ${r.vistasDoGrupo} do grupo no período, ${r.resgatadas.length} pra responder${r.motivos.length ? ` (${r.motivos.join(', ')})` : ''}`);
     let acao = 'silencio';
     if (r.resgatadas.length) {
@@ -244,10 +276,10 @@ export function criarRetomada({ grupo, meusJids, nomeBot, enfileirar, enviar, li
      * Abre a janela à mão (comando !resgatar): mesmas regras do resgate automático, num período dado. O histórico vem
      * do pedido sob demanda (pedirHistoricoDoGrupo) e a janela fecha RESGATE_FOLGA_MS depois do último lote (ou no tempo).
      */
-    abrirManual({ desdeMs, ateMs }) {
+    abrirManual({ desdeMs, ateMs, max = RESGATE_MAX_MANUAL }) {
       if (!desdeMs || !ateMs || ateMs <= desdeMs) return false;
       if (janela) clearTimeout(janela.timer);
-      janela = { desdeMs, ateMs, buffer: [], manual: true, timer: setTimeout(() => concluir('tempo esgotado').catch(() => {}), RESGATE_ESPERA_MS) };
+      janela = { desdeMs, ateMs, max, buffer: [], manual: true, timer: setTimeout(() => concluir('tempo esgotado').catch(() => {}), RESGATE_ESPERA_MS) };
       janela.timer.unref?.();
       console.log(`[retomada] resgate pedido à mão: de ${new Date(desdeMs).toISOString()} a ${new Date(ateMs).toISOString()}`);
       return true;

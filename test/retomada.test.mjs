@@ -224,3 +224,18 @@ test('criarRetomada: !resgatar abre a janela à mão, não manda "Voltei" e não
   assert.equal(enviadas.length, 0);
   assert.deepEqual(concluidas.map((c) => c.manual), [true]);
 });
+
+test('!resgatar com período: "20/10 01:59 19:01" no fuso de Brasília vira 04:59Z–22:01Z; sem nada = null; erro em formato ruim', async () => {
+  const { msDeHoraLocal, periodoDoComando } = await import('../retomada.js');
+  assert.equal(new Date(msDeHoraLocal('2026-10-20', '01:59', 'America/Sao_Paulo')).toISOString(), '2026-10-20T04:59:00.000Z');
+  assert.equal(new Date(msDeHoraLocal('2026-10-20', '19:01', 'Europe/Sofia')).toISOString(), '2026-10-20T16:01:00.000Z');
+  const ctx = { diaHoje: '2026-10-20', fuso: 'America/Sao_Paulo', agoraMs: Date.parse('2026-10-20T23:30:00Z') };
+  assert.equal(periodoDoComando('!resgatar', ctx), null);
+  assert.deepEqual(periodoDoComando('!resgatar 20/10 01:59 19:01', ctx), { desdeMs: Date.parse('2026-10-20T04:59:00Z'), ateMs: Date.parse('2026-10-20T22:01:00Z') });
+  assert.deepEqual(periodoDoComando('!resgatar 1:59 19:01', ctx), { desdeMs: Date.parse('2026-10-20T04:59:00Z'), ateMs: Date.parse('2026-10-20T22:01:00Z') });
+  assert.equal(periodoDoComando('!resgatar 19:01 01:59', ctx).erro, 'a hora final precisa ser depois da inicial');
+  assert.match(periodoDoComando('!resgatar ontem', ctx).erro, /Assim:/);
+  assert.equal(periodoDoComando('!resgatar 21/10 01:00 02:00', ctx).erro, 'esse período ainda não aconteceu');
+  // fim no futuro é cortado em "agora"
+  assert.equal(periodoDoComando('!resgatar 20/10 19:00 23:59', ctx).ateMs, ctx.agoraMs);
+});
