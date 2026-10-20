@@ -17,7 +17,7 @@ import express from 'express';
 import cron from 'node-cron';
 import QRCode from 'qrcode';
 
-import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemoria, persistirMemoria, carregarPersona, lerConfig, salvarConfig, refeicoesDosDias, carregarAprendizados, colecao } from './mongo.js';
+import { conectarMongo, garantirIndices, fecharMongo, listarPerfis, carregarMemoria, persistirMemoria, carregarPersona, lerConfig, salvarConfig, refeicoesDosDias, carregarAprendizados, colecao, guardarHistoricoGrupo } from './mongo.js';
 import { iniciarDrive, verificarCredencial } from './drive.js';
 import * as ia from './gemini.js';
 import { carregarConhecimento } from './conhecimento.js';
@@ -322,7 +322,11 @@ async function checarDrive() {
       aoMensagem: enfileirarMensagem,
       aoEntrarNoGrupo: apresentarNaFila,
       aoNovoMembro: receberNovoMembro,
-      aoHistorico: (lote) => retomada.aoHistorico(lote),
+      aoHistorico: (lote) => {
+        retomada.aoHistorico(lote);
+        // cópia do histórico do grupo por 3 dias: o !resgatar usa daqui se o resgate automático falhar (20/10)
+        guardarHistoricoGrupo(estado.memoria.grupo || GRUPO_PERMITIDO, lote?.messages).then((n) => n && console.log(`[retomada] ${n} mensagem(ns) do grupo guardada(s) do histórico`)).catch(() => {});
+      },
       aoHistoricoCompleto: (s) => retomada.aoHistoricoCompleto(s),
       aoConectar: async ({ foraPorMin = 0, relogada = false, desdeMs = 0 } = {}) => {
         // a janela da retomada abre ANTES de qualquer await: o histórico pode chegar segundos depois do 'open'

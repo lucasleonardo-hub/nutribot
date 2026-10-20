@@ -25,6 +25,9 @@ export async function conectarMongo() {
 /** Índices das consultas que rodam a cada mensagem (idempotente). */
 export async function garantirIndices() {
   await Promise.all([
+    // histórico do grupo que o celular manda ao religar (20/10: 232 mensagens chegaram e se perderam): 3 dias e some
+    colecao('historico_grupo').createIndex({ jid: 1, ts: 1 }),
+    colecao('historico_grupo').createIndex({ em: 1 }, { expireAfterSeconds: 3 * 86400 }),
     colecao('perfis').createIndex({ jids: 1 }),
     colecao('refeicoes').createIndex({ jid: 1, dia: 1 }),
     colecao('refeicoes').createIndex({ dia: 1 }),
@@ -555,4 +558,43 @@ export async function salvarConfig(patch) {
 /** Registros de todo o grupo desde um dia (repertório do que circula ali; alimenta o !plano). */
 export async function refeicoesGrupoDesde(diaInicial) {
   return colecao('refeicoes').find({ dia: { $gte: diaInicial } }).sort({ dia: 1, minutos: 1 }).toArray();
+}
+
+// ============================================================
+// Histórico do grupo recebido do celular (retomada): guardado por 3 dias pra o !resgatar não depender do celular
+// ============================================================
+/** Guarda as mensagens do grupo `jid` de um lote do histórico (serializadas com BufferJSON). Devolve quantas. Nunca lança. */
+export async function guardarHistoricoGrupo(jid, mensagens = []) {
+  const doGrupo = (mensagens || []).filter((m) => m?.key?.remoteJid === jid && m.key.id && m.message);
+  if (!jid || !doGrupo.length) return 0;
+  const em = new Date();
+  const ops = doGrupo.map((m) => {
+    const t = m.messageTimestamp;
+    const s = typeof t === 'object' && t ? ('toNumber' in t ? t.toNumber() : t.low) : Number(t) || 0;
+    return { updateOne: { filter: { _id: `${jid}:${m.key.id}` }, update: { $set: { jid, ts: new Date(s * 1000), em, dados: JSON.stringify(m, BufferJSON.replacer) } }, upsert: true } };
+  });
+  try {
+    await colecao('historico_grupo').bulkWrite(ops, { ordered: false });
+    return ops.length;
+  } catch (e) {
+    console.warn('[retomada] não consegui guardar o histórico:', e.message);
+    return 0;
+  }
+}
+
+/** As mensagens guardadas do grupo entre `desde` e `ate` (Date ou ms), na forma original (BufferJSON.reviver). */
+export async function historicoGrupoGuardado(jid, desde, ate) {
+  const docs = await colecao('historico_grupo')
+    .find({ jid, ts: { $gt: new Date(desde), $lte: new Date(ate) } })
+    .sort({ ts: 1 })
+    .limit(500)
+    .toArray()
+    .catch(() => []);
+  return docs.map((d) => {
+    try {
+      return JSON.parse(d.dados, BufferJSON.reviver);
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
 }

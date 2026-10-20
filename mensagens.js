@@ -40,7 +40,7 @@ import { registrarParaRevisao } from './revisao.js';
 import { notaDeAtraso, atrasoEmMinutos, ATRASO_DESCULPAS_MIN, RESGATE_IDADE_MAX_H } from './retomada.js';
 import { comandoApp } from './api-auth.js';
 import { blocoApp, somarDias } from './api-escrita.js';
-import { humorDe, eventosDe } from './mongo.js';
+import { humorDe, eventosDe, historicoGrupoGuardado } from './mongo.js';
 import { registrarAdiamento, detectarAdiamento } from './cobranca.js';
 import { auditarRefeicao, confirmaSemNumero, negaSemNumero } from './auditoria.js';
 import { blocoAppConversa, perguntasRecentes, moduloDePerguntas, confidenciasDe, semConfidencias, protegerFerramentas } from './contexto-app.js';
@@ -230,6 +230,16 @@ async function executarResgate() {
   const hhmm = (ms) => new Date(ms).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   if (!p?.desdeMs || !p?.ateMs || !grupo || !estado.retomada) return 'Não tenho guardado nenhum período fora do ar pra resgatar.';
   estado.retomada.abrirManual({ desdeMs: p.desdeMs, ateMs: p.ateMs });
+  // primeiro a cópia do histórico que o celular mandou ao religar (guardada por 3 dias): não depende do celular
+  const guardadas = await historicoGrupoGuardado(grupo, p.desdeMs, p.ateMs).catch(() => []);
+  if (guardadas.length) {
+    estado.retomada.aoHistorico({ messages: guardadas });
+    const r = await estado.retomada.concluir('histórico guardado').catch(() => null);
+    const n = r?.resgatadas?.length || 0;
+    return n
+      ? `Achei ${guardadas.length} mensagem(ns) do grupo de ${hhmm(p.desdeMs)} a ${hhmm(p.ateMs)}: vou responder ${n} (refeições e chamadas), uma por uma 🙏`
+      : `Revi as ${guardadas.length} mensagem(ns) do grupo desse período e não achei refeição nem chamada sem resposta.`;
+  }
   try {
     await pedirHistoricoDoGrupo(grupo, 50, { desdeMs: p.desdeMs });
     return `Pedi ao celular o histórico do grupo de ${hhmm(p.desdeMs)} a ${hhmm(p.ateMs)}. Em até 1 min eu respondo as refeições e as chamadas desse período 🙏`;
