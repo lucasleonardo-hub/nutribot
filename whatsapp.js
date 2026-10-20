@@ -339,14 +339,15 @@ export async function iniciarWhatsApp(handlers) {
 
   // 20/10: registrado como navegador (Chrome/Ubuntu) e sem pedir o histórico completo, o celular mandava só uma fatia
   // mínima do grupo ao parear (as 13 últimas + a criação) e o pedido sob demanda não ia além; 17 h de refeições ficaram
-  // sem resposta. Como aplicativo de computador (Windows/Desktop) com `syncFullHistory`, o celular manda o histórico
-  // inteiro (FULL), que fica guardado 3 dias pro !resgatar. WA_HISTORICO_COMPLETO=off volta ao de antes.
+  // sem resposta. Com `syncFullHistory` (requireFullSync no registro) o celular manda o histórico inteiro (FULL), que
+  // fica guardado 3 dias pro !resgatar. Registrar como aplicativo de computador (Windows/macOS "Desktop") o WhatsApp
+  // recusa hoje (428 no handshake, testado em 20/10): fica navegador. WA_HISTORICO_COMPLETO=off volta ao de antes.
   const historicoCompleto = !/^(off|false|0|n[ãa]o)$/i.test(process.env.WA_HISTORICO_COMPLETO || 'on');
   const sock = makeWASocket({
     version,
     logger,
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
-    browser: historicoCompleto ? Browsers.windows('Desktop') : Browsers.ubuntu('Chrome'),
+    browser: Browsers.ubuntu('Chrome'),
     syncFullHistory: historicoCompleto,
     markOnlineOnConnect: false,
     generateHighQualityLinkPreview: false,
