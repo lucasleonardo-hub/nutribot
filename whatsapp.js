@@ -337,12 +337,17 @@ export async function iniciarWhatsApp(handlers) {
   if (semSessao) marcarQueda('sem sessão ao iniciar (esperando QR)').catch(() => {});
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
 
+  // 20/10: registrado como navegador (Chrome/Ubuntu) e sem pedir o histórico completo, o celular mandava só uma fatia
+  // mínima do grupo ao parear (as 13 últimas + a criação) e o pedido sob demanda não ia além; 17 h de refeições ficaram
+  // sem resposta. Como aplicativo de computador (Windows/Desktop) com `syncFullHistory`, o celular manda o histórico
+  // inteiro (FULL), que fica guardado 3 dias pro !resgatar. WA_HISTORICO_COMPLETO=off volta ao de antes.
+  const historicoCompleto = !/^(off|false|0|n[ãa]o)$/i.test(process.env.WA_HISTORICO_COMPLETO || 'on');
   const sock = makeWASocket({
     version,
     logger,
     auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
-    browser: Browsers.ubuntu('Chrome'),
-    syncFullHistory: false,
+    browser: historicoCompleto ? Browsers.windows('Desktop') : Browsers.ubuntu('Chrome'),
+    syncFullHistory: historicoCompleto,
     markOnlineOnConnect: false,
     generateHighQualityLinkPreview: false,
     getMessage: async () => undefined,
