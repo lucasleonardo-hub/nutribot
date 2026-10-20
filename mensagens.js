@@ -1269,6 +1269,13 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
     delete estado.memoria.refeicoesPendentes[jids[0]];
     persistirMemoria(estado.memoria).catch(() => {});
   }
+  // mensagem resgatada depois de uma queda (ou muito atrasada): a refeição foi na hora em que a pessoa mandou, não na hora
+  // em que a bot respondeu (café das 07:00 respondido às 13:00 virava almoço das 13:00). Sem hora dita, vale a da mensagem;
+  // o caminho da refeição retroativa (horaDita) grava no horário e no slot certos.
+  if (refeicao && !refeicao.hora && (msg._resgatada || atrasadas) && segundosDe(msg)) {
+    const daMsg = marcaDeTempo(eu, new Date(segundosDe(msg) * 1000));
+    if (daMsg.dia === diaPessoa) refeicao = { ...refeicao, hora: daMsg.horaLocal };
+  }
   const estruturada = refeicao && Number(refeicao.kcal) > 0 && Number(refeicao.kcal) < 8000 ? refeicao : null;
   // a pessoa disse QUANDO comeu ("esqueci de informar meu café da manhã, foi às 8h20"): a refeição é retroativa, com a
   // hora dita, e não é correção nem parte da última refeição registrada

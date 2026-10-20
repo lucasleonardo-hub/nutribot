@@ -11,9 +11,9 @@
 // Nada aqui chama IA: é seleção em código, testável sem WhatsApp (test/retomada.test.mjs).
 
 import { extractMessageContent, jidNormalizedUser, toNumber } from '@whiskeysockets/baileys';
-import { mencionaNome } from './util.js';
+import { mencionaNome, pareceConsumo } from './util.js';
 
-export const RESGATE_MAX = Number(process.env.RESGATE_MAX) || 6; // teto de mensagens respondidas de uma vez ao voltar
+export const RESGATE_MAX = Number(process.env.RESGATE_MAX) || 20; // teto de mensagens respondidas de uma vez ao voltar (20/10: era 6; agora cabe um dia de refeições das 3 pessoas)
 export const RESGATE_IDADE_MAX_H = Number(process.env.RESGATE_IDADE_MAX_H) || 48; // mais velho que isso nem no resgate
 export const ATRASO_DESCULPAS_MIN = Number(process.env.ATRASO_DESCULPAS_MIN) || 15; // responder depois disso = pedir desculpas
 
@@ -38,6 +38,18 @@ export function textoDaMensagem(msg) {
  *   - foto ou áudio (refeição: ela analisa mesmo sem ser chamada)
  * @returns {'mencao'|'resposta-a-ela'|'nome'|'midia'|null}
  */
+// 20/10 (pedido do dono: "responder cada mensagem com comida pra não deixar nada de fora durante o período desconectada"):
+// texto de refeição sem menção também é resgatado. Vale quem diz que comeu ("comi", "almocei", "tomei"...) ou quem nomeia
+// a refeição junto com comida ou quantidade ("café da manhã: 2 ovos e pão"); pergunta solta ("o que eu janto?") não.
+const RE_NOME_REFEICAO = /caf[eé] da manh[aã]|\balmo[cç]o\b|\bjanta(r)?\b|\blanche\b|\bceia\b|pr[eé][- ]?treino|p[oó]s[- ]?treino|\bmarmita\b/i;
+const RE_ALIMENTO = /(arroz|feij|carne|frango|ovos?\b|p[aã]o|queijo|leite|suco|fruta|banana|ma[cç][aã]|salada|batata|macarr|whey|iogurte|bolo|pizza|hamb[uú]rguer|lanche|tapioca|cuscuz|aveia|granola|peixe|porco|presunto|requeij|pasta de amendoim|caf[eé]\b|sopa|legume|verdura|torrada|biscoito|chocolate|sorvete|doce|sobremesa|refri|cerveja)/i;
+export function pareceRefeicaoContada(texto) {
+  const t = String(texto || '');
+  if (!t.trim()) return false;
+  if (pareceConsumo(t)) return true;
+  return RE_NOME_REFEICAO.test(t) && (RE_ALIMENTO.test(t.replace(RE_NOME_REFEICAO, ' ')) || /\d+\s*(g|gr|ml|fatias?|colher\w*|un)\b/i.test(t));
+}
+
 export function motivoDoResgate(msg, { meusJids = [], nomeBot = '' } = {}) {
   const c = extractMessageContent(msg?.message);
   if (!c) return null;
@@ -49,6 +61,7 @@ export function motivoDoResgate(msg, { meusJids = [], nomeBot = '' } = {}) {
   if (mencionados.some((j) => meus.includes(j))) return 'mencao';
   if (ctx?.participant && meus.includes(jidNormalizadoSeguro(ctx.participant))) return 'resposta-a-ela';
   if (texto && ((nomeBot && mencionaNome(texto, nomeBot)) || /\bnutri\b/i.test(texto))) return 'nome';
+  if (texto && !texto.trim().startsWith('!') && pareceRefeicaoContada(texto)) return 'comida';
   return null;
 }
 

@@ -188,3 +188,13 @@ test('criarRetomada: o grupo apareceu no histórico mas ninguém a chamou -> vol
   assert.equal(res.vistasDoGrupo, 2);
   assert.equal(enviadas.length, 0);
 });
+
+test('resgate (20/10): texto de refeição sem menção também volta; papo e pergunta solta não', async () => {
+  const { pareceRefeicaoContada } = await import('../retomada.js');
+  for (const t of ['almocei arroz, feijão e frango', 'café da manhã: 2 ovos e pão integral', 'tomei um whey agora', 'jantar foi sopa de legumes', 'lanche 200g de iogurte', 'comi uma pizza']) {
+    assert.equal(pareceRefeicaoContada(t), true, t);
+    assert.equal(motivoDoResgate(texto('2026-10-20T10:00:00Z', t), { meusJids: MEUS, nomeBot: NOME_BOT }), 'comida', t);
+  }
+  for (const t of ['o que eu janto hoje?', 'bora no vôlei hoje?', 'bom dia', 'almoço em família domingo', '!hoje']) assert.equal(motivoDoResgate(texto('2026-10-20T10:00:00Z', t), { meusJids: MEUS, nomeBot: NOME_BOT }), null, t);
+  assert.ok(RESGATE_MAX >= 20, 'um dia de refeições das três pessoas cabe no resgate');
+});
