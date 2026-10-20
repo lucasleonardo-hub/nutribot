@@ -24,7 +24,7 @@ import { registrarCorrecaoEstimativa, ehCorrecaoDeEstimativa } from './calibraca
 import { marcarResposta } from './proatividade.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
 import { enriquecerPerfis, aplicarAtualizacao } from './perfis.js';
-import { tratarComando, AJUDA, aceiteDePlano } from './comandos.js';
+import { tratarComando, AJUDA, aceiteDePlano, remetenteEhAdmin, RESPOSTA_SO_ADMIN } from './comandos.js';
 import { responderPendente, registrarRelato } from './atividades.js';
 import { lerQr, interpretarQr, padronizarItens, registrarNota, resumoNota, confirmacaoNota, aplicarLinhaDespensa, blocoDespensa, testarConsultaSefaz, parsearTextoNfce, receberNotaDoApp } from './despensa.js';
 import { blocoForcaRecuperacao } from './contexto.js';
@@ -218,6 +218,25 @@ export function pareceContinuacaoDeRefeicao(texto) {
   if (/\d+([.,]\d+)?\s*(g|gr|gramas?|ml|kg|l|litros?|un|unidades?|fatias?|colher\w*|copos?|x[ií]caras?|scoops?|potes?|latas?)\b/.test(t)) return true;
   if (/\b(tem|tinha|n[aã]o tem|n[aã]o tinha|sem|com|tamb[eé]m|e mais|faltou|esqueci|metade|meio|meia|inteir[oa]|por[cç][aã]o|era|eram)\b/.test(t) && !/\b(reuni[aã]o|academia|treino|carga|aula|trabalho)\b/.test(t)) return true;
   return /(arroz|feij|carne|frango|ovo|p[aã]o|queijo|leite|suco|caf[eé]|fruta|banana|ma[cç][aã]|salada|molho|integral|batata|macarr|whey|iogurte|a[cç][uú]car|ado[cç]ante|doce|bolo|refri|cerveja|azeite|manteiga|requeij|presunto|peixe|porco|tapioca|cuscuz|aveia|granola|\bmel\b|chocolate|pasta de amendoim|sorvete|biscoito|bolacha|torrada|wrap|lanche|sobremesa)/.test(t);
+}
+
+/**
+ * !resgatar (privado ou grupo, só o admin): pede ao celular o histórico do grupo do último período fora do ar
+ * (config.ultimaRetomada) e responde o que ficou sem resposta, pelas regras do resgate. Devolve o texto da resposta.
+ */
+async function executarResgate() {
+  const p = estado.config?.ultimaRetomada;
+  const grupo = estado.memoria.grupo;
+  const hhmm = (ms) => new Date(ms).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  if (!p?.desdeMs || !p?.ateMs || !grupo || !estado.retomada) return 'Não tenho guardado nenhum período fora do ar pra resgatar.';
+  estado.retomada.abrirManual({ desdeMs: p.desdeMs, ateMs: p.ateMs });
+  try {
+    await pedirHistoricoDoGrupo(grupo, 100);
+    return `Pedi ao celular o histórico do grupo de ${hhmm(p.desdeMs)} a ${hhmm(p.ateMs)}. Em até 1 min eu respondo as refeições e as chamadas desse período 🙏`;
+  } catch (e) {
+    await estado.retomada.concluir('pedido de histórico falhou').catch(() => {});
+    return `Não consegui pedir o histórico: ${String(e.message).slice(0, 160)}`;
+  }
 }
 
 /** A última resposta pra essa pessoa (até 60 min atrás) saiu de uma IA reserva externa? Nota pro prompt da contestação. */
@@ -635,22 +654,7 @@ async function tratarPrivado(msg) {
     // "!resgatar": pede de novo ao celular o histórico do grupo do último período fora do ar e responde o que ficou sem
     // resposta (20/10: o resgate automático fechou antes do histórico chegar). Só no privado do administrador.
     if (cmd === '!resgatar') {
-      const p = estado.config?.ultimaRetomada;
-      const grupo = estado.memoria.grupo;
-      const hhmm = (ms) => new Date(ms).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-      let resposta;
-      if (!p?.desdeMs || !p?.ateMs || !grupo || !estado.retomada) {
-        resposta = 'Não tenho guardado nenhum período fora do ar pra resgatar.';
-      } else {
-        estado.retomada.abrirManual({ desdeMs: p.desdeMs, ateMs: p.ateMs });
-        try {
-          await pedirHistoricoDoGrupo(grupo, 100);
-          resposta = `Pedi ao celular o histórico do grupo de ${hhmm(p.desdeMs)} a ${hhmm(p.ateMs)}. Em até 1 min eu respondo as refeições e as chamadas desse período (o celular da Nutri precisa estar com internet).`;
-        } catch (e) {
-          await estado.retomada.concluir('pedido de histórico falhou').catch(() => {});
-          resposta = `Não consegui pedir o histórico: ${String(e.message).slice(0, 160)}`;
-        }
-      }
+      const resposta = await executarResgate();
       console.log(`[privado] !resgatar do administrador: ${resposta.slice(0, 80)}`);
       await enviar(jidPrivado, resposta, msg, { rapido: true });
       return;
@@ -734,6 +738,14 @@ export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtra
         return;
       }
     }
+  }
+
+  // "!resgatar" também no grupo (20/10: o dono mandou lá, não no privado), só do administrador
+  if (/^!resgatar\b/i.test(String(texto || '').trim())) {
+    const resposta = (await remetenteEhAdmin(jids)) ? await executarResgate() : RESPOSTA_SO_ADMIN;
+    console.log(`[grupo] !resgatar: ${resposta.slice(0, 80)}`);
+    await enviar(jidGrupo, resposta, msg, { rapido: true });
+    return;
   }
 
   // ---------- Comandos utilitários ----------
