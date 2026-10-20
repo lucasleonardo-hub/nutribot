@@ -177,6 +177,20 @@ let sockIniciadoEm = 0;
 let codigoAtual = null; // { codigo, em, sock }
 export const temNumeroParaParear = () => NUMERO_BOT.length >= 10;
 
+// ---------- histórico sob pedido (20/10: o resgate fechou antes do histórico chegar e 17 h de grupo ficaram sem resposta) ----------
+const ancorasGrupo = new Map(); // jid do grupo -> { key, ts } da mensagem mais recente vista
+/**
+ * Pede ao celular da bot as `quantas` mensagens do grupo ANTERIORES à mais recente vista (a âncora). O celular precisa
+ * estar online; a resposta chega pelo messaging-history.set (tipo ON_DEMAND) e passa pelo aoHistorico de sempre.
+ */
+export async function pedirHistoricoDoGrupo(jidGrupo, quantas = 100) {
+  const ancora = ancorasGrupo.get(jidGrupo);
+  if (!ancora) throw new Error('ainda não vi nenhuma mensagem do grupo desde que liguei: mande qualquer mensagem no grupo e tente de novo');
+  if (!estado.sock?.fetchMessageHistory) throw new Error('WhatsApp não conectado');
+  await estado.sock.fetchMessageHistory(quantas, ancora.key, ancora.ts);
+  return ancora;
+}
+
 /**
  * Pede ao WhatsApp um código de pareamento pro número da bot. O código só vale enquanto o socket atual estiver de pé
  * (~2 min de ciclo de QR): socket com mais de 40 s é renovado antes, e o mesmo código é devolvido por 50 s (recarregar
@@ -407,6 +421,11 @@ export async function iniciarWhatsApp(handlers) {
   sock.ev.on('messages.upsert', ({ messages, type }) => {
     for (const msg of messages) {
       console.log(`[msg] tipo=${type} chat=${msg.key.remoteJid} fromMe=${msg.key.fromMe} conteudo=${getContentType(msg.message) || (msg.messageStubType ? `stub:${WAMessageStubType[msg.messageStubType]}` : 'vazio')}`);
+      // âncora do pedido de histórico (!resgatar): a mensagem mais recente de um grupo, com o horário em ms
+      const ts = Number(msg.messageTimestamp) * 1000;
+      if (msg.key?.remoteJid?.endsWith('@g.us') && msg.key.id && Number.isFinite(ts) && ts > 0 && ts >= (ancorasGrupo.get(msg.key.remoteJid)?.ts || 0)) {
+        ancorasGrupo.set(msg.key.remoteJid, { key: { remoteJid: msg.key.remoteJid, id: msg.key.id, fromMe: Boolean(msg.key.fromMe) }, ts });
+      }
     }
     for (const msg of messages) {
       if (!msg.message && msg.messageStubType === WAMessageStubType.GROUP_PARTICIPANT_ADD && msg.key.remoteJid?.endsWith('@g.us')) {

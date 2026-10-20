@@ -13,7 +13,7 @@ import { lerEstimativa, descricaoDaAnalise, lerTipoRefeicao, registradasHojePara
 import { visaoDe } from './acompanhamento.js';
 import { agora, dataExtenso, fusoDe, fusoValido, slotDaHora, minutosDe, hhmmDe, mencionaNome, comTempo, parecePedidoOuPlano, pareceCorrecao, pareceConsumo, pedidoDeAudio, diasAnteriores, ultimaDoChat, marcaDeTempo, registrosDaVirada, ultimaRefeicao, destinoDaRefeicao, JANELA_VIRADA_MIN } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
-import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir, estaDigitando } from './whatsapp.js';
+import { enviar, enviarAudio, baixarMidia, meusJids, jidsDoRemetente, jidsDoPrivado, enviadosPeloBot, ACKS_FOTO, acaso, reagir, estaDigitando, pedirHistoricoDoGrupo } from './whatsapp.js';
 import { sintetizar } from './voz.js';
 import { lembrancasPara } from './memoria_semantica.js';
 import { climaParaPrompt } from './clima.js';
@@ -629,6 +629,29 @@ async function tratarPrivado(msg) {
     if (cmd === '!app') {
       console.log(`[privado] !app${/\bsair\b/i.test(texto) ? ' sair' : ''} do administrador`);
       const resposta = await comandoApp(texto, undefined, { dono: ADMIN_PRIVADO }).catch((e) => `Não consegui agora (${String(e.message).slice(0, 80)}). Tenta de novo em instantes.`);
+      await enviar(jidPrivado, resposta, msg, { rapido: true });
+      return;
+    }
+    // "!resgatar": pede de novo ao celular o histórico do grupo do último período fora do ar e responde o que ficou sem
+    // resposta (20/10: o resgate automático fechou antes do histórico chegar). Só no privado do administrador.
+    if (cmd === '!resgatar') {
+      const p = estado.config?.ultimaRetomada;
+      const grupo = estado.memoria.grupo;
+      const hhmm = (ms) => new Date(ms).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+      let resposta;
+      if (!p?.desdeMs || !p?.ateMs || !grupo || !estado.retomada) {
+        resposta = 'Não tenho guardado nenhum período fora do ar pra resgatar.';
+      } else {
+        estado.retomada.abrirManual({ desdeMs: p.desdeMs, ateMs: p.ateMs });
+        try {
+          await pedirHistoricoDoGrupo(grupo, 100);
+          resposta = `Pedi ao celular o histórico do grupo de ${hhmm(p.desdeMs)} a ${hhmm(p.ateMs)}. Em até 1 min eu respondo as refeições e as chamadas desse período (o celular da Nutri precisa estar com internet).`;
+        } catch (e) {
+          await estado.retomada.concluir('pedido de histórico falhou').catch(() => {});
+          resposta = `Não consegui pedir o histórico: ${String(e.message).slice(0, 160)}`;
+        }
+      }
+      console.log(`[privado] !resgatar do administrador: ${resposta.slice(0, 80)}`);
       await enviar(jidPrivado, resposta, msg, { rapido: true });
       return;
     }

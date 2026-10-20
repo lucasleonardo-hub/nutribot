@@ -310,7 +310,14 @@ async function checarDrive() {
         estado.config = await salvarConfig({ desconectadoEm: null, desconectadoMotivo: null });
         estado.config.apresentadoEm ||= {};
       },
+      // o período coberto fica guardado: o !resgatar (privado do admin) pede de novo o histórico desse intervalo
+      aoConcluir: async ({ desdeMs, ateMs, manual }) => {
+        if (manual) return;
+        estado.config = await salvarConfig({ ultimaRetomada: { desdeMs, ateMs } });
+        estado.config.apresentadoEm ||= {};
+      },
     });
+    estado.retomada = retomada;
     await iniciarWhatsApp({
       aoMensagem: enfileirarMensagem,
       aoEntrarNoGrupo: apresentarNaFila,

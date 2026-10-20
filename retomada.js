@@ -173,6 +173,7 @@ export function avisoDeVolta(minutosFora) {
 }
 
 export const RESGATE_ESPERA_MS = Number(process.env.RESGATE_ESPERA_MS) || 60_000; // quanto esperar o histórico depois de religar
+export const RESGATE_FOLGA_MS = Number(process.env.RESGATE_FOLGA_MS) || 15_000; // depois do "complete" (ou de um lote), espera mais lotes
 export const AVISO_VOLTA_MIN = Number(process.env.AVISO_VOLTA_MIN) || 30; // fora por menos que isso: volta em silêncio
 const TIPO_RECENT = 3; // proto.HistorySync.HistorySyncType: INITIAL_BOOTSTRAP = 0, FULL = 2, RECENT = 3
 
@@ -188,12 +189,12 @@ const TIPO_RECENT = 3; // proto.HistorySync.HistorySyncType: INITIAL_BOOTSTRAP =
  * @param {() => Promise} deps.limparMarca     apaga config.desconectadoEm (a queda foi tratada)
  * @param {() => number} [deps.agora]
  */
-export function criarRetomada({ grupo, meusJids, nomeBot, enfileirar, enviar, limparMarca, aoAvisar = null, agora = Date.now }) {
-  let janela = null; // { desdeMs, ateMs, buffer, timer }
+export function criarRetomada({ grupo, meusJids, nomeBot, enfileirar, enviar, limparMarca, aoAvisar = null, aoConcluir = null, agora = Date.now, folgaMs = RESGATE_FOLGA_MS }) {
+  let janela = null; // { desdeMs, ateMs, buffer, timer, manual?, fechando? }
 
   async function concluir(porque) {
     if (!janela) return null;
-    const { desdeMs, ateMs, buffer, timer } = janela;
+    const { desdeMs, ateMs, buffer, timer, manual } = janela;
     janela = null;
     clearTimeout(timer);
     const agoraMs = agora();
@@ -205,13 +206,15 @@ export function criarRetomada({ grupo, meusJids, nomeBot, enfileirar, enviar, li
     if (r.resgatadas.length) {
       const n = await enfileirar(r.resgatadas);
       acao = n ? 'resgate' : 'silencio';
-    } else if (jidGrupo && minutosFora >= AVISO_VOLTA_MIN && r.vistasDoGrupo === 0) {
+    } else if (!manual && jidGrupo && minutosFora >= AVISO_VOLTA_MIN && r.vistasDoGrupo === 0) {
       // o celular não mandou o histórico do grupo: ela não sabe se foi chamada, então avisa que voltou e pede pra repetirem
       await enviar(jidGrupo, avisoDeVolta(minutosFora)).catch((e) => console.error('[retomada] aviso de volta falhou:', e.message));
       acao = 'aviso';
       aoAvisar?.(); // ela já pediu desculpas: a resposta atrasada que vier em seguida não pede de novo
     }
     await limparMarca().catch((e) => console.error('[retomada] não consegui apagar a marca da queda:', e.message));
+    // o período fica guardado: o !resgatar pede de novo o histórico desse mesmo intervalo se este resgate vier vazio
+    await Promise.resolve(aoConcluir?.({ desdeMs, ateMs, manual: Boolean(manual), resgatadas: r.resgatadas.length, vistas: r.vistasDoGrupo })).catch(() => {});
     return { ...r, minutosFora, acao };
   }
 
@@ -228,12 +231,36 @@ export function criarRetomada({ grupo, meusJids, nomeBot, enfileirar, enviar, li
     aoHistorico({ messages }) {
       if (!janela || !messages?.length) return;
       janela.buffer.push(...messages);
+      // lote chegou: se o fechamento já estava marcado (ou é um pedido manual), espera mais um pouco por outros lotes
+      if (janela.fechando || janela.manual) adiarFechamento(janela.fechando || 'lotes do histórico');
     },
     aoHistoricoCompleto({ syncType, status }) {
       if (!janela) return;
-      if (syncType === TIPO_RECENT && (status === 'complete' || status === 'paused')) concluir(`histórico recente ${status}`).catch(() => {});
+      // 20/10: o "complete" do RECENT chegou 3 s ANTES do lote de 232 mensagens e o resgate fechou vazio. Agora o sinal só
+      // marca o fechamento, que espera RESGATE_FOLGA_MS sem lote novo.
+      if (syncType === TIPO_RECENT && (status === 'complete' || status === 'paused')) adiarFechamento(`histórico recente ${status}`);
+    },
+    /**
+     * Abre a janela à mão (comando !resgatar): mesmas regras do resgate automático, num período dado. O histórico vem
+     * do pedido sob demanda (pedirHistoricoDoGrupo) e a janela fecha RESGATE_FOLGA_MS depois do último lote (ou no tempo).
+     */
+    abrirManual({ desdeMs, ateMs }) {
+      if (!desdeMs || !ateMs || ateMs <= desdeMs) return false;
+      if (janela) clearTimeout(janela.timer);
+      janela = { desdeMs, ateMs, buffer: [], manual: true, timer: setTimeout(() => concluir('tempo esgotado').catch(() => {}), RESGATE_ESPERA_MS) };
+      janela.timer.unref?.();
+      console.log(`[retomada] resgate pedido à mão: de ${new Date(desdeMs).toISOString()} a ${new Date(ateMs).toISOString()}`);
+      return true;
     },
     aberta: () => Boolean(janela),
     concluir,
   };
+
+  function adiarFechamento(porque) {
+    if (!janela) return;
+    janela.fechando = porque;
+    clearTimeout(janela.timer);
+    janela.timer = setTimeout(() => concluir(porque).catch(() => {}), folgaMs);
+    janela.timer.unref?.();
+  }
 }

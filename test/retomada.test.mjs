@@ -145,6 +145,7 @@ test('criarRetomada: religada -> espera o histórico -> enfileira o que era pra 
     enviar: async (jid, t) => enviadas.push({ jid, t }),
     limparMarca: async () => marcaApagada++,
     agora: () => AGORA,
+    folgaMs: 5,
   });
   assert.equal(r.aoConectar({ relogada: false, desdeMs: 0 }), false, 'reconexão comum não abre janela');
   assert.equal(r.aoConectar({ relogada: true, desdeMs: QUEDA }), true);
@@ -197,4 +198,29 @@ test('resgate (20/10): texto de refeição sem menção também volta; papo e pe
   }
   for (const t of ['o que eu janto hoje?', 'bora no vôlei hoje?', 'bom dia', 'almoço em família domingo', '!hoje']) assert.equal(motivoDoResgate(texto('2026-10-20T10:00:00Z', t), { meusJids: MEUS, nomeBot: NOME_BOT }), null, t);
   assert.ok(RESGATE_MAX >= 20, 'um dia de refeições das três pessoas cabe no resgate');
+});
+
+test('criarRetomada (20/10): "complete" do RECENT ANTES do lote não fecha vazio; o lote que chega depois entra', async () => {
+  const enfileiradas = [];
+  const r = criarRetomada({ grupo: () => GRUPO, meusJids: () => MEUS, nomeBot: () => NOME_BOT, enfileirar: (m) => (enfileiradas.push(...m), m.length), enviar: async () => {}, limparMarca: async () => {}, agora: () => AGORA, folgaMs: 30 });
+  r.aoConectar({ relogada: true, desdeMs: QUEDA });
+  r.aoHistoricoCompleto({ syncType: 3, status: 'complete' });
+  await new Promise((res) => setTimeout(res, 10));
+  assert.equal(r.aberta(), true, 'ainda esperando lotes');
+  r.aoHistorico({ messages: [texto('2026-10-04T09:10:00Z', 'almocei arroz e frango')] });
+  await new Promise((res) => setTimeout(res, 60));
+  assert.equal(r.aberta(), false);
+  assert.equal(enfileiradas.length, 1);
+});
+
+test('criarRetomada: !resgatar abre a janela à mão, não manda "Voltei" e não regrava o período', async () => {
+  const enviadas = [];
+  const concluidas = [];
+  const r = criarRetomada({ grupo: () => GRUPO, meusJids: () => MEUS, nomeBot: () => NOME_BOT, enfileirar: () => 0, enviar: async (j, t) => enviadas.push(t), limparMarca: async () => {}, aoConcluir: (x) => concluidas.push(x), agora: () => AGORA, folgaMs: 5 });
+  assert.equal(r.abrirManual({ desdeMs: QUEDA, ateMs: QUEDA }), false, 'período inválido');
+  assert.equal(r.abrirManual({ desdeMs: QUEDA, ateMs: AGORA }), true);
+  const res = await r.concluir('teste');
+  assert.equal(res.acao, 'silencio');
+  assert.equal(enviadas.length, 0);
+  assert.deepEqual(concluidas.map((c) => c.manual), [true]);
 });
