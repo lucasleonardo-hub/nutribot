@@ -26,7 +26,7 @@ import { receberEnvio } from './relogio.js';
 import { reservasDisponiveis } from './reservas.js';
 import { TZ, agora, comTempo, diasAnteriores, diaSeguinte, registroDaConversa } from './util.js';
 import { estado, naFila, GRUPO_PERMITIDO } from './estado.js';
-import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca, vigiarConexao, meusJids } from './whatsapp.js';
+import { iniciarWhatsApp, numeroDoBot, nomeNoWhatsApp, desvincular, encerrarSocket, desconectadoHaMin, assinarPresenca, vigiarConexao, meusJids, pedirCodigoPareamento, temNumeroParaParear } from './whatsapp.js';
 import { criarRetomada } from './retomada.js';
 import { garantirDiaAtual, fecharDia, estudar, gravarDiario, diarioPendente, normalizarNomesNaMemoria, sincronizarRefeicoesNaMemoria, pedirPesagem, fecharMes, falaProgramada, repetirPendentesDrive } from './dia.js';
 import { avisarAdmin } from './avisos.js';
@@ -151,9 +151,33 @@ app.get('/qr', async (_req, res) => {
   const img = await QRCode.toDataURL(estado.ultimoQR, { width: 360 });
   pagina(
     `<h2>Escaneie no WhatsApp do número do BOT</h2><p>⋮ &rarr; Aparelhos conectados &rarr; Conectar um aparelho</p><img src="${img}" style="max-width:100%"/>` +
-      `<p>O código muda a cada 20s. Deixe a câmera pronta antes de abrir.</p>`,
+      `<p>O código muda a cada 20s. Deixe a câmera pronta antes de abrir.</p>` +
+      (temNumeroParaParear() ? `<p><b>Sem outra tela?</b> <a href="/codigo">Conectar pelo número (código de 8 letras)</a></p>` : ''),
     20
   );
+});
+// Pareamento pelo número da bot (WHATSAPP_NUMERO): mostra o código de 8 letras que se digita no próprio celular dela.
+// Não recarrega sozinha: um código novo invalida o anterior, e a pessoa pode estar digitando.
+app.get('/codigo', async (_req, res) => {
+  const pagina = (corpo) =>
+    res.send(
+      `<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NutriBot código</title></head>` +
+        `<body style="font-family:sans-serif;text-align:center;padding:16px;max-width:520px;margin:auto">${corpo}` +
+        `<p><small>Status: ${estado.statusConexao}</small></p></body></html>`
+    );
+  if (estado.statusConexao === 'conectado') return pagina(`<h2>✅ WhatsApp conectado</h2><p>Não precisa de código.</p>`);
+  try {
+    const codigo = String(await pedirCodigoPareamento());
+    const bonito = codigo.length === 8 ? `${codigo.slice(0, 4)}-${codigo.slice(4)}` : codigo;
+    pagina(
+      `<h2>Código para conectar a Nutri</h2><p style="font-size:44px;letter-spacing:6px;font-weight:bold;margin:18px 0">${bonito}</p>` +
+        `<ol style="text-align:left;line-height:1.6"><li>No celular da Nutri, abra o WhatsApp</li><li>⋮ (ou Configurações) &rarr; <b>Aparelhos conectados</b> &rarr; <b>Conectar um aparelho</b></li>` +
+        `<li>Toque em <b>Conectar com número de telefone</b> (embaixo da câmera)</li><li>Digite o código acima</li></ol>` +
+        `<p>Vale uns 2 minutos. Se der erro, <a href="/codigo">gere outro</a>.</p>`
+    );
+  } catch (e) {
+    pagina(`<h2>Não deu pra gerar o código</h2><p>${String(e.message).replace(/[<>]/g, '')}</p><p><a href="/codigo">Tentar de novo</a> · <a href="/qr">Usar o QR</a></p>`);
+  }
 });
 // Rotas de administração (exigem ?token=ADMIN_TOKEN)
 function autorizado(req, res) {
@@ -311,6 +335,10 @@ async function checarDrive() {
 
     // Tudo que mexe na memória do dia passa pela mesma fila das mensagens: fechamento e cobrança nunca rodam no meio de uma resposta.
     // 23:59 todo dia (fuso TZ). Domingo o fecharDia também dispara o semanal.
+    // 20/10: a sessão caiu 16 dias depois do último pareamento. O WhatsApp desliga os aparelhos conectados quando o celular
+    // principal fica ~14 dias sem abrir o app: toda segunda o dono recebe no privado o lembrete de abrir o WhatsApp do
+    // celular da bot (só sai com a bot conectada; nenhum custo de IA).
+    cron.schedule('0 10 * * 1', () => avisarAdmin('celular-da-bot', 'lembrete semanal: abra o WhatsApp no celular da Nutri (o do eSIM) hoje, com internet. Se ele ficar uns 14 dias sem abrir, o WhatsApp desconecta a Nutri.').catch(() => {}), { timezone: TZ });
     cron.schedule('59 23 * * *', () => naFila('cron', () => fecharDia()), { timezone: TZ });
     console.log(`[cron] resumo diário agendado para 23:59 (${TZ})`);
 

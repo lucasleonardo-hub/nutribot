@@ -47,7 +47,7 @@ jobs:
           corpo="A bot não está conectada ao WhatsApp. Status do serviço: **$status** ($(date -u +'%Y-%m-%d %H:%M UTC')).
 
           O que fazer:
-          1. Se o status for *aguardando QR* ou *gerando QR novo*: a sessão caiu (aparelho removido/deslogado). Abra $URL/qr no computador e, no celular da bot, WhatsApp → ⋮ → Dispositivos conectados → Conectar dispositivo → escaneie. Ao religar, ela resgata do histórico o que ficou sem resposta e pede desculpas pela demora.
+          1. Se o status for *aguardando QR* ou *gerando QR novo*: a sessão caiu (aparelho removido/deslogado). Mais fácil, só com o celular da bot: abra $URL/codigo, e no WhatsApp desse celular → ⋮ → Dispositivos conectados → Conectar dispositivo → "Conectar com número de telefone" → digite o código. Ou abra $URL/qr no computador e escaneie. Ao religar, ela resgata do histórico o que ficou sem resposta e pede desculpas pela demora.
           2. Se for *desconectado (código)* ou *iniciando*: o cão de guarda reinicia o processo sozinho em até 15 min; se não voltar, veja os logs no Render.
 
           Esta issue fecha sozinha quando ela voltar (o vigia roda a cada 10 min)."

@@ -168,6 +168,38 @@ let handlersAtuais = null; // os handlers da última chamada, pra reconectar e p
 export const desconectadoHaMin = () => (desconectadoDesde ? Math.round((Date.now() - desconectadoDesde) / 60_000) : 0);
 export const aguardandoQR = () => semSessao;
 
+// ---------- pareamento pelo número (20/10: "você já tem o número dela, faça uma conexão") ----------
+// Em vez do QR (que precisa de outra tela), o WhatsApp gera um código de 8 letras pro número da bot; no celular dela:
+// Aparelhos conectados > Conectar aparelho > "Conectar com número de telefone". O número fica no Render (WHATSAPP_NUMERO),
+// nunca no código (o repositório é público).
+const NUMERO_BOT = String(process.env.WHATSAPP_NUMERO || '').replace(/\D/g, '');
+let sockIniciadoEm = 0;
+let codigoAtual = null; // { codigo, em, sock }
+export const temNumeroParaParear = () => NUMERO_BOT.length >= 10;
+
+/**
+ * Pede ao WhatsApp um código de pareamento pro número da bot. O código só vale enquanto o socket atual estiver de pé
+ * (~2 min de ciclo de QR): socket com mais de 40 s é renovado antes, e o mesmo código é devolvido por 50 s (recarregar
+ * a página não invalida o que a pessoa já está digitando). Lança com mensagem curta quando não dá.
+ */
+export async function pedirCodigoPareamento() {
+  if (!temNumeroParaParear()) throw new Error('WHATSAPP_NUMERO não está definido no Render');
+  if (!semSessao) throw new Error('a sessão já está conectada (ou conectando com sessão salva)');
+  if (codigoAtual && codigoAtual.sock === estado.sock && Date.now() - codigoAtual.em < 50_000) return codigoAtual.codigo;
+  if (!estado.sock || Date.now() - sockIniciadoEm > 40_000) {
+    const antigo = estado.sock;
+    antigo?.end?.(new Error('novo socket pro código de pareamento'));
+    // espera o socket novo (reconectar) ficar pronto pra pedir o código
+    for (let i = 0; i < 40 && (estado.sock === antigo || !estado.sock); i++) await new Promise((ok) => setTimeout(ok, 500));
+    await new Promise((ok) => setTimeout(ok, 1500));
+  }
+  if (!estado.sock) throw new Error('o WhatsApp ainda está iniciando; tente de novo em alguns segundos');
+  const codigo = await estado.sock.requestPairingCode(NUMERO_BOT);
+  codigoAtual = { codigo, em: Date.now(), sock: estado.sock };
+  console.log('[wa] código de pareamento por número gerado (vale ~2 min)');
+  return codigo;
+}
+
 /**
  * Marca no Mongo QUANDO a sessão caiu de verdade (deslogada / aparelho removido). Sobrevive ao restart: quando alguém
  * escanear o QR de novo, retomada.js usa esta hora pra achar no histórico o que ficou sem resposta. Só grava se ainda
@@ -244,6 +276,14 @@ export async function iniciarWhatsApp(handlers) {
   const { aoMensagem, aoEntrarNoGrupo, aoNovoMembro, aoConectar, aoHistorico, aoHistoricoCompleto } = handlers;
   handlersAtuais = handlers;
   const { state, saveCreds, limparSessao } = await useMongoAuthState();
+  // pedido de código pelo número que não terminou: o Baileys grava `me` antes do pareamento, mas a conta (`account`, a
+  // assinatura que vem no pair-success) não existe. Com esse `me` pela metade ele tentaria logar e cairia em 401; volta a
+  // ser "sem sessão" e o próximo código/QR começa limpo.
+  if (state.creds?.me?.id && !state.creds?.account) {
+    console.log('[wa] pareamento pelo número não terminou da última vez; começando limpo');
+    delete state.creds.me;
+    delete state.creds.pairingCode;
+  }
   // sem `me` = nunca pareou (ou a sessão foi limpa): vai pedir QR. (creds.registered não serve: o Baileys 7 nunca o liga.)
   semSessao = !state.creds?.me?.id;
   // sem credenciais = vai pedir QR; se ninguém anotou quando a sessão caiu (processo reiniciou no meio), a marca é agora
@@ -261,6 +301,7 @@ export async function iniciarWhatsApp(handlers) {
     getMessage: async () => undefined,
   });
   estado.sock = sock;
+  sockIniciadoEm = Date.now();
 
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('presence.update', ({ id, presences }) => {
