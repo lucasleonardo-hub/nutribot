@@ -21,6 +21,7 @@ import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarr
 import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao, temasJaDitos, removerRepeticoes, respostasRecentes, papoCurto, enxugarPapo, bordoesJaDitos, removerBordoesRepetidos, corrigirGirias, concordarVocativos, parecePergunta } from './consciencia.js';
 import { ferramentasPara } from './ferramentas.js';
 import { claudeLigado, comoAdmin } from './claude.js';
+import { exemplosPreguicosos, guardarExemplo, tipoDaMensagem } from './exemplos.js';
 import { registrarCorrecaoEstimativa, ehCorrecaoDeEstimativa } from './calibracao.js';
 import { marcarResposta } from './proatividade.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
@@ -1077,6 +1078,9 @@ async function processarMensagem(msg, { emLote = false, atrasadas = 0, fotosExtr
   // fase 7: o bloco PELO APP e as confidências (pergunta do app, texto do humor) que a guarda tira da resposta do grupo
   const doApp = motivo ? await blocoAppDe(eu, diaPessoa, texto).catch(() => ({ texto: '', confidencias: [] })) : { texto: '', confidencias: [] };
   const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', app: doApp.texto, lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora), notaRefeicaoPendente(jids[0]), contestacao ? notaReservaRecente(jids[0], hora) : ''].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
+  // respostas do Claude a esta pessoa em situação parecida: só usadas se o Gemini tiver de responder (teto do dia, falha)
+  const tipoMsg = tipoDaMensagem({ temImagem, planejando: base.planejando, perguntaProgresso, contestacao, metaConversa });
+  base.exemplos = exemplosPreguicosos({ pessoa: eu.nome, tipo: tipoMsg, mensagem: texto });
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -1114,6 +1118,7 @@ async function processarMensagem(msg, { emLote = false, atrasadas = 0, fotosExtr
     return avisarErro(jidGrupo, 'ia'); // 1 aviso a cada 10 min, não um por mensagem
   }
   let origemExterna = ia.ultimaFoiExterna(); // saiu por Cohere/OpenRouter/Groq/HF? então vai pra revisão quando o Gemini voltar
+  let origemClaude = ia.ultimaFoiClaude(); // saiu pelo Claude? a resposta final vira padrão pro Gemini (exemplos.js)
 
   // A Nutri não sabia: pesquisa (PubMed/Wikipedia), responde de novo e guarda a nota de estudo no Drive
   const pedido = resposta?.match(/^\s*PESQUISAR:\s*(.+?)\s*$/im);
@@ -1143,6 +1148,7 @@ async function processarMensagem(msg, { emLote = false, atrasadas = 0, fotosExtr
     refeicao = r2.refeicao || refeicao;
     reacao = r2.reacao || reacao;
     origemExterna = ia.ultimaFoiExterna();
+    origemClaude = ia.ultimaFoiClaude();
     if (fontes.length) {
       ia.notaDeEstudo({ consulta, fontes: fontesTxt, dia })
         .then((nota) => salvarPesquisa({ consulta, nota, fontes, dia }))
@@ -1167,6 +1173,7 @@ async function processarMensagem(msg, { emLote = false, atrasadas = 0, fotosExtr
     refeicao = r2.refeicao || refeicao;
     reacao = r2.reacao || reacao;
     origemExterna = ia.ultimaFoiExterna();
+    origemClaude = ia.ultimaFoiClaude();
   }
 
   // CONFERÊNCIA ANTES DE ENVIAR (a parte de "perceber o erro" que dá pra construir):
@@ -1222,6 +1229,7 @@ async function processarMensagem(msg, { emLote = false, atrasadas = 0, fotosExtr
         refeicao = r3.refeicao || refeicao;
         reacao = r3.reacao || reacao;
         origemExterna = ia.ultimaFoiExterna();
+        origemClaude = ia.ultimaFoiClaude();
         const ainda = numerosSuspeitos(resposta, conhecidos, { extras: [Number(refeicao?.kcal) || 0, meu.total + (Number(refeicao?.kcal) || 0)].filter(Boolean) });
         if (ainda.length) console.warn(`[consciencia] ainda suspeito depois de refazer: ${ainda.map((s) => s.numero).join(', ')} kcal (enviando assim mesmo)`);
       }
@@ -1553,6 +1561,9 @@ async function processarMensagem(msg, { emLote = false, atrasadas = 0, fotosExtr
   if (origemExterna && enviado?.key) {
     estado.memoria.reservaPara ||= {};
     estado.memoria.reservaPara[jids[0]] = hora;
+  }
+  if (origemClaude && enviado?.key && resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
+    guardarExemplo({ pessoa: eu.nome, tipo: tipoMsg, mensagem: texto, resposta, dia: diaRegistrado }).catch(() => {});
   }
   if (origemExterna && enviado?.key && resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     registrarParaRevisao({ jidGrupo, jid: jids[0], perfil, texto, imagem, mimeType, resposta, dia: diaRegistrado, hora, horaLocal, enviado, refeicao: refeicaoRegistrada })

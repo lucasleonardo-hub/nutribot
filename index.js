@@ -34,6 +34,7 @@ import { paginaInicial, paginaPrivacidade } from './paginas.js';
 import { verificarCobrancas, ATRASO_COBRANCA_MIN } from './cobranca.js';
 import { revisarPendentes } from './revisao.js';
 import { garantirIndiceVetorial } from './memoria_semantica.js';
+import { carregarUsoClaude } from './claude.js';
 import { enfileirarMensagem, apresentarNaFila, receberNovoMembro, chaveGrupo, salvarFilaPendente, restaurarFilaPendente, enfileirarResgatadas, marcarDesculpaDada } from './mensagens.js';
 import { oferecerPlano } from './comandos.js';
 import { verificarAtividades } from './atividades.js';
@@ -254,6 +255,7 @@ async function checarDrive() {
     await garantirIndices();
     await garantirIndicesApp(); // aparelhos e códigos de pareamento do app (API v1)
     await garantirIndiceVetorial(); // memória de longo prazo por significado (Atlas Vector Search, grátis no M0)
+    await carregarUsoClaude(); // gasto do Claude no dia e no mês (o teto não zera a cada deploy)
     iniciarDrive();
     await carregarConhecimento().catch((e) => console.error('[conhecimento] falha ao carregar:', e.message));
     // Pré-carrega a pasta de cada pessoa (transcreve PDFs novos agora, não na primeira mensagem do dia)

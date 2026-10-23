@@ -34,36 +34,85 @@ export function claudeAtende(config = {}, contents) {
   return !/^(off|nao|não|false|0)$/i.test(process.env.CLAUDE_CRUZAR || '') && (config.cruzar === true || config.pensar === 'alto');
 }
 
-// ---------- uso do dia (pro !status) ----------
+// ---------- gasto e orçamento ----------
 // preço por milhão (out/2026): Opus 5.5 4/20, Sonnet 5.5 2/10, Haiku 5.5 0,10/0,50; leitura de cache = 10% da entrada
 const PRECO = { opus: [4, 20], sonnet: [2, 10], haiku: [0.1, 0.5], fable: [10, 50] };
-let uso = { dia: '', chamadas: 0, entrada: 0, cache: 0, saida: 0, usd: 0 };
+// Dia e mês no fuso do grupo (vira à meia-noite de Brasília). O gasto fica no Mongo (coleção uso_claude, um documento por
+// dia): deploy e reinício não zeram a conta, senão o teto furava a cada religada.
+const diaBRT = (quando = new Date()) => new Intl.DateTimeFormat('sv-SE', { timeZone: process.env.TZ_GRUPO || 'America/Sao_Paulo' }).format(quando);
+const zerado = (dia) => ({ dia, chamadas: 0, entrada: 0, cache: 0, saida: 0, usd: 0 });
+let uso = zerado('');
+let gastoMesAntes = { mes: '', usd: 0 }; // gasto do mês até ontem (lido do Mongo)
+
+let _colecao = null; // injetável em teste; em produção, a do mongo.js
+const col = async () => _colecao || (await import('./mongo.js')).colecao('uso_claude');
+export const _usarColecao = (c) => (_colecao = c);
+
+/** Lê do Mongo o gasto de hoje e o do mês até ontem. Boot (index.js) e virada do dia. Nunca lança. */
+export async function carregarUsoClaude(hoje = diaBRT()) {
+  try {
+    const c = await col();
+    const docs = await c.find({ _id: { $regex: `^${hoje.slice(0, 7)}-` } }).toArray();
+    const deHoje = docs.find((d) => d._id === hoje);
+    if (uso.dia !== hoje || (deHoje && deHoje.usd > uso.usd)) uso = { ...zerado(hoje), ...(deHoje ? { chamadas: deHoje.chamadas || 0, entrada: deHoje.entrada || 0, cache: deHoje.cache || 0, saida: deHoje.saida || 0, usd: deHoje.usd || 0 } : {}) };
+    gastoMesAntes = { mes: hoje.slice(0, 7), usd: docs.filter((d) => d._id < hoje).reduce((s, d) => s + (d.usd || 0), 0) };
+    console.log(`[claude] gasto: hoje US$ ${uso.usd.toFixed(2)}, mês até ontem US$ ${gastoMesAntes.usd.toFixed(2)}, teto de hoje US$ ${tetoDeHoje(hoje).toFixed(2)}`);
+  } catch (e) {
+    console.warn(`[claude] não li o gasto do Mongo (${String(e.message).slice(0, 80)}); conta só da memória`);
+  }
+}
+
 function contabilizar(model, u = {}) {
-  const dia = new Date().toISOString().slice(0, 10);
-  if (uso.dia !== dia) uso = { dia, chamadas: 0, entrada: 0, cache: 0, saida: 0, usd: 0 };
+  const dia = diaBRT();
+  if (uso.dia !== dia) {
+    if (uso.dia && uso.dia.slice(0, 7) === dia.slice(0, 7)) gastoMesAntes = { mes: dia.slice(0, 7), usd: gastoMesAntes.usd + uso.usd };
+    else if (uso.dia) gastoMesAntes = { mes: dia.slice(0, 7), usd: 0 };
+    uso = zerado(dia);
+    carregarUsoClaude(dia).catch(() => {}); // confere com o Mongo (outro processo pode ter gastado)
+  }
   const [pin, pout] = PRECO[Object.keys(PRECO).find((k) => model.includes(k))] || PRECO.opus;
   const entrada = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0);
   const cache = u.cache_read_input_tokens || 0;
   const saida = u.output_tokens || 0;
+  const usd = (entrada * pin * (u.cache_creation_input_tokens ? 1.05 : 1) + cache * pin * 0.1 + saida * pout) / 1e6;
   uso.chamadas++;
   uso.entrada += entrada;
   uso.cache += cache;
   uso.saida += saida;
-  uso.usd += (entrada * pin * (u.cache_creation_input_tokens ? 1.05 : 1) + cache * pin * 0.1 + saida * pout) / 1e6;
-  console.log(`[tokens] ${model}: ${entrada} entrada (${cache} em cache) + ${saida} saída | hoje: ${uso.chamadas} chamadas, US$ ${uso.usd.toFixed(2)}`);
+  uso.usd += usd;
+  col()
+    .then((c) => c.updateOne({ _id: dia }, { $inc: { chamadas: 1, entrada, cache, saida, usd }, $set: { atualizadoEm: new Date() } }, { upsert: true }))
+    .catch(() => {});
+  console.log(`[tokens] ${model}: ${entrada} entrada (${cache} em cache) + ${saida} saída | hoje: ${uso.chamadas} chamadas, US$ ${uso.usd.toFixed(2)} de ${tetoDeHoje(dia).toFixed(2)}`);
 }
-export const usoClaudeHoje = () => ({ ...uso, modelo: MODELO(), escopo: claudeLigado() ? ESCOPO() : 'off', teto: TETO() });
 
-// Teto de gasto por dia (UTC), em dólar: passou, o resto do dia vai pro Gemini. CLAUDE_TETO_USD_DIA=0 tira o teto.
-const TETO = () => Number(process.env.CLAUDE_TETO_USD_DIA ?? 5);
+// Orçamento do mês (CLAUDE_ORCAMENTO_MES_USD, padrão 100): o teto de hoje é o que sobra do mês dividido pelos dias que
+// faltam (hoje incluso), recalculado todo dia; dia econômico deixa sobra pros outros. CLAUDE_TETO_USD_DIA, se houver, é
+// um limite extra por dia (0 = sem limite extra). Passou do teto: o resto do dia vai pro Gemini.
+const ORCAMENTO = () => Number(process.env.CLAUDE_ORCAMENTO_MES_USD ?? 100);
+export function tetoDeHoje(dia = diaBRT()) {
+  const [a, m, d] = dia.split('-').map(Number);
+  const diasNoMes = new Date(Date.UTC(a, m, 0)).getUTCDate();
+  const antes = gastoMesAntes.mes === dia.slice(0, 7) ? gastoMesAntes.usd : 0;
+  // mês em que o Claude começou (CLAUDE_INICIO, AAAA-MM-DD): só a parte proporcional do orçamento, senão os dias que
+  // sobraram do mês dividiriam o valor inteiro (começar no dia 23 dava ~US$ 11/dia)
+  const inicio = String(process.env.CLAUDE_INICIO || '');
+  const proporcao = inicio.slice(0, 7) === dia.slice(0, 7) ? (diasNoMes - Number(inicio.slice(8, 10)) + 1) / diasNoMes : 1;
+  const doMes = ORCAMENTO() > 0 ? Math.max(0, ORCAMENTO() * proporcao - antes) / (diasNoMes - d + 1) : Infinity;
+  const extra = Number(process.env.CLAUDE_TETO_USD_DIA) || Infinity;
+  return Math.min(doMes, extra);
+}
+export const usoClaudeHoje = () => ({ ...uso, modelo: MODELO(), escopo: claudeLigado() ? ESCOPO() : 'off', teto: tetoDeHoje(), orcamentoMes: ORCAMENTO(), gastoMes: (gastoMesAntes.mes === diaBRT().slice(0, 7) ? gastoMesAntes.usd : 0) + (uso.dia === diaBRT() ? uso.usd : 0) });
+
 let avisouTeto = '';
 function passouDoTeto() {
-  const dia = new Date().toISOString().slice(0, 10);
-  if (!TETO() || uso.dia !== dia || uso.usd < TETO()) return false;
+  const dia = diaBRT();
+  const teto = tetoDeHoje(dia);
+  if (uso.dia !== dia || uso.usd < teto) return false;
   if (avisouTeto !== dia) {
     avisouTeto = dia;
-    console.warn(`[claude] teto de US$ ${TETO()} do dia atingido; Gemini até a virada (21h BRT)`);
-    import('./avisos.js').then((a) => a.avisarAdmin('claude-teto', `o Claude bateu o teto de US$ ${TETO()} de hoje; até as 21h o Gemini responde. CLAUDE_TETO_USD_DIA muda o teto.`)).catch(() => {});
+    console.warn(`[claude] teto de hoje (US$ ${teto.toFixed(2)}) atingido; Gemini com os exemplos do Claude até a meia-noite`);
+    import('./avisos.js').then((a) => a.avisarAdmin('claude-teto', `o Claude usou o teto de hoje (US$ ${teto.toFixed(2)}, pra o orçamento de US$ ${ORCAMENTO()} durar o mês); até a meia-noite o Gemini responde imitando as respostas dele.`)).catch(() => {});
   }
   return true;
 }

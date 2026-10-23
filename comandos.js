@@ -377,7 +377,12 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       ...(() => {
         const c = usoClaudeHoje();
         if (c.escopo === 'off') return ['*Claude*: desligado', ''];
-        return [`*Claude hoje* (${c.modelo}, escopo ${c.escopo})`, `• Chamadas: ${c.chamadas} · ${formatarTokens(c.entrada)} entrada (${formatarTokens(c.cache)} em cache), ${formatarTokens(c.saida)} saída · ~US$ ${c.usd.toFixed(2)}`, ''];
+        return [
+          `*Claude hoje* (${c.modelo}, escopo ${c.escopo})`,
+          `• Chamadas: ${c.chamadas} · ${formatarTokens(c.entrada)} entrada (${formatarTokens(c.cache)} em cache), ${formatarTokens(c.saida)} saída`,
+          `• Gasto: US$ ${c.usd.toFixed(2)} de US$ ${c.teto.toFixed(2)} hoje${c.usd >= c.teto ? ' (teto batido: Gemini imitando o Claude até a meia-noite)' : ''} · mês: US$ ${c.gastoMes.toFixed(2)} de ${c.orcamentoMes}`,
+          '',
+        ];
       })(),
       '*Últimas respostas*',
       ...(ia.ultimasRespostas(6).length ? ia.ultimasRespostas(6).map((r) => `• ${r.hora} ${String(r.modelo).replace(/^gemini-/, '')}${r.chave ? ` (chave ${r.chave})` : ''}${r.motivo ? `: ${r.motivo}` : ''}`) : ['• nenhuma desde o último restart']),

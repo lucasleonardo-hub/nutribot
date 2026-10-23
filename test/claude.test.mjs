@@ -2,7 +2,8 @@
 // Gemini (functionCall/functionResponse, com e sem o conteúdo bruto do Claude) para o formato de mensagens da Anthropic.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { claudeAtende, comoAdmin, pedidoDoAdmin, paraMensagens, gerarClaude } from '../claude.js';
+import { claudeAtende, comoAdmin, pedidoDoAdmin, paraMensagens, gerarClaude, carregarUsoClaude, tetoDeHoje, _usarColecao } from '../claude.js';
+import { tipoDaMensagem, cosseno, escolherExemplos, blocoExemplos } from '../exemplos.js';
 
 /** Cliente de mentira: devolve a mensagem dada (o Claude "desobediente" dos testes) e guarda o pedido. */
 function clienteFalso(content, stop_reason = 'end_turn', extra = {}) {
@@ -119,4 +120,55 @@ test('teto do dia: passou do teto, o pedido vai pro Gemini', async () => {
     await gerarClaude({ contents: 'x', _cliente: clienteFalso(texto('ok'), 'end_turn', { usage: { input_tokens: 1000, output_tokens: 10 } }) });
     assert.equal(claudeAtende({}, 'oi'), false);
   });
+});
+
+// Orçamento do mês: o teto de hoje é o que sobra dividido pelos dias que faltam; o gasto vem do Mongo (não zera no deploy)
+test('orçamento do mês: sobra dividida pelos dias que faltam, lida do Mongo', async () => {
+  await comEnv({ CLAUDE_ORCAMENTO_MES_USD: '100', CLAUDE_TETO_USD_DIA: '' }, async () => {
+    const docs = [{ _id: '2026-10-01', usd: 40 }, { _id: '2026-10-22', usd: 20 }, { _id: '2026-10-23', usd: 1.5, chamadas: 30 }, { _id: '2026-09-30', usd: 99 }];
+    _usarColecao({ find: (q) => ({ toArray: async () => docs.filter((d) => new RegExp(q._id.$regex).test(d._id)) }) });
+    await carregarUsoClaude('2026-10-23');
+    // 100 - (40 + 20) = 40 pros 9 dias de 23 a 31 de outubro; setembro não conta
+    assert.equal(tetoDeHoje('2026-10-23').toFixed(3), (40 / 9).toFixed(3));
+    // primeiro dia do mês seguinte: o mês todo de novo, dividido por 30
+    assert.equal(tetoDeHoje('2026-11-01').toFixed(3), (100 / 30).toFixed(3));
+    _usarColecao(null);
+  });
+  await comEnv({ CLAUDE_ORCAMENTO_MES_USD: '100', CLAUDE_TETO_USD_DIA: '2' }, async () => assert.equal(tetoDeHoje('2026-11-01'), 2)); // limite extra vence
+  // começou no dia 23: outubro tem só 9/31 do orçamento; o gasto de antes (40 + 20, de outro uso da chave) já passa disso
+  await comEnv({ CLAUDE_ORCAMENTO_MES_USD: '100', CLAUDE_TETO_USD_DIA: '', CLAUDE_INICIO: '2026-10-23' }, async () => {
+    assert.equal(tetoDeHoje('2026-10-23'), 0);
+    assert.equal(tetoDeHoje('2026-11-01').toFixed(3), (100 / 30).toFixed(3));
+  });
+  await comEnv({ CLAUDE_ORCAMENTO_MES_USD: '0', CLAUDE_TETO_USD_DIA: '' }, async () => assert.equal(tetoDeHoje('2026-11-01'), Infinity));
+});
+
+// Exemplos do Claude pro Gemini (exemplos.js)
+test('tipo da mensagem segue as mesmas decisões do prompt', () => {
+  assert.equal(tipoDaMensagem({ perguntaProgresso: true, temImagem: true }), 'progresso');
+  assert.equal(tipoDaMensagem({ temImagem: true }), 'foto');
+  assert.equal(tipoDaMensagem({ planejando: true }), 'opiniao');
+  assert.equal(tipoDaMensagem({ contestacao: true }), 'contestacao');
+  assert.equal(tipoDaMensagem({}), 'conversa');
+});
+
+test('escolha dos exemplos: significado primeiro, bônus pro mesmo tipo, sem repetir resposta', () => {
+  assert.equal(cosseno([1, 0], [1, 0]), 1);
+  assert.equal(cosseno([1, 0], [0, 1]), 0);
+  assert.equal(cosseno([1], [1, 2]), 0);
+  const c = [
+    { tipo: 'foto', resposta: 'A', vetor: [1, 0] },
+    { tipo: 'conversa', resposta: 'B', vetor: [0.9, 0.1] },
+    { tipo: 'conversa', resposta: 'B', vetor: [0.9, 0.1] },
+    { tipo: 'conversa', resposta: 'C', vetor: [0, 1] },
+  ];
+  assert.deepEqual(escolherExemplos(c, [1, 0], 'conversa', 2).map((e) => e.resposta), ['B', 'A']);
+});
+
+test('bloco de exemplos manda imitar o jeito e proíbe copiar números', () => {
+  assert.equal(blocoExemplos([]), '');
+  const b = blocoExemplos([{ tipo: 'foto', dia: '2026-10-20', mensagem: 'almoço', resposta: '🔥 *Estimativa:* 650 kcal' }]);
+  assert.match(b, /imite o JEITO/);
+  assert.match(b, /NUNCA copie fatos, números/);
+  assert.match(b, /Mensagem: almoço\nResposta: 🔥/);
 });

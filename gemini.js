@@ -19,6 +19,7 @@ export const ultimasRespostas = (n = 6) => ultimas.slice(-n);
 // De onde saiu a última resposta gerada ('gemini' ou 'externa'): a fila é sequencial, então quem chamou lê logo em seguida
 let origemUltima = 'gemini';
 export const ultimaFoiExterna = () => origemUltima === 'externa';
+export const ultimaFoiClaude = () => origemUltima === 'claude';
 export { dataExtenso };
 
 const MODELO = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
@@ -477,7 +478,7 @@ function rebaixarPensar(model, e) {
 async function gerar({ contents, config = {}, tentativas = 2 }) {
   // soPrincipal: só a família principal (Flash), sem Lite nem reserva externa; falhou, lança. Pra documento que pode esperar (plano da semana).
   // bruto: devolve { texto, chamadas, conteudo, modelo } em vez de texto; `chamadas` são os pedidos de ferramenta (function calling)
-  const { pensar, estrito, leve, prazoMs, semReserva, validar, soPrincipal = false, bruto = false, cruzar, ...configApi } = config;
+  const { pensar, estrito, leve, prazoMs, semReserva, validar, soPrincipal = false, bruto = false, cruzar, exemplos, ...configApi } = config;
   let erro;
   const falhas = []; // { modelo, chave, motivo } desta chamada, pro aviso do admin
   // Claude primeiro quando o escopo pede (pedido do admin, tarefa que cruza dados, ou tudo); qualquer falha segue pro Gemini
@@ -492,6 +493,11 @@ async function gerar({ contents, config = {}, tentativas = 2 }) {
       avisarAdmin('claude-falhou', `o Claude falhou às ${agora().hora} e o Gemini respondeu no lugar: ${String(e.message).slice(0, 160)}. Aviso 1x a cada 30 min.`).catch(() => {});
       falhas.push({ modelo: 'claude', chave: 0, motivo: e.invalida ? 'resposta fora do formato' : `erro ${e.status || ''}`.trim() });
     }
+  }
+  // Sem Claude nesta: as respostas dele parecidas com esta (exemplos.js) viram o padrão que o Gemini e as reservas imitam
+  if (typeof exemplos === 'function') {
+    const bloco = await exemplos().catch(() => '');
+    if (bloco) configApi.systemInstruction = `${configApi.systemInstruction || ''}${bloco}`;
   }
   const inicio = Date.now();
   const longo = (configApi.maxOutputTokens || 1024) > 2000;
@@ -713,7 +719,7 @@ const FERRAMENTAS_CONVERSA =
   '\n\nFERRAMENTAS: se a resposta ficar melhor com um dado que NÃO está acima (refeições de dias anteriores, agenda, tendência até a etapa, treino e força, relógio, despensa, lembranças, sua base de conhecimento), consulte: no máximo 2 consultas, só o que muda a resposta. Pergunta simples, opinião ou papo não precisa de ferramenta. ' +
   'anotar_memoria só pra fato que vale daqui a 30 dias (preferência, aversão, restrição, rotina fixa, combinado); atualizar_perfil só com dado que a pessoa ACABOU de dizer. Depois responda normalmente (mesmo formato e mesmas linhas ocultas de sempre).';
 
-export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, app = '', lugares, roteiro, atividades, treinoHoje, forca, jaDito, despensa, rotulos, planejando = false, perguntaProgresso = false, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false, ferramentas = null, maxRodadas = 2, calibracao = '' }) {
+export async function responder({ texto, imagem, mimeType, imagens, audio, audioMime, perfil, perfis, historico, dia, hora, contextoHorario, persona, conhecimento, dossie, momentos, citacao, registradas, visao, lembrancas, agenda, app = '', lugares, roteiro, atividades, treinoHoje, forca, jaDito, despensa, rotulos, planejando = false, perguntaProgresso = false, contestacao = false, emAndamento = null, metaConversa = false, jaPesquisou = false, leve = false, ferramentas = null, maxRodadas = 2, calibracao = '', exemplos = null }) {
   const ancoras = leve ? '' : blocoAncoras(texto);
   // objetivos das OUTRAS pessoas: entram nomeados pra ela não emprestar o objetivo de um pro outro
   const objetivosAlheios = (perfis || [])
@@ -784,7 +790,7 @@ export async function responder({ texto, imagem, mimeType, imagens, audio, audio
   for (const f of fotos) parts.push({ inlineData: { mimeType: f.mimeType || 'image/jpeg', data: f.data.toString('base64') } });
   if (audio) parts.push({ inlineData: { mimeType: audioMime || 'audio/ogg', data: audio.toString('base64') } });
 
-  const config = { systemInstruction: montarSystem(persona), pensar: false, leve, validar: fotos.length ? validadorDeFoto(texto) : undefined };
+  const config = { systemInstruction: montarSystem(persona), pensar: false, leve, validar: fotos.length ? validadorDeFoto(texto) : undefined, ...(exemplos ? { exemplos } : {}) };
   // ferramentas na conversa (fase 2): só texto (pergunta ou pedido), teto de rodadas; quem chamou cai no caminho normal se falhar
   const usaFerramentas = Boolean(ferramentas?.declaracoes?.length) && !fotos.length && !audio;
   if (usaFerramentas) parts[0].text += FERRAMENTAS_CONVERSA;
