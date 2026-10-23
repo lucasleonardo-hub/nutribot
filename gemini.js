@@ -7,6 +7,7 @@ import { agora, dataExtenso, formatarDuracao, formatarTokens, pareceConsumo, par
 import { avisarAdmin } from './avisos.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { blocoLicoes } from './consciencia.js';
+import { claudeAtende, gerarClaude } from './claude.js';
 
 // Mapa das últimas respostas: qual modelo/chave respondeu e por quê (pra !status e pro aviso no privado do admin)
 const ultimas = [];
@@ -476,9 +477,22 @@ function rebaixarPensar(model, e) {
 async function gerar({ contents, config = {}, tentativas = 2 }) {
   // soPrincipal: só a família principal (Flash), sem Lite nem reserva externa; falhou, lança. Pra documento que pode esperar (plano da semana).
   // bruto: devolve { texto, chamadas, conteudo, modelo } em vez de texto; `chamadas` são os pedidos de ferramenta (function calling)
-  const { pensar, estrito, leve, prazoMs, semReserva, validar, soPrincipal = false, bruto = false, ...configApi } = config;
+  const { pensar, estrito, leve, prazoMs, semReserva, validar, soPrincipal = false, bruto = false, cruzar, ...configApi } = config;
   let erro;
   const falhas = []; // { modelo, chave, motivo } desta chamada, pro aviso do admin
+  // Claude primeiro quando o escopo pede (pedido do admin, tarefa que cruza dados, ou tudo); qualquer falha segue pro Gemini
+  if (claudeAtende(config, contents)) {
+    try {
+      const r = await gerarClaude({ contents, config });
+      origemUltima = 'claude';
+      anotarResposta({ modelo: r?.modelo || 'claude', chave: 0, papel: 'claude', motivo: '' });
+      return r;
+    } catch (e) {
+      console.warn(`[claude] falhou, seguindo pro Gemini: ${String(e.message).slice(0, 160)}`);
+      avisarAdmin('claude-falhou', `o Claude falhou às ${agora().hora} e o Gemini respondeu no lugar: ${String(e.message).slice(0, 160)}. Aviso 1x a cada 30 min.`).catch(() => {});
+      falhas.push({ modelo: 'claude', chave: 0, motivo: e.invalida ? 'resposta fora do formato' : `erro ${e.status || ''}`.trim() });
+    }
+  }
   const inicio = Date.now();
   const longo = (configApi.maxOutputTokens || 1024) > 2000;
   // pedido com foto demora mais (duas fotos + prompt grande estouravam os 30 s e a resposta caía num modelo leve)
@@ -1855,7 +1869,7 @@ export async function investigarPessoa({ perfil, retrato, sintese, persona, dia,
       `("sono 5h40 nas 3 noites antes do treino de hoje; supino parado há 3 semanas", "almoçou fora em 4 dos últimos 5 dias de aula"). Sem conselho, sem texto corrido.\n\n` +
       (sintese ? `COMO VOCÊ ENTENDE ${primeiro.toUpperCase()}: ${sintese}\n\n` : '') +
       `RETRATO DE HOJE:\n${retrato}`,
-    config: { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.4, pensar: false, maxOutputTokens: 900, leve: true },
+    config: { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.4, pensar: false, maxOutputTokens: 900, leve: true, cruzar: true },
     ferramentas,
     maxRodadas: 5,
     rotulo: `investigar ${primeiro}`,
@@ -1880,6 +1894,7 @@ export async function pensarSobrePessoa({ perfil, retrato, anterior, hipoteses, 
       systemInstruction: montarSystem(persona, { documento: true }),
       temperature: 0.6,
       pensar: false,
+      cruzar: true,
       maxOutputTokens: 900,
       responseMimeType: 'application/json',
       responseSchema: {
@@ -1972,7 +1987,7 @@ export async function refletirSobrePessoa({ perfil, notas, visao, padrao, lugare
       `Escreva, em primeira pessoa e no seu jeito, O QUE VOCÊ PENSA sobre ${primeiro}: como essa pessoa funciona (rotina real, onde passa o dia, quanto gasta e quanto come, como dorme, quando treina, quando desanda), o que os dados dizem que ela talvez não perceba, o que você suspeita mas ainda não tem certeza e quer observar (escreva essas suspeitas de forma explícita, começando por "Suspeito que" ou "Quero observar se": elas serão conferidas nos dados da semana que vem), o que te preocupa e o que te impressiona, e como isso muda o jeito de você falar com ela. Ligue os pontos entre fontes diferentes (ex.: dia de faculdade à noite x jantar tarde; gasto do relógio x apetite; lugar x escolha de comida). Pode ser em parágrafos corridos, pode ter uma lista se ajudar, sem títulos obrigatórios e sem tom de relatório: é reflexão, não ficha. Sem endereço, rua ou coordenada (bairro pode). Nada sobre outras pessoas do grupo. Até 700 palavras.\n` +
       `Termine com um parágrafo separado começando exatamente com "Em uma frase:" resumindo como você entende ${primeiro} hoje, em no máximo 60 palavras, do jeito que você usaria na cabeça antes de responder uma mensagem dela(e). Sem linha ATUALIZAR. Sem [[links]].` +
     (ferramentas ? FERRAMENTAS_REFLEXAO : '');
-  const config = { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.8, maxOutputTokens: 2200 };
+  const config = { systemInstruction: montarSystem(persona, { documento: true }), temperature: 0.8, maxOutputTokens: 2200, cruzar: true };
   if (ferramentas) return gerarComFerramentas({ contents, config, ferramentas, maxRodadas: 4, rotulo: `reflexão ${perfil.nome.split(' ')[0]}` });
   return gerar({ contents, config });
 }

@@ -20,6 +20,7 @@ import { climaParaPrompt } from './clima.js';
 import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarras } from './off.js';
 import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao, temasJaDitos, removerRepeticoes, respostasRecentes, papoCurto, enxugarPapo, bordoesJaDitos, removerBordoesRepetidos, corrigirGirias, concordarVocativos, parecePergunta } from './consciencia.js';
 import { ferramentasPara } from './ferramentas.js';
+import { claudeLigado, comoAdmin } from './claude.js';
 import { registrarCorrecaoEstimativa, ehCorrecaoDeEstimativa } from './calibracao.js';
 import { marcarResposta } from './proatividade.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
@@ -697,7 +698,14 @@ async function tratarPrivado(msg) {
   }
 }
 
-export async function processar(msg, { emLote = false, atrasadas = 0, fotosExtras = [] } = {}) {
+// Mensagem do administrador no grupo: tudo o que ela gerar passa primeiro pelo Claude (claude.js, CLAUDE_ESCOPO=admin)
+export async function processar(msg, opcoes) {
+  const jids = msg?.key?.remoteJid?.endsWith('@g.us') && claudeLigado() ? jidsDoRemetente(msg.key) : [];
+  if (jids.length && (await remetenteEhAdmin(jids).catch(() => false))) return comoAdmin(() => processarMensagem(msg, opcoes));
+  return processarMensagem(msg, opcoes);
+}
+
+async function processarMensagem(msg, { emLote = false, atrasadas = 0, fotosExtras = [] } = {}) {
   if (!msg.message) return;
   if (msg.key.fromMe && enviadosPeloBot.has(msg.key.id)) return; // resposta do próprio bot
   const jidGrupo = msg.key.remoteJid;

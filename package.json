@@ -16,6 +16,7 @@
     "avaliar": "node avaliacao/rodar.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.2.0",
     "@google/genai": "^2.23.0",
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "dotenv": "^17.4.2",

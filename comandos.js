@@ -8,6 +8,7 @@ import * as ia from './gemini.js';
 import { listarDocs, docsPara } from './conhecimento.js';
 import { notasDe, listarDocumentosDe } from './pessoas.js';
 import { reservasDisponiveis } from './reservas.js';
+import { usoClaudeHoje } from './claude.js';
 import { fusoDe, formatarTokens, formatarDuracao, agora, slotDaHora, minutosDe, SLOTS, diasAnteriores, marcaDeTempo, registrosDaVirada, JANELA_VIRADA_MIN } from './util.js';
 import { resumirHoje, formatarEstimativaLinhas, lerTipoRefeicao, gastoAdaptativo, acharRegistro, nomeDoSlot, padraoAlimentar, repertorioDoGrupo, semanaDoPlano, previsaoSemana } from './resumo.js';
 import { visaoDe, progressoDe } from './acompanhamento.js';
@@ -373,6 +374,11 @@ export async function tratarComando({ texto, jids, jidGrupo, msg, dia, nomeConta
       fora.length ? `• De castigo (todas as chaves): ${fora.map((m) => `${m.modelo} (volta em ${m.voltaEm})`).join(', ')}` : '• De castigo: nenhum ✅',
       `• Reservas externas: ${reservasDisponiveis().join(', ') || 'nenhuma'}`,
       '',
+      ...(() => {
+        const c = usoClaudeHoje();
+        if (c.escopo === 'off') return ['*Claude*: desligado', ''];
+        return [`*Claude hoje* (${c.modelo}, escopo ${c.escopo})`, `• Chamadas: ${c.chamadas} · ${formatarTokens(c.entrada)} entrada (${formatarTokens(c.cache)} em cache), ${formatarTokens(c.saida)} saída · ~US$ ${c.usd.toFixed(2)}`, ''];
+      })(),
       '*Últimas respostas*',
       ...(ia.ultimasRespostas(6).length ? ia.ultimasRespostas(6).map((r) => `• ${r.hora} ${String(r.modelo).replace(/^gemini-/, '')}${r.chave ? ` (chave ${r.chave})` : ''}${r.motivo ? `: ${r.motivo}` : ''}`) : ['• nenhuma desde o último restart']),
     ];
