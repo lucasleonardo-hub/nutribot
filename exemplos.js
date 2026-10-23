@@ -3,7 +3,8 @@
 // atende (teto do dia, falha), o Gemini recebe as respostas dele mais parecidas com a situação atual como PADRÃO: copiar o
 // jeito (tom, tamanho, estrutura, cuidado), nunca os fatos e números, que são de outro momento.
 //
-// Privacidade: só exemplos da PRÓPRIA pessoa (a resposta de um não serve de molde pra outro e não vaza nada entre eles).
+// Privacidade: só exemplos da PRÓPRIA pessoa, pela chave do perfil (chaveDaPessoa), nunca pelo nome: a resposta de um não
+// serve de molde pra outro e não vaza nada entre eles.
 // Escolha por significado (embedding do Gemini, cosseno calculado aqui) com preferência pelo mesmo tipo de mensagem.
 // Tudo aqui é "melhor esforço": falhou, o Gemini responde sem exemplos.
 import { colecao } from './mongo.js';
@@ -13,6 +14,13 @@ const COLECAO = 'exemplos_claude';
 const POR_PESSOA = Number(process.env.EXEMPLOS_POR_PESSOA) || 300; // guardados (os mais antigos saem)
 const CANDIDATOS = 150; // os mais recentes, comparados por significado
 const MAX_CHARS_RESPOSTA = 1200;
+let indice = null;
+
+/** Puro. Chave da pessoa: o _id do perfil (único e fixo); nome repete e muda (perfil novo nasce com o número). */
+export function chaveDaPessoa(perfil) {
+  if (perfil?._id) return `perfil:${String(perfil._id)}`;
+  return perfil?.jids?.[0] ? `jid:${perfil.jids[0]}` : null;
+}
 
 /** Puro. Tipo da mensagem, com as mesmas decisões que montaram o prompt (mensagens.js). */
 export function tipoDaMensagem({ temImagem = false, planejando = false, perguntaProgresso = false, contestacao = false, metaConversa = false } = {}) {
@@ -69,6 +77,7 @@ export async function guardarExemplo({ pessoa, tipo, mensagem, resposta, dia }) 
     const vetor = await embutir(m.slice(0, 2000), 'RETRIEVAL_DOCUMENT');
     if (!vetor?.length) return;
     const col = colecao(COLECAO);
+    indice ||= col.createIndex({ pessoa: 1, criadoEm: -1 }).catch(() => null);
     await col.insertOne({ pessoa, tipo, mensagem: m.slice(0, 600), resposta: r.slice(0, MAX_CHARS_RESPOSTA), dia, vetor, criadoEm: new Date() });
     const velhos = await col.find({ pessoa }, { projection: { _id: 1 } }).sort({ criadoEm: -1 }).skip(POR_PESSOA).toArray();
     if (velhos.length) await col.deleteMany({ _id: { $in: velhos.map((v) => v._id) } });

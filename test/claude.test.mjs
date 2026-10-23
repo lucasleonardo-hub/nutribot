@@ -3,7 +3,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { claudeAtende, comoAdmin, pedidoDoAdmin, paraMensagens, gerarClaude, carregarUsoClaude, tetoDeHoje, _usarColecao } from '../claude.js';
-import { tipoDaMensagem, cosseno, escolherExemplos, blocoExemplos } from '../exemplos.js';
+import { tipoDaMensagem, cosseno, escolherExemplos, blocoExemplos, chaveDaPessoa } from '../exemplos.js';
+
+test('exemplos pela chave do perfil, nunca pelo nome: dois "Lucas" não compartilham respostas', () => {
+  const a = { _id: '64f0aa', nome: 'Lucas', jids: ['1@s.whatsapp.net'] };
+  const b = { _id: '64f0bb', nome: 'Lucas', jids: ['2@s.whatsapp.net'] };
+  assert.notEqual(chaveDaPessoa(a), chaveDaPessoa(b));
+  assert.equal(chaveDaPessoa({ ...a, nome: 'Lucas Leonardo' }), chaveDaPessoa(a)); // renomear não muda
+  assert.equal(chaveDaPessoa({ jids: ['9@s.whatsapp.net'] }), 'jid:9@s.whatsapp.net');
+  assert.equal(chaveDaPessoa({ nome: 'sem id' }), null); // sem chave, não guarda nem busca
+});
 
 /** Cliente de mentira: devolve a mensagem dada (o Claude "desobediente" dos testes) e guarda o pedido. */
 function clienteFalso(content, stop_reason = 'end_turn', extra = {}) {

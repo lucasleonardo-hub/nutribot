@@ -21,7 +21,7 @@ import { rotulosPara, buscarPorNome, buscarPorCodigo, blocoRotulos, ehCodigoBarr
 import { pareceContestacao, totaisConhecidos, numerosSuspeitos, candidatoAFragmento, vocabularioErrado, removerFrasesCom, pareceMetaConversa, mencionaOutraRefeicao, temasJaDitos, removerRepeticoes, respostasRecentes, papoCurto, enxugarPapo, bordoesJaDitos, removerBordoesRepetidos, corrigirGirias, concordarVocativos, parecePergunta } from './consciencia.js';
 import { ferramentasPara } from './ferramentas.js';
 import { claudeLigado, comoAdmin } from './claude.js';
-import { exemplosPreguicosos, guardarExemplo, tipoDaMensagem } from './exemplos.js';
+import { exemplosPreguicosos, guardarExemplo, tipoDaMensagem, chaveDaPessoa } from './exemplos.js';
 import { registrarCorrecaoEstimativa, ehCorrecaoDeEstimativa } from './calibracao.js';
 import { marcarResposta } from './proatividade.js';
 import { lembrar, garantirDiaAtual, renomearNaMemoria } from './dia.js';
@@ -1080,7 +1080,7 @@ async function processarMensagem(msg, { emLote = false, atrasadas = 0, fotosExtr
   const base = { texto, imagem, mimeType, imagens, audio, audioMime, perfil: eu, perfis, historico, dia, hora, contextoHorario, persona: estado.persona, dossie, momentos, citacao, registradas, visao, lembrancas, agenda: motivo ? eu._agenda?.bloco || '' : '', app: doApp.texto, lugares: motivo ? eu._lugares?.bloco || '' : '', roteiro: motivo ? eu._roteiro || '' : '', atividades: motivo ? eu._atividades || '' : '', treinoHoje: motivo ? eu._treinoHoje || '' : '', jaDito: [temasJaDitos(historico, hora), bordoesJaDitos(historico, estado.persona), perguntaRecenteDe(jids[0], hora), notaRefeicaoPendente(jids[0]), contestacao ? notaReservaRecente(jids[0], hora) : ''].filter(Boolean).join('\n'), despensa: motivo ? await blocoDespensa(eu).catch(() => '') : '', planejando: !temImagem && !temAudio && parecePedidoOuPlano(textoDecisao) && !perguntaProgresso, perguntaProgresso, forca: falaDeTreino(texto) ? await blocoForcaDe(eu, diaPessoa).catch(() => '') : '', rotulos, contestacao, emAndamento, metaConversa };
   // respostas do Claude a esta pessoa em situação parecida: só usadas se o Gemini tiver de responder (teto do dia, falha)
   const tipoMsg = tipoDaMensagem({ temImagem, planejando: base.planejando, perguntaProgresso, contestacao, metaConversa });
-  base.exemplos = exemplosPreguicosos({ pessoa: eu.nome, tipo: tipoMsg, mensagem: texto });
+  base.exemplos = exemplosPreguicosos({ pessoa: chaveDaPessoa(eu), tipo: tipoMsg, mensagem: texto });
   let resposta;
   let atualizacao = null;
   let habito = null;
@@ -1563,7 +1563,7 @@ async function processarMensagem(msg, { emLote = false, atrasadas = 0, fotosExtr
     estado.memoria.reservaPara[jids[0]] = hora;
   }
   if (origemClaude && enviado?.key && resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
-    guardarExemplo({ pessoa: eu.nome, tipo: tipoMsg, mensagem: texto, resposta, dia: diaRegistrado }).catch(() => {});
+    guardarExemplo({ pessoa: chaveDaPessoa(eu), tipo: tipoMsg, mensagem: texto, resposta, dia: diaRegistrado }).catch(() => {});
   }
   if (origemExterna && enviado?.key && resposta && !/^\s*PESQUISAR:/i.test(resposta)) {
     registrarParaRevisao({ jidGrupo, jid: jids[0], perfil, texto, imagem, mimeType, resposta, dia: diaRegistrado, hora, horaLocal, enviado, refeicao: refeicaoRegistrada })
